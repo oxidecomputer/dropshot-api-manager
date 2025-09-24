@@ -2,7 +2,7 @@
 
 This directory contains an end-to-end example demonstrating how to use Dropshot's [OpenAPI manager](../crates/dropshot-api-manager) to manage API traits and the corresponding OpenAPI documents.
 
-For more about the Dropshot API manager, see [the main readme](../README.md).
+For more about the Dropshot API manager, see [the main readme](../crates/dropshot-api-manager/README.md).
 
 ## Contents
 
