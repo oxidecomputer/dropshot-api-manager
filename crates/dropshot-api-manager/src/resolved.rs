@@ -452,7 +452,7 @@ fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
-    fs_err::os::windows::fs::symlink_file(&target, &path)
+    fs_err::os::windows::fs::symlink_file(target, path)
 }
 
 /// Resolve differences between blessed spec(s), the generated spec, and any

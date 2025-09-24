@@ -9,6 +9,12 @@ For more information about API traits, see [Oxide RFD 479](https://rfd.shared.ox
 >
 > * [Enable developer mode](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development#activate-developer-mode), which allows non-administrators to create symlinks.
 > * Run `git config --global core.symlinks true`.
+> * Disable CRLF conversions within Git by checking in a `.gitattributes` file with:
+>
+>   ```
+>   # Disable CRLF conversions on Windows.
+>   * -text
+>   ```
 
 ## Who this is for
 
@@ -141,11 +147,13 @@ api_versions!([
 
 To ensure everything works well, run `cargo openapi generate`. Your OpenAPI document should be generated on disk and listed in the output.
 
-#### Performing extra validation [[extra_validation]]
+#### Performing validation
 
-By default, the OpenAPI manager does basic validation on the generated document. Some documents require extra validation steps.
+By default, the Dropshot API manager does not do any kind of validation or linting on the generated document, beyond the basic checks performed by Dropshot itself. If desired, the API manager can be configured to perform _global validation_ on all documents, as well as _extra validation_ on some of them.
 
-It's best to put extra validation next to the trait, within the API crate.
+For global validation, set the `validation` function on the `ManagedApis` struct. For an example, see the `validate` function within [the end-to-end example](https://github.com/oxidecomputer/dropshot-api-manager/blob/main/e2e-example/bin/src/main.rs).
+
+For extra validation on some documents, it's recommended that you put them on the trait, within the API crate.
 
 1. In the API crate, add dependencies on `openapiv3` and `dropshot-api-manager-types`.
 2. Define a function with signature `fn validate_api(spec: &openapiv3::OpenAPI, mut cx: dropshot_api_manager_types::ValidationContext<'_>) which performs the extra validation steps.
@@ -155,8 +163,6 @@ Currently, the validator can do two things:
 
 1. Via the `ValidationContext::report_error` function, report validation errors.
 2. Via the `ValidationContext::record_file_contents` function, assert the contents of other generated files.
-
-TODO: include example here.
 
 ### Iterating on lockstep APIs
 
