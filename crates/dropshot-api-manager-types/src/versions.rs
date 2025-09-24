@@ -204,12 +204,11 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
 ///
 /// ```
 /// use dropshot_api_manager_types::{
-///     api_versions,
-///     SupportedVersion,
-///     SupportedVersions
+///     SupportedVersion, SupportedVersions, api_versions,
 /// };
 ///
 /// api_versions!([
+///     // Define the API versions here.
 ///     (2, ADD_FOOBAR_OPERATION),
 ///     (1, INITIAL),
 /// ]);
@@ -221,10 +220,9 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
 /// these, equivalent to:
 ///
 /// ```
-///     pub const VERSION_ADD_FOOBAR_OPERATION: semver::Version =
-///         semver::Version::new(2, 0, 0);
-///     pub const VERSION_INITIAL: semver::Version =
-///         semver::Version::new(1, 0, 0);
+/// pub const VERSION_ADD_FOOBAR_OPERATION: semver::Version =
+///     semver::Version::new(2, 0, 0);
+/// pub const VERSION_INITIAL: semver::Version = semver::Version::new(1, 0, 0);
 /// ```
 ///
 /// It also defines a function called `pub fn supported_versions() ->

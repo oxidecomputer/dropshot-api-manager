@@ -1,7 +1,5 @@
 // Copyright 2025 Oxide Computer Company
 
-use dropshot_api_manager_types::ApiIdent;
-
 use crate::{
     apis::ManagedApis,
     environment::{
@@ -11,6 +9,7 @@ use crate::{
     resolved::Resolved,
     spec_files_generic::{ApiFiles, AsRawFiles},
 };
+use dropshot_api_manager_types::ApiIdent;
 use std::collections::BTreeMap;
 
 pub(crate) fn debug_impl(

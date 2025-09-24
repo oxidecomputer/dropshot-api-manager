@@ -3,8 +3,7 @@
 //! Working with OpenAPI documents, whether generated, blessed, or local to this
 //! repository
 
-use crate::apis::ManagedApis;
-use crate::environment::ErrorAccumulator;
+use crate::{apis::ManagedApis, environment::ErrorAccumulator};
 use anyhow::{Context, anyhow, bail};
 use camino::Utf8Path;
 use debug_ignore::DebugIgnore;
@@ -13,9 +12,10 @@ use dropshot_api_manager_types::{
 };
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::collections::btree_map::Entry;
-use std::fmt::Debug;
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    fmt::Debug,
+};
 use thiserror::Error;
 
 /// Attempts to parse the given file basename as an ApiSpecFileName of kind
@@ -665,9 +665,8 @@ pub(crate) fn hash_contents(contents: &[u8]) -> String {
 
 #[cfg(test)]
 mod test {
-    use crate::ManagedApiConfig;
-
     use super::*;
+    use crate::ManagedApiConfig;
     use assert_matches::assert_matches;
     use dropshot::{ApiDescription, ApiDescriptionBuildErrors, StubContext};
     use dropshot_api_manager_types::{

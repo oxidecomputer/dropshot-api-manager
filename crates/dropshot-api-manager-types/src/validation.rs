@@ -1,10 +1,8 @@
 // Copyright 2025 Oxide Computer Company
 
-use std::{fmt, ops::Deref};
-
-use camino::Utf8PathBuf;
-
 use crate::{ManagedApiMetadata, Versions};
+use camino::Utf8PathBuf;
+use std::{fmt, ops::Deref};
 
 /// Context for validation of OpenAPI specifications.
 pub struct ValidationContext<'a> {

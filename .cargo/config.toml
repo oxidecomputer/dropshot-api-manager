@@ -2,3 +2,4 @@
 # This alias is part of the OpenAPI manager example. See
 # `../e2e-example/README.md` for more.
 example-openapi = "run -p e2e-example-bin --"
+xfmt = "fmt -- --config imports_granularity=Crate --config group_imports=One --config format_code_in_doc_comments=true"

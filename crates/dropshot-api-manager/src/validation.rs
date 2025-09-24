@@ -1,18 +1,16 @@
 // Copyright 2025 Oxide Computer Company
 
-use crate::apis::ManagedApi;
-use crate::environment::ResolvedEnv;
-use crate::spec_files_generated::GeneratedApiSpecFile;
+use crate::{
+    apis::ManagedApi, environment::ResolvedEnv,
+    spec_files_generated::GeneratedApiSpecFile,
+};
 use anyhow::Context;
 use atomicwrites::AtomicFile;
-use camino::Utf8Path;
-use camino::Utf8PathBuf;
-use dropshot_api_manager_types::ApiIdent;
-use dropshot_api_manager_types::ApiSpecFileName;
-use dropshot_api_manager_types::ManagedApiMetadata;
-use dropshot_api_manager_types::ValidationBackend;
-use dropshot_api_manager_types::ValidationContext;
-use dropshot_api_manager_types::Versions;
+use camino::{Utf8Path, Utf8PathBuf};
+use dropshot_api_manager_types::{
+    ApiIdent, ApiSpecFileName, ManagedApiMetadata, ValidationBackend,
+    ValidationContext, Versions,
+};
 use openapiv3::OpenAPI;
 use std::io::Write;
 

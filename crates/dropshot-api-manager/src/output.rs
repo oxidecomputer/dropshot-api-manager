@@ -1,9 +1,11 @@
 // Copyright 2025 Oxide Computer Company
 
-use crate::apis::{ManagedApi, ManagedApis};
-use crate::environment::{ErrorAccumulator, ResolvedEnv};
-use crate::resolved::{Problem, Resolution, ResolutionKind, Resolved};
-use crate::validation::CheckStale;
+use crate::{
+    apis::{ManagedApi, ManagedApis},
+    environment::{ErrorAccumulator, ResolvedEnv},
+    resolved::{Problem, Resolution, ResolutionKind, Resolved},
+    validation::CheckStale,
+};
 use anyhow::bail;
 use camino::Utf8Path;
 use clap::{Args, ColorChoice};

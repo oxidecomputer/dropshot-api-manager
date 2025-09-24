@@ -2,8 +2,6 @@
 
 //! Binary for the OpenAPI manager examples.
 
-use std::process::ExitCode;
-
 use anyhow::{Context, anyhow};
 use camino::Utf8PathBuf;
 use clap::Parser;
@@ -14,6 +12,7 @@ use dropshot_api_manager_types::{
 use e2e_example_apis::*;
 use openapiv3::OpenAPI;
 use serde::{Deserialize, Serialize};
+use std::process::ExitCode;
 
 pub fn environment() -> anyhow::Result<Environment> {
     // The workspace root is two levels up from this crate's directory.
@@ -125,9 +124,8 @@ fn main() -> anyhow::Result<ExitCode> {
 
 #[cfg(test)]
 mod tests {
-    use dropshot_api_manager::test_util::check_apis_up_to_date;
-
     use super::*;
+    use dropshot_api_manager::test_util::check_apis_up_to_date;
 
     // Also recommended: a test which ensures documents are up-to-date. The
     // OpenAPI manager comes with a helper function for this, called

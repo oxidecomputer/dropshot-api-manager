@@ -2,35 +2,28 @@
 
 //! Resolve different sources of API information (blessed, local, upstream)
 
-use crate::apis::ManagedApi;
-use crate::apis::ManagedApis;
-use crate::compatibility::OpenApiCompatibilityError;
-use crate::compatibility::api_compatible;
-use crate::environment::ResolvedEnv;
-use crate::iter_only::iter_only;
-use crate::output::plural;
-use crate::spec_files_blessed::BlessedApiSpecFile;
-use crate::spec_files_blessed::BlessedFiles;
-use crate::spec_files_generated::GeneratedApiSpecFile;
-use crate::spec_files_generated::GeneratedFiles;
-use crate::spec_files_generic::ApiFiles;
-use crate::spec_files_local::LocalApiSpecFile;
-use crate::spec_files_local::LocalFiles;
-use crate::validation::CheckStale;
-use crate::validation::CheckStatus;
-use crate::validation::overwrite_file;
-use crate::validation::validate;
+use crate::{
+    apis::{ManagedApi, ManagedApis},
+    compatibility::{OpenApiCompatibilityError, api_compatible},
+    environment::ResolvedEnv,
+    iter_only::iter_only,
+    output::plural,
+    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
+    spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
+    spec_files_generic::ApiFiles,
+    spec_files_local::{LocalApiSpecFile, LocalFiles},
+    validation::{CheckStale, CheckStatus, overwrite_file, validate},
+};
 use anyhow::{Context, anyhow};
-use camino::Utf8Path;
-use camino::Utf8PathBuf;
-use dropshot_api_manager_types::ApiIdent;
-use dropshot_api_manager_types::ApiSpecFileName;
-use dropshot_api_manager_types::ValidationContext;
+use camino::{Utf8Path, Utf8PathBuf};
+use dropshot_api_manager_types::{
+    ApiIdent, ApiSpecFileName, ValidationContext,
+};
 use openapiv3::OpenAPI;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::fmt::Debug;
-use std::fmt::Display;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::{Debug, Display},
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]

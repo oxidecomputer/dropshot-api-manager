@@ -3,19 +3,19 @@
 //! Describes the environment the command is running in, and particularly where
 //! different sets of specifications are loaded from
 
-use crate::apis::ManagedApis;
-use crate::git::GitRevision;
-use crate::output::Styles;
-use crate::output::headers::GENERATING;
-use crate::output::headers::HEADER_WIDTH;
-use crate::spec_files_blessed::BlessedFiles;
-use crate::spec_files_generated::GeneratedFiles;
-use crate::spec_files_local::LocalFiles;
-use crate::spec_files_local::walk_local_directory;
+use crate::{
+    apis::ManagedApis,
+    git::GitRevision,
+    output::{
+        Styles,
+        headers::{GENERATING, HEADER_WIDTH},
+    },
+    spec_files_blessed::BlessedFiles,
+    spec_files_generated::GeneratedFiles,
+    spec_files_local::{LocalFiles, walk_local_directory},
+};
 use anyhow::Context;
-use camino::Utf8Component;
-use camino::Utf8Path;
-use camino::Utf8PathBuf;
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use owo_colors::OwoColorize;
 
 #[derive(Clone, Debug)]
