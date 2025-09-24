@@ -53,6 +53,6 @@ jobs:
       - name: Build
         run: cargo build
       - name: Run tests
-        run: cargo nextest run
+        run: cargo nextest run --profile ci
       - name: Doctests
         run: cargo test --doc
