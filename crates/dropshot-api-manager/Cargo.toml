@@ -1,0 +1,38 @@
+[package]
+name = "dropshot-api-manager"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/dropshot-api-manager"
+
+[dependencies]
+anyhow.workspace = true
+atomicwrites.workspace = true
+camino.workspace = true
+clap = { workspace = true, features = ["cargo", "derive", "env"] }
+debug-ignore.workspace = true
+dropshot.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+indent_write.workspace = true
+newtype_derive.workspace = true
+dropshot-api-manager-types.workspace = true
+openapiv3 = { workspace = true, features = ["skip_serializing_defaults"] }
+owo-colors.workspace = true
+paste.workspace = true
+semver.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+similar = { workspace = true, features = ["bytes"] }
+supports-color.workspace = true
+textwrap = { workspace = true, features = ["terminal_size"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+assert_matches.workspace = true
+
+[lints]
+workspace = true
