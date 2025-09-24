@@ -4,8 +4,8 @@
 
 use crate::apis::ManagedApi;
 use crate::apis::ManagedApis;
-use crate::compatibility::api_compatible;
 use crate::compatibility::OpenApiCompatibilityError;
+use crate::compatibility::api_compatible;
 use crate::environment::ResolvedEnv;
 use crate::iter_only::iter_only;
 use crate::output::plural;
@@ -16,11 +16,11 @@ use crate::spec_files_generated::GeneratedFiles;
 use crate::spec_files_generic::ApiFiles;
 use crate::spec_files_local::LocalApiSpecFile;
 use crate::spec_files_local::LocalFiles;
-use crate::validation::overwrite_file;
-use crate::validation::validate;
 use crate::validation::CheckStale;
 use crate::validation::CheckStatus;
-use anyhow::{anyhow, Context};
+use crate::validation::overwrite_file;
+use crate::validation::validate;
+use anyhow::{Context, anyhow};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use dropshot_api_manager_types::ApiIdent;
@@ -284,10 +284,10 @@ impl<'a> Problem<'a> {
             Problem::BlessedVersionBroken { .. } => None,
             Problem::LockstepMissingLocal { generated }
             | Problem::LockstepStale { generated, .. } => {
-                Some(Fix::FixLockstepFile { generated })
+                Some(Fix::UpdateLockstepFile { generated })
             }
             Problem::LocalVersionMissingLocal { generated } => {
-                Some(Fix::FixVersionedFiles {
+                Some(Fix::UpdateVersionedFiles {
                     old: DisplayableVec(Vec::new()),
                     generated,
                 })
@@ -296,7 +296,7 @@ impl<'a> Problem<'a> {
                 Some(Fix::DeleteFiles { files: spec_file_names.clone() })
             }
             Problem::LocalVersionStale { spec_files, generated } => {
-                Some(Fix::FixVersionedFiles {
+                Some(Fix::UpdateVersionedFiles {
                     old: DisplayableVec(
                         spec_files.iter().map(|s| s.spec_file_name()).collect(),
                     ),
@@ -305,11 +305,11 @@ impl<'a> Problem<'a> {
             }
             Problem::GeneratedValidationError { .. } => None,
             Problem::ExtraFileStale { path, check_stale, .. } => {
-                Some(Fix::FixExtraFile { path, check_stale })
+                Some(Fix::UpdateExtraFile { path, check_stale })
             }
             Problem::LatestLinkStale { api_ident, link, .. }
             | Problem::LatestLinkMissing { api_ident, link } => {
-                Some(Fix::FixSymlink { api_ident, link })
+                Some(Fix::UpdateSymlink { api_ident, link })
             }
         }
     }
@@ -319,18 +319,18 @@ pub enum Fix<'a> {
     DeleteFiles {
         files: DisplayableVec<ApiSpecFileName>,
     },
-    FixLockstepFile {
+    UpdateLockstepFile {
         generated: &'a GeneratedApiSpecFile,
     },
-    FixVersionedFiles {
+    UpdateVersionedFiles {
         old: DisplayableVec<&'a ApiSpecFileName>,
         generated: &'a GeneratedApiSpecFile,
     },
-    FixExtraFile {
+    UpdateExtraFile {
         path: &'a Utf8Path,
         check_stale: &'a CheckStale,
     },
-    FixSymlink {
+    UpdateSymlink {
         api_ident: &'a ApiIdent,
         link: &'a ApiSpecFileName,
     },
@@ -346,14 +346,14 @@ impl Display for Fix<'_> {
                     plural::files(files.0.len())
                 )?;
             }
-            Fix::FixLockstepFile { generated } => {
+            Fix::UpdateLockstepFile { generated } => {
                 writeln!(
                     f,
                     "rewrite lockstep file {} from generated",
                     generated.spec_file_name().path()
                 )?;
             }
-            Fix::FixVersionedFiles { old, generated } => {
+            Fix::UpdateVersionedFiles { old, generated } => {
                 if !old.0.is_empty() {
                     writeln!(
                         f,
@@ -367,14 +367,14 @@ impl Display for Fix<'_> {
                     generated.spec_file_name().path()
                 )?;
             }
-            Fix::FixExtraFile { path, check_stale } => {
+            Fix::UpdateExtraFile { path, check_stale } => {
                 let label = match check_stale {
                     CheckStale::Modified { .. } => "rewrite",
                     CheckStale::New { .. } => "write new",
                 };
                 writeln!(f, "{label} file {path} from generated")?;
             }
-            Fix::FixSymlink { link, .. } => {
+            Fix::UpdateSymlink { link, .. } => {
                 writeln!(f, "update symlink to point to {}", link.basename())?;
             }
         };
@@ -395,7 +395,7 @@ impl Fix<'_> {
                 }
                 Ok(rv)
             }
-            Fix::FixLockstepFile { generated } => {
+            Fix::UpdateLockstepFile { generated } => {
                 let path = root.join(generated.spec_file_name().path());
                 Ok(vec![format!(
                     "updated {}: {:?}",
@@ -403,7 +403,7 @@ impl Fix<'_> {
                     overwrite_file(&path, generated.contents())?
                 )])
             }
-            Fix::FixVersionedFiles { old, generated } => {
+            Fix::UpdateVersionedFiles { old, generated } => {
                 let mut rv = Vec::new();
                 for f in &old.0 {
                     let path = root.join(f.path());
@@ -419,7 +419,7 @@ impl Fix<'_> {
                 ));
                 Ok(rv)
             }
-            Fix::FixExtraFile { path, check_stale } => {
+            Fix::UpdateExtraFile { path, check_stale } => {
                 let expected_contents = match check_stale {
                     CheckStale::Modified { expected, .. } => expected,
                     CheckStale::New { expected } => expected,
@@ -427,10 +427,10 @@ impl Fix<'_> {
                 Ok(vec![format!(
                     "wrote {}: {:?}",
                     &path,
-                    overwrite_file(&path, expected_contents)?
+                    overwrite_file(path, expected_contents)?
                 )])
             }
-            Fix::FixSymlink { api_ident, link } => {
+            Fix::UpdateSymlink { api_ident, link } => {
                 let path = root
                     .join(api_ident.to_string())
                     .join(api_ident.versioned_api_latest_symlink());
@@ -440,9 +440,7 @@ impl Fix<'_> {
                 let target = link.basename();
                 match fs_err::remove_file(&path) {
                     Ok(_) => (),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        ()
-                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                     Err(err) => {
                         return Err(anyhow!(err).context("removing old link"));
                     }
@@ -456,7 +454,7 @@ impl Fix<'_> {
 
 #[cfg(unix)]
 fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
-    fs_err::os::unix::fs::symlink(&target, &path)
+    fs_err::os::unix::fs::symlink(target, path)
 }
 
 #[cfg(windows)]
@@ -497,10 +495,8 @@ impl<'a> Resolved<'a> {
             })
             .collect();
 
-        let nexpected_documents = supported_versions_by_api
-            .values()
-            .map(|v| v.len())
-            .fold(0, |sum_so_far, count| sum_so_far + count);
+        let nexpected_documents =
+            supported_versions_by_api.values().map(|v| v.len()).sum::<usize>();
 
         // Get one easy case out of the way: if there are any blessed API
         // versions that aren't supported any more, note that.
@@ -592,7 +588,7 @@ struct ApiResolved<'a> {
 
 impl ApiResolved<'_> {
     fn has_unfixable_problems(&self) -> bool {
-        self.symlink.as_ref().map_or(false, |f| !f.is_fixable())
+        self.symlink.as_ref().is_some_and(|f| !f.is_fixable())
             || self.by_version.values().any(|r| r.has_errors())
     }
 }

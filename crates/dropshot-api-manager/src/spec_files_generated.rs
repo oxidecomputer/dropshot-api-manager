@@ -7,8 +7,8 @@ use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
     spec_files_generic::{
-        hash_contents, ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder,
-        AsRawFiles,
+        ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
+        hash_contents,
     },
 };
 use anyhow::{anyhow, bail};

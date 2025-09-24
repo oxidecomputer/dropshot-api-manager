@@ -1,14 +1,14 @@
 // Copyright 2025 Oxide Computer Company
 
 use crate::{
+    FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::ManagedApis,
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
-        display_load_problems, display_resolution, headers::*, CheckResult,
-        OutputOpts, Styles,
+        CheckResult, OutputOpts, Styles, display_load_problems,
+        display_resolution, headers::*,
     },
     resolved::Resolved,
-    FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
 };
 use std::process::ExitCode;
 

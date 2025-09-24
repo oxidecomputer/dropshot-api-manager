@@ -276,7 +276,7 @@ mod test {
     #[test]
     fn test_arg_parsing() {
         // Default case
-        let app = App::parse_from(&["dummy", "check"]);
+        let app = App::parse_from(["dummy", "check"]);
         assert_matches!(
             app.command,
             Command::Check(CheckArgs {
@@ -290,7 +290,7 @@ mod test {
         );
 
         // Override local dir
-        let app = App::parse_from(&["dummy", "check", "--dir", "foo"]);
+        let app = App::parse_from(["dummy", "check", "--dir", "foo"]);
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
@@ -299,7 +299,7 @@ mod test {
         }) if local_dir == "foo");
 
         // Override generated dir differently
-        let app = App::parse_from(&[
+        let app = App::parse_from([
             "dummy",
             "check",
             "--dir",
@@ -315,7 +315,7 @@ mod test {
         }) if local_dir == "foo" && generated_dir == "bar");
 
         // Override blessed with a local directory.
-        let app = App::parse_from(&[
+        let app = App::parse_from([
             "dummy",
             "check",
             "--dir",
@@ -333,7 +333,7 @@ mod test {
         }) if local_dir == "foo" && generated_dir == "bar" && blessed_dir == "baz");
 
         // Override blessed from Git.
-        let app = App::parse_from(&[
+        let app = App::parse_from([
             "dummy",
             "check",
             "--blessed-from-git",
@@ -347,7 +347,7 @@ mod test {
         }) if git == "some/other/upstream");
 
         // Error case: specifying both --blessed-from-git and --blessed-from-dir
-        let error = App::try_parse_from(&[
+        let error = App::try_parse_from([
             "dummy",
             "check",
             "--blessed-from-git",
@@ -422,16 +422,14 @@ mod test {
     // Test how we convert `GeneratedSourceArgs` into `GeneratedSource`.
     #[test]
     fn test_generated_args() {
-        let source = GeneratedSource::try_from(GeneratedSourceArgs {
+        let source = GeneratedSource::from(GeneratedSourceArgs {
             generated_from_dir: None,
-        })
-        .unwrap();
+        });
         assert_matches!(source, GeneratedSource::Generated);
 
-        let source = GeneratedSource::try_from(GeneratedSourceArgs {
+        let source = GeneratedSource::from(GeneratedSourceArgs {
             generated_from_dir: Some(Utf8PathBuf::from("/tmp")),
-        })
-        .unwrap();
+        });
         assert_matches!(
             source,
             GeneratedSource::Directory { local_directory }

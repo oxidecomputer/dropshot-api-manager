@@ -5,13 +5,13 @@
 
 use crate::apis::ManagedApis;
 use crate::git::GitRevision;
+use crate::output::Styles;
 use crate::output::headers::GENERATING;
 use crate::output::headers::HEADER_WIDTH;
-use crate::output::Styles;
 use crate::spec_files_blessed::BlessedFiles;
 use crate::spec_files_generated::GeneratedFiles;
-use crate::spec_files_local::walk_local_directory;
 use crate::spec_files_local::LocalFiles;
+use crate::spec_files_local::walk_local_directory;
 use anyhow::Context;
 use camino::Utf8Component;
 use camino::Utf8Path;
@@ -213,8 +213,8 @@ impl BlessedSource {
                 );
                 Ok((
                     BlessedFiles::load_from_git_parent_branch(
-                        &revision,
-                        &directory,
+                        revision,
+                        directory,
                         apis,
                         &mut errors,
                     )?,

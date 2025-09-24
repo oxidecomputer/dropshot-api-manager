@@ -25,7 +25,7 @@ pub fn validate(
     let openapi = generated.openapi();
     let validation_result = validate_generated_openapi_document(
         api,
-        &openapi,
+        openapi,
         generated.spec_file_name(),
         validation,
     )?;
@@ -66,7 +66,7 @@ fn validate_generated_openapi_document(
 
     // Perform any additional API-specific validation.
     api.extra_validation(
-        &openapi_doc,
+        openapi_doc,
         ValidationContext::new(&mut validation_context),
     );
 
@@ -112,7 +112,7 @@ pub fn read_opt(path: &Utf8Path) -> std::io::Result<Option<Vec<u8>>> {
     match fs_err::read(path) {
         Ok(contents) => Ok(Some(contents)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => return Err(err),
+        Err(err) => Err(err),
     }
 }
 

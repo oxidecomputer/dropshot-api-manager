@@ -5,7 +5,7 @@
 
 use crate::apis::ManagedApis;
 use crate::environment::ErrorAccumulator;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use camino::Utf8Path;
 use debug_ignore::DebugIgnore;
 use dropshot_api_manager_types::{
@@ -13,8 +13,8 @@ use dropshot_api_manager_types::{
 };
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt::Debug;
 use thiserror::Error;
 
@@ -309,7 +309,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         &mut self,
         basename: &str,
     ) -> Option<ApiSpecFileName> {
-        match parse_lockstep_file_name(&self.apis, basename) {
+        match parse_lockstep_file_name(self.apis, basename) {
             // When we're looking at the blessed files, the caller provides
             // `misconfigurations_okay: true` and we treat these as
             // warnings because the configuration for an API may have
@@ -402,7 +402,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         ident: &ApiIdent,
         basename: &str,
     ) -> Option<ApiSpecFileName> {
-        match parse_versioned_file_name(&self.apis, ident, basename) {
+        match parse_versioned_file_name(self.apis, ident, basename) {
             Ok(file_name) => Some(file_name),
             Err(
                 warning @ (BadVersionedFileName::NoSuchApi
@@ -440,7 +440,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         ident: &ApiIdent,
         basename: &str,
     ) -> Option<ApiSpecFileName> {
-        match parse_versioned_file_name(&self.apis, ident, basename) {
+        match parse_versioned_file_name(self.apis, ident, basename) {
             Ok(file_name) => Some(file_name),
             Err(
                 warning @ (BadVersionedFileName::NoSuchApi
@@ -816,8 +816,8 @@ mod test {
         Ok(apis)
     }
 
-    fn unimplemented_fn(
-    ) -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors> {
+    fn unimplemented_fn()
+    -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors> {
         unimplemented!("this shouldn't be called, not part of test")
     }
 }

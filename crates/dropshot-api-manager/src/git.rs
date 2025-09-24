@@ -2,7 +2,7 @@
 
 //! Helpers for accessing data stored in git
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::process::Command;
 
@@ -49,7 +49,7 @@ pub fn git_ls_tree(
         .arg("--name-only")
         .arg("--full-tree")
         .arg(revision.as_str())
-        .arg(&directory);
+        .arg(directory);
     let label = cmd_label(&cmd);
     let stdout = do_run(&mut cmd)?;
     stdout

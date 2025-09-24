@@ -1,18 +1,18 @@
 // Copyright 2025 Oxide Computer Company
 
 use crate::{
+    FAILURE_EXIT_CODE,
     apis::ManagedApis,
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
-        display_api_spec_version, display_load_problems, display_resolution,
-        display_resolution_problems,
+        CheckResult, OutputOpts, Styles, display_api_spec_version,
+        display_load_problems, display_resolution, display_resolution_problems,
         headers::{self, *},
-        plural, CheckResult, OutputOpts, Styles,
+        plural,
     },
     resolved::{Problem, Resolved},
-    FAILURE_EXIT_CODE,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use owo_colors::OwoColorize;
 use std::process::ExitCode;
 
@@ -43,17 +43,16 @@ pub(crate) fn generate_impl(
         styles.colorize();
     }
 
-    let (generated, errors) = generated_source.load(&apis, &styles)?;
+    let (generated, errors) = generated_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
-    let (local_files, errors) = env.local_source.load(&apis, &styles)?;
+    let (local_files, errors) = env.local_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
-    let (blessed, errors) = blessed_source.load(&apis, &styles)?;
+    let (blessed, errors) = blessed_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
-    let resolved =
-        Resolved::new(env, &apis, &blessed, &generated, &local_files);
+    let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);
     eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
 
     let total = resolved.nexpected_documents();
@@ -65,7 +64,7 @@ pub(crate) fn generate_impl(
     );
 
     if resolved.has_unfixable_problems() {
-        return match display_resolution(env, &apis, &resolved, &styles)? {
+        return match display_resolution(env, apis, &resolved, &styles)? {
             CheckResult::Failures => Ok(GenerateResult::Failures),
             unexpected => {
                 Err(anyhow!("unexpectedly got {unexpected:?} from summarize()"))
@@ -162,14 +161,13 @@ pub(crate) fn generate_impl(
     // Finally, check again for any problems.  Since we expect this should have
     // fixed everything, be quiet unless we find something amiss.
     let mut nproblems = 0;
-    let (local_files, errors) = env.local_source.load(&apis, &styles)?;
+    let (local_files, errors) = env.local_source.load(apis, &styles)?;
     eprintln!(
         "{:>HEADER_WIDTH$} all local files",
         "Rechecking".style(styles.success_header),
     );
     display_load_problems(&errors, &styles)?;
-    let resolved =
-        Resolved::new(env, &apis, &blessed, &generated, &local_files);
+    let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);
     let general_problems: Vec<_> = resolved.general_problems().collect();
     nproblems += general_problems.len();
     if !general_problems.is_empty() {

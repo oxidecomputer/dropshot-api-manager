@@ -94,7 +94,7 @@ impl SupportedVersion {
     }
 
     pub fn label(&self) -> &str {
-        &self.label
+        self.label
     }
 }
 

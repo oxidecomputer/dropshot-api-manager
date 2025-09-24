@@ -1,11 +1,11 @@
 // Copyright 2025 Oxide Computer Company
 
 use crate::{
+    BlessedSourceArgs, GeneratedSourceArgs,
     apis::ManagedApis,
     cmd::check::check_impl,
     environment::{Environment, GeneratedSource},
     output::{CheckResult, OutputOpts},
-    BlessedSourceArgs, GeneratedSourceArgs,
 };
 
 /// Check that a set of APIs is up-to-date.
@@ -23,9 +23,8 @@ pub fn check_apis_up_to_date(
     let blessed_source =
         BlessedSourceArgs { blessed_from_git: None, blessed_from_dir: None }
             .to_blessed_source(&env)?;
-    let generated_source = GeneratedSource::try_from(GeneratedSourceArgs {
-        generated_from_dir: None,
-    })?;
+    let generated_source =
+        GeneratedSource::from(GeneratedSourceArgs { generated_from_dir: None });
     let output = OutputOpts { color: clap::ColorChoice::Auto };
 
     check_impl(apis, &env, &blessed_source, &generated_source, &output)

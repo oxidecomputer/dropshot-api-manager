@@ -8,7 +8,9 @@ use anyhow::{Context, anyhow};
 use camino::Utf8PathBuf;
 use clap::Parser;
 use dropshot_api_manager::{Environment, ManagedApiConfig, ManagedApis};
-use dropshot_api_manager_types::{ManagedApiMetadata, ValidationContext, Versions};
+use dropshot_api_manager_types::{
+    ManagedApiMetadata, ValidationContext, Versions,
+};
 use e2e_example_apis::*;
 use openapiv3::OpenAPI;
 use serde::{Deserialize, Serialize};
@@ -38,9 +40,7 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
         // This API is managed in a simple, lockstep fashion.
         ManagedApiConfig {
             ident: "lockstep",
-            versions: Versions::Lockstep {
-                version: "1.0.0".parse().unwrap(),
-            },
+            versions: Versions::Lockstep { version: "1.0.0".parse().unwrap() },
             title: "Lockstep API",
             metadata: ManagedApiMetadata {
                 description: Some("A simple lockstep API"),
@@ -104,7 +104,8 @@ enum ApiBoundary {
 fn validate(spec: &OpenAPI, mut cx: ValidationContext<'_>) {
     // Here, we use Oxide's openapi-lint crate to perform some linting on the
     // OpenAPI document. This kind of validation is optional.
-    let extra: ApiExtra = serde_json::from_value(cx.metadata().extra.clone()).unwrap();
+    let extra: ApiExtra =
+        serde_json::from_value(cx.metadata().extra.clone()).unwrap();
     let errors = match extra.boundary {
         ApiBoundary::Internal => openapi_lint::validate(spec),
         ApiBoundary::External => openapi_lint::validate_external(spec),

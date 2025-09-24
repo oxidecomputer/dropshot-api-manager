@@ -1,6 +1,6 @@
 // Copyright 2025 Oxide Computer Company
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use dropshot::{ApiDescription, ApiDescriptionBuildErrors, StubContext};
 use dropshot_api_manager_types::{
     ApiIdent, ManagedApiMetadata, SupportedVersion, ValidationContext, Versions,
@@ -226,6 +226,10 @@ impl ManagedApis {
 
     pub fn len(&self) -> usize {
         self.apis.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.apis.is_empty()
     }
 
     pub fn iter_apis(&self) -> impl Iterator<Item = &'_ ManagedApi> + '_ {

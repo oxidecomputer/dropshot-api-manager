@@ -2,7 +2,7 @@
 
 use crate::{
     apis::ManagedApis,
-    output::{display_api_spec, display_error, plural, OutputOpts, Styles},
+    output::{OutputOpts, Styles, display_api_spec, display_error, plural},
 };
 use indent_write::io::IndentWriter;
 use openapiv3::OpenAPI;
@@ -172,10 +172,7 @@ impl DocumentSummary {
     fn new(doc: &OpenAPI) -> Self {
         Self {
             path_count: doc.paths.paths.len(),
-            schema_count: doc
-                .components
-                .as_ref()
-                .map_or(None, |c| Some(c.schemas.len())),
+            schema_count: doc.components.as_ref().map(|c| c.schemas.len()),
         }
     }
 }

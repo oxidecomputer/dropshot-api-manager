@@ -10,7 +10,7 @@ use crate::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
     },
 };
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use camino::Utf8Path;
 use dropshot_api_manager_types::ApiIdent;
 use std::{collections::BTreeMap, ops::Deref};
@@ -216,7 +216,7 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
             continue;
         };
 
-        let contents = match fs_err::read(&entry.path()) {
+        let contents = match fs_err::read(entry.path()) {
             Ok(contents) => contents,
             Err(error) => {
                 api_files.load_error(anyhow!(error));

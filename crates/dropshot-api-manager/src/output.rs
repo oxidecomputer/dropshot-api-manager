@@ -407,7 +407,7 @@ fn summarize_one(
         eprintln!(
             "{:>HEADER_WIDTH$} {}",
             FRESH.style(styles.success_header),
-            display_api_spec_version(api, version, &styles, resolution),
+            display_api_spec_version(api, version, styles, resolution),
         );
     } else {
         // There were one or more problems, some of which may be unfixable.
@@ -419,7 +419,7 @@ fn summarize_one(
                 assert!(resolution.has_problems());
                 STALE.style(styles.warning_header)
             },
-            display_api_spec_version(api, version, &styles, resolution),
+            display_api_spec_version(api, version, styles, resolution),
         );
 
         display_resolution_problems(env, problems, styles);
@@ -532,7 +532,7 @@ pub fn display_resolution_problems<'a, T>(
                     std::io::stderr(),
                 ),
             );
-            eprintln!("");
+            eprintln!();
         }
     }
 }
@@ -581,58 +581,30 @@ pub(crate) mod headers {
 
 pub(crate) mod plural {
     pub(crate) fn files(count: usize) -> &'static str {
-        if count == 1 {
-            "file"
-        } else {
-            "files"
-        }
+        if count == 1 { "file" } else { "files" }
     }
 
     pub(crate) fn changes(count: usize) -> &'static str {
-        if count == 1 {
-            "change"
-        } else {
-            "changes"
-        }
+        if count == 1 { "change" } else { "changes" }
     }
 
     pub(crate) fn documents(count: usize) -> &'static str {
-        if count == 1 {
-            "document"
-        } else {
-            "documents"
-        }
+        if count == 1 { "document" } else { "documents" }
     }
 
     pub(crate) fn errors(count: usize) -> &'static str {
-        if count == 1 {
-            "error"
-        } else {
-            "errors"
-        }
+        if count == 1 { "error" } else { "errors" }
     }
 
     pub(crate) fn paths(count: usize) -> &'static str {
-        if count == 1 {
-            "path"
-        } else {
-            "paths"
-        }
+        if count == 1 { "path" } else { "paths" }
     }
 
     pub(crate) fn problems(count: usize) -> &'static str {
-        if count == 1 {
-            "problem"
-        } else {
-            "problems"
-        }
+        if count == 1 { "problem" } else { "problems" }
     }
 
     pub(crate) fn schemas(count: usize) -> &'static str {
-        if count == 1 {
-            "schema"
-        } else {
-            "schemas"
-        }
+        if count == 1 { "schema" } else { "schemas" }
     }
 }
