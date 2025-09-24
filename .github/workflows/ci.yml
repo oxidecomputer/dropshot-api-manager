@@ -9,7 +9,10 @@ name: CI
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     env:
       RUSTFLAGS: -D warnings
     steps:
@@ -35,7 +38,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, windows-latest]
         # 1.85 is the MSRV
         rust-version: ["1.85", "stable"]
       fail-fast: false
