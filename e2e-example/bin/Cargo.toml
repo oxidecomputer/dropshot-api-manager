@@ -5,6 +5,7 @@ edition.workspace = true
 license = "0BSD"
 repository.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
@@ -20,3 +21,6 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.release]
+release = false

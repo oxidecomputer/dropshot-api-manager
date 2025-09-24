@@ -28,7 +28,7 @@ jobs:
           tool: cargo-release@0.25.17,just
       - uses: taiki-e/create-gh-release-action@26b80501670402f1999aff4b934e1574ef2d3705 # v1
         with:
-          prefix: iddqd
+          prefix: dropshot-api-manager
           changelog: CHANGELOG.md
           title: $prefix $version
           branch: main
