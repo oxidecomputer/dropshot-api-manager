@@ -440,9 +440,14 @@ mod test {
     // Test how we convert `BlessedSourceArgs` into `BlessedSource`.
     #[test]
     fn test_blessed_args() {
+        #[cfg(unix)]
+        const ABS_DIR: &str = "/tmp";
+        #[cfg(windows)]
+        const ABS_DIR: &str = "C:\\tmp";
+
         let env = Environment::new(
             "cargo openapi".to_owned(),
-            "/test".into(),
+            ABS_DIR.into(),
             "foo-openapi".into(),
         )
         .unwrap()

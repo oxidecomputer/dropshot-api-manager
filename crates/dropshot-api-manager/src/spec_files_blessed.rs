@@ -132,8 +132,9 @@ impl BlessedFiles {
                 continue;
             }
 
-            // Read the contents.
-            let contents = git_show_file(commit, &directory.join(&f))?;
+            // Read the contents. Use "/" rather than "\" on Windows.
+            let file_name = format!("{directory}/{f}");
+            let contents = git_show_file(commit, file_name.as_ref())?;
             if parts.len() == 1 {
                 if let Some(file_name) = api_files.lockstep_file_name(parts[0])
                 {
