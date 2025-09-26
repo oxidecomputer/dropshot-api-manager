@@ -6,7 +6,7 @@ use dropshot_api_manager_types::{
     ApiIdent, ManagedApiMetadata, SupportedVersion, ValidationContext, Versions,
 };
 use openapiv3::OpenAPI;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Describes an API managed by the dropshot-api-manager CLI tool.
 #[derive(Clone, Debug)]
@@ -176,6 +176,7 @@ impl ManagedApi {
 #[derive(Debug)]
 pub struct ManagedApis {
     apis: BTreeMap<ApiIdent, ManagedApi>,
+    unknown_apis: BTreeSet<ApiIdent>,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 
@@ -203,7 +204,26 @@ impl ManagedApis {
             }
         }
 
-        Ok(ManagedApis { apis, validation: None })
+        Ok(ManagedApis {
+            apis,
+            unknown_apis: BTreeSet::new(),
+            validation: None,
+        })
+    }
+
+    /// Adds the given API identifiers (without the ending `.json`) to the list
+    /// of unknown APIs.
+    ///
+    /// By default, if an unknown `.json` file is encountered within the OpenAPI
+    /// directory, a failure is produced. Use this method to produce a warning
+    /// for an allowlist of APIs instead.
+    pub fn with_unknown_apis<I, S>(mut self, apis: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<ApiIdent>,
+    {
+        self.unknown_apis.extend(apis.into_iter().map(|s| s.into()));
+        self
     }
 
     /// Sets a validation function to be used for all APIs.
@@ -238,5 +258,9 @@ impl ManagedApis {
 
     pub fn api(&self, ident: &ApiIdent) -> Option<&ManagedApi> {
         self.apis.get(ident)
+    }
+
+    pub fn unknown_apis(&self) -> &BTreeSet<ApiIdent> {
+        &self.unknown_apis
     }
 }

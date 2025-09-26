@@ -10,8 +10,9 @@ use crate::{
         Styles,
         headers::{GENERATING, HEADER_WIDTH},
     },
-    spec_files_blessed::BlessedFiles,
+    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
     spec_files_generated::GeneratedFiles,
+    spec_files_generic::ApiSpecFilesBuilder,
     spec_files_local::{LocalFiles, walk_local_directory},
 };
 use anyhow::Context;
@@ -45,10 +46,14 @@ impl Environment {
     /// Returns an error if `repo_root` is not an absolute path or
     /// `default_openapi_dir` is not a relative path.
     pub fn new(
-        command: String,
-        repo_root: Utf8PathBuf,
-        default_openapi_dir: Utf8PathBuf,
+        command: impl Into<String>,
+        repo_root: impl Into<Utf8PathBuf>,
+        default_openapi_dir: impl Into<Utf8PathBuf>,
     ) -> anyhow::Result<Self> {
+        let command = command.into();
+        let repo_root = repo_root.into();
+        let default_openapi_dir = default_openapi_dir.into();
+
         if !repo_root.is_absolute() {
             return Err(anyhow::anyhow!(
                 "repo_root must be an absolute path, found: {}",
@@ -81,8 +86,11 @@ impl Environment {
     /// For individual commands, this can be overridden through the
     /// `--blessed-from-git` argument, or the `OPENAPI_MGR_BLESSED_FROM_GIT`
     /// environment variable.
-    pub fn with_default_git_branch(mut self, branch: String) -> Self {
-        self.default_git_branch = branch;
+    pub fn with_default_git_branch(
+        mut self,
+        branch: impl Into<String>,
+    ) -> Self {
+        self.default_git_branch = branch.into();
         self
     }
 
@@ -199,7 +207,7 @@ impl BlessedSource {
                     "Loading".style(styles.success_header),
                     local_directory,
                 );
-                let api_files =
+                let api_files: ApiSpecFilesBuilder<'_, BlessedApiSpecFile> =
                     walk_local_directory(local_directory, apis, &mut errors)?;
                 Ok((BlessedFiles::from(api_files), errors))
             }

@@ -179,9 +179,9 @@ impl fmt::Display for ApiIdent {
     }
 }
 
-impl From<String> for ApiIdent {
-    fn from(value: String) -> Self {
-        Self(value)
+impl<S: Into<String>> From<S> for ApiIdent {
+    fn from(value: S) -> Self {
+        Self(value.into())
     }
 }
 

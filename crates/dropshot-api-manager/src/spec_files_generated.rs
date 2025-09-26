@@ -59,7 +59,7 @@ impl AsRawFiles for GeneratedApiSpecFile {
     }
 }
 
-/// Container for OpenAPI spec files generated from API definitions
+/// Container for OpenAPI documents generated from API definitions
 ///
 /// **Be sure to check for load errors and warnings before using this
 /// structure.**

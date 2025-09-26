@@ -111,7 +111,9 @@ fn parse_lockstep_file_name(
             .ok_or(BadLockstepFileName::MissingJsonSuffix)?
             .to_owned(),
     );
-    let api = apis.api(&ident).ok_or(BadLockstepFileName::NoSuchApi)?;
+    let api = apis.api(&ident).ok_or_else(|| {
+        BadLockstepFileName::NoSuchApi { ident: ident.clone() }
+    })?;
     if !api.is_lockstep() {
         return Err(BadLockstepFileName::NotLockstep);
     }
@@ -125,7 +127,13 @@ enum BadLockstepFileName {
     #[error("expected lockstep API file name to end in \".json\"")]
     MissingJsonSuffix,
     #[error("does not match a known API")]
-    NoSuchApi,
+    NoSuchApi {
+        /// The API identifier without a trailing `.json` suffix.
+        ///
+        /// This isn't part of the `Display` impl because callers will print out
+        /// the file name anyway, but it is used by internal code.
+        ident: ApiIdent,
+    },
     #[error("this API is not a lockstep API")]
     NotLockstep,
 }
@@ -314,14 +322,19 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
             // `misconfigurations_okay: true` and we treat these as
             // warnings because the configuration for an API may have
             // changed between the blessed files and the local changes.
-            Err(warning @ BadLockstepFileName::NoSuchApi)
+            Err(BadLockstepFileName::NoSuchApi { ident })
                 if T::MISCONFIGURATIONS_ALLOWED =>
             {
-                let warning = anyhow!(
-                    "skipping file {basename:?}: {warning} \
-                    (this is expected if you are deleting an API)"
-                );
-                self.load_warning(warning);
+                // If the ident is part of unknown_apis, then we don't print a
+                // warning here (it will be printed for the generated spec).
+                if !self.apis.unknown_apis().contains(&ident) {
+                    let warning = anyhow!(
+                        "skipping file {basename:?}: {} \
+                        (this is expected if you are deleting an API)",
+                        BadLockstepFileName::NoSuchApi { ident },
+                    );
+                    self.load_warning(warning);
+                }
                 None
             }
             Err(warning @ BadLockstepFileName::NotLockstep)
@@ -345,6 +358,16 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                 self.load_warning(warning);
                 None
             }
+            Err(BadLockstepFileName::NoSuchApi { ident })
+                if self.apis.unknown_apis().contains(&ident) =>
+            {
+                // In this case, we show a warning rather than an error.
+                let warning = anyhow!(BadLockstepFileName::NoSuchApi { ident })
+                    .context(format!("skipping file {:?}", basename));
+                self.load_warning(warning);
+                None
+            }
+
             Err(error) => {
                 self.load_error(
                     anyhow!(error).context(format!("file {:?}", basename)),
@@ -715,7 +738,10 @@ mod test {
         assert_matches!(error, BadLockstepFileName::MissingJsonSuffix);
         let error =
             parse_lockstep_file_name(&apis, "bart-simpson.json").unwrap_err();
-        assert_matches!(error, BadLockstepFileName::NoSuchApi);
+        assert_matches!(
+            error,
+            BadLockstepFileName::NoSuchApi { ident } if ident == "bart-simpson".into()
+        );
         let error =
             parse_lockstep_file_name(&apis, "versioned.json").unwrap_err();
         assert_matches!(error, BadLockstepFileName::NotLockstep);

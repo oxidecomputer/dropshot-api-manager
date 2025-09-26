@@ -445,13 +445,9 @@ mod test {
         #[cfg(windows)]
         const ABS_DIR: &str = "C:\\tmp";
 
-        let env = Environment::new(
-            "cargo openapi".to_owned(),
-            ABS_DIR.into(),
-            "foo-openapi".into(),
-        )
-        .unwrap()
-        .with_default_git_branch("upstream/dev".to_owned());
+        let env = Environment::new("cargo openapi", ABS_DIR, "foo-openapi")
+            .unwrap()
+            .with_default_git_branch("upstream/dev".to_owned());
         let env = env.resolve(None).unwrap();
 
         let source = BlessedSourceArgs {
