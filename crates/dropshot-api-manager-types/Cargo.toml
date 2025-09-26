@@ -1,6 +1,6 @@
 [package]
 name = "dropshot-api-manager-types"
-version = "0.1.1"
+version = "0.2.0"
 description = "Core types for Dropshot's API manager"
 edition.workspace = true
 license.workspace = true
