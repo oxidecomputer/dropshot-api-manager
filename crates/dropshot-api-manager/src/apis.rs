@@ -8,7 +8,10 @@ use dropshot_api_manager_types::{
 use openapiv3::OpenAPI;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Describes an API managed by the dropshot-api-manager CLI tool.
+/// Describes an API managed by the Dropshot API manager.
+///
+/// Each API listed within a `ManagedApiConfig` forms a unit managed by the
+/// Dropshot API manager.
 #[derive(Clone, Debug)]
 pub struct ManagedApiConfig {
     /// The API-specific part of the filename that's used for API descriptions
@@ -39,7 +42,7 @@ pub struct ManagedApiConfig {
 
 /// Used internally to describe an API managed by this tool.
 #[derive(Debug)]
-pub struct ManagedApi {
+pub(crate) struct ManagedApi {
     /// The API-specific part of the filename that's used for API descriptions
     ///
     /// This string is sometimes used as an identifier for developers.
@@ -181,6 +184,10 @@ pub struct ManagedApis {
 }
 
 impl ManagedApis {
+    /// Constructs a new `ManagedApis` instance from a list of API
+    /// configurations.
+    ///
+    /// This is the main entry point for creating a new `ManagedApis` instance.
     pub fn new(api_list: Vec<ManagedApiConfig>) -> anyhow::Result<ManagedApis> {
         let mut apis = BTreeMap::new();
         for api in api_list {
@@ -244,22 +251,27 @@ impl ManagedApis {
         self.validation
     }
 
+    /// Returns the number of APIs managed by this instance.
     pub fn len(&self) -> usize {
         self.apis.len()
     }
 
+    /// Returns true if there are no APIs managed by this instance.
     pub fn is_empty(&self) -> bool {
         self.apis.is_empty()
     }
 
-    pub fn iter_apis(&self) -> impl Iterator<Item = &'_ ManagedApi> + '_ {
+    pub(crate) fn iter_apis(
+        &self,
+    ) -> impl Iterator<Item = &'_ ManagedApi> + '_ {
         self.apis.values()
     }
 
-    pub fn api(&self, ident: &ApiIdent) -> Option<&ManagedApi> {
+    pub(crate) fn api(&self, ident: &ApiIdent) -> Option<&ManagedApi> {
         self.apis.get(ident)
     }
 
+    /// Returns the set of unknown APIs.
     pub fn unknown_apis(&self) -> &BTreeSet<ApiIdent> {
         &self.unknown_apis
     }

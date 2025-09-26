@@ -1,6 +1,7 @@
 // Copyright 2025 Oxide Computer Company
 
 use crate::{
+    FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::{ManagedApi, ManagedApis},
     environment::{ErrorAccumulator, ResolvedEnv},
     resolved::{Problem, Resolution, ResolutionKind, Resolved},
@@ -13,7 +14,11 @@ use headers::*;
 use indent_write::fmt::IndentWriter;
 use owo_colors::{OwoColorize, Style};
 use similar::{ChangeTag, DiffableStr, TextDiff};
-use std::{fmt, fmt::Write, io};
+use std::{
+    fmt::{self, Write},
+    io,
+    process::ExitCode,
+};
 
 #[derive(Debug, Args)]
 #[clap(next_help_heading = "Global options")]
@@ -388,11 +393,28 @@ pub fn display_resolution(
     }
 }
 
+/// The result of a check operation.
+///
+/// Returned by the `check_apis_up_to_date` function.
 #[derive(Clone, Copy, Debug)]
 pub enum CheckResult {
+    /// The APIs are up-to-date.
     Success,
+    /// The APIs need to be updated.
     NeedsUpdate,
+    /// There were validation errors or other problems.
     Failures,
+}
+
+impl CheckResult {
+    /// Returns the exit code corresponding to the check result.
+    pub fn to_exit_code(self) -> ExitCode {
+        match self {
+            CheckResult::Success => ExitCode::SUCCESS,
+            CheckResult::NeedsUpdate => NEEDS_UPDATE_EXIT_CODE.into(),
+            CheckResult::Failures => FAILURE_EXIT_CODE.into(),
+        }
+    }
 }
 
 /// Summarize the "check" status of one supported API version

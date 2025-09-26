@@ -6,6 +6,8 @@
 //! [Dropshot](https://docs.rs/dropshot) API traits. For more information, see
 //! the [README](https://crates.io/crates/dropshot-api-manager).
 
+#![warn(missing_docs)]
+
 mod apis;
 mod cmd;
 mod compatibility;
@@ -25,6 +27,5 @@ mod validation;
 extern crate newtype_derive;
 
 pub use apis::*;
-pub use cmd::dispatch::*;
+pub use cmd::dispatch::{App, FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE};
 pub use environment::Environment;
-pub use output::CheckResult;

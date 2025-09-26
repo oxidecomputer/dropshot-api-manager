@@ -1,7 +1,6 @@
 // Copyright 2025 Oxide Computer Company
 
 use crate::{
-    FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::ManagedApis,
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
@@ -10,17 +9,6 @@ use crate::{
     },
     resolved::Resolved,
 };
-use std::process::ExitCode;
-
-impl CheckResult {
-    pub fn to_exit_code(self) -> ExitCode {
-        match self {
-            CheckResult::Success => ExitCode::SUCCESS,
-            CheckResult::NeedsUpdate => NEEDS_UPDATE_EXIT_CODE.into(),
-            CheckResult::Failures => FAILURE_EXIT_CODE.into(),
-        }
-    }
-}
 
 pub(crate) fn check_impl(
     apis: &ManagedApis,

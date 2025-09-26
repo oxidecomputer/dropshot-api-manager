@@ -1,11 +1,16 @@
 // Copyright 2025 Oxide Computer Company
 
+//! Test utilities for the Dropshot API manager.
+
+pub use crate::output::CheckResult;
 use crate::{
-    BlessedSourceArgs, GeneratedSourceArgs,
     apis::ManagedApis,
-    cmd::check::check_impl,
+    cmd::{
+        check::check_impl,
+        dispatch::{BlessedSourceArgs, GeneratedSourceArgs},
+    },
     environment::{Environment, GeneratedSource},
-    output::{CheckResult, OutputOpts},
+    output::OutputOpts,
 };
 
 /// Check that a set of APIs is up-to-date.

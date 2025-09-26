@@ -28,6 +28,8 @@ pub struct App {
 }
 
 impl App {
+    /// Executes the application under the given environment, and with the
+    /// provided list of managed APIs.
     pub fn exec(self, env: &Environment, apis: &ManagedApis) -> ExitCode {
         let result = match self.command {
             Command::Debug(args) => args.exec(env, apis, &self.output_opts),
@@ -256,11 +258,17 @@ impl CheckArgs {
     }
 }
 
-// This code is not 0 or 1 (general anyhow errors) and indicates out-of-date.
-pub(crate) const NEEDS_UPDATE_EXIT_CODE: u8 = 4;
+/// Exit code which indicates that local files are out-of-date.
+///
+/// This is chosen to be 4 so that the exit code is not 0 or 1 (general anyhow
+/// errors).
+pub const NEEDS_UPDATE_EXIT_CODE: u8 = 4;
 
-// This code indicates failures during generation, e.g. validation errors.
-pub(crate) const FAILURE_EXIT_CODE: u8 = 100;
+/// Exit code which indicates that one or more failures occurred.
+///
+/// This exit code is returned for issues like validation errors, or blessed
+/// files being updated in an incompatible way.
+pub const FAILURE_EXIT_CODE: u8 = 100;
 
 #[cfg(test)]
 mod test {

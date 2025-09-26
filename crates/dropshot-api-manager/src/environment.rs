@@ -19,6 +19,12 @@ use anyhow::Context;
 use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use owo_colors::OwoColorize;
 
+/// Configuration for the Dropshot API manager.
+///
+/// This struct describes various properties of the environment the API manager
+/// is running within, such as the command to invoke the OpenAPI manager, and
+/// the repository root directory. For the full list of properties, see the
+/// methods on this struct.
 #[derive(Clone, Debug)]
 pub struct Environment {
     /// The command to run the OpenAPI manager.
