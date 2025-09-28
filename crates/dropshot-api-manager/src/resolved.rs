@@ -7,7 +7,7 @@ use crate::{
     compatibility::{OpenApiCompatibilityError, api_compatible},
     environment::ResolvedEnv,
     iter_only::iter_only,
-    output::plural,
+    output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
     spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
     spec_files_generic::ApiFiles,
@@ -19,10 +19,11 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, ValidationContext,
 };
+use indent_write::fmt::IndentWriter;
 use openapiv3::OpenAPI;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt::{Debug, Display},
+    fmt::{Debug, Display, Write},
 };
 use thiserror::Error;
 
@@ -41,6 +42,26 @@ where
 
         for item in iter {
             write!(f, ", {item}")?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct ListDisplayableVec<T>(pub Vec<T>);
+
+impl<T> Display for ListDisplayableVec<T>
+where
+    T: Display,
+{
+    fn fmt(&self, mut f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // slice::join would require the use of unstable Rust.
+        for item in &self.0 {
+            write!(f, "- ")?;
+            let mut writer = IndentWriter::new_skip_initial("  ", f);
+            writeln!(writer, "{item}")?;
+            f = writer.into_inner();
         }
 
         Ok(())
@@ -164,11 +185,18 @@ pub enum Problem<'a> {
     BlessedVersionExtraLocalSpec { spec_file_name: ApiSpecFileName },
 
     #[error(
+        "error comparing OpenAPI document generated from current code with \
+         blessed document (from upstream): {}",
+        InlineErrorChain::new(error.as_ref())
+    )]
+    BlessedVersionCompareError { error: anyhow::Error },
+
+    #[error(
         "OpenAPI document generated from the current code is not compatible \
          with the blessed document (from upstream): {compatibility_issues}"
     )]
     BlessedVersionBroken {
-        compatibility_issues: DisplayableVec<OpenApiCompatibilityError>,
+        compatibility_issues: ListDisplayableVec<OpenApiCompatibilityError>,
     },
 
     #[error(
@@ -274,6 +302,7 @@ impl<'a> Problem<'a> {
                     files: DisplayableVec(vec![spec_file_name.clone()]),
                 })
             }
+            Problem::BlessedVersionCompareError { .. } => None,
             Problem::BlessedVersionBroken { .. } => None,
             Problem::LockstepMissingLocal { generated }
             | Problem::LockstepStale { generated, .. } => {
@@ -778,12 +807,18 @@ fn resolve_api_version_blessed<'a>(
     // If not, someone has made an incompatible change to the API
     // *implementation*, such that the implementation no longer faithfully
     // implements this older, supported version.
-    let issues = api_compatible(blessed.openapi(), generated.openapi());
-    if !issues.is_empty() {
-        problems.push(Problem::BlessedVersionBroken {
-            compatibility_issues: DisplayableVec(issues),
-        });
-    }
+    match api_compatible(blessed.value(), generated.value()) {
+        Ok(issues) => {
+            if !issues.is_empty() {
+                problems.push(Problem::BlessedVersionBroken {
+                    compatibility_issues: ListDisplayableVec(issues),
+                });
+            }
+        }
+        Err(error) => {
+            problems.push(Problem::BlessedVersionCompareError { error })
+        }
+    };
 
     // Now, there should be at least one local spec that exactly matches the
     // blessed one.

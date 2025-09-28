@@ -157,6 +157,8 @@ enum BadVersionedFileName {
 pub struct ApiSpecFile {
     /// describes how the document should be named on disk
     name: ApiSpecFileName,
+    /// serde_json::Value representation of the document
+    value: DebugIgnore<serde_json::Value>,
     /// parsed contents of the document
     contents: DebugIgnore<OpenAPI>,
     /// raw contents of the document
@@ -168,9 +170,17 @@ pub struct ApiSpecFile {
 impl ApiSpecFile {
     pub fn for_contents(
         spec_file_name: ApiSpecFileName,
-        openapi: OpenAPI,
+        value: serde_json::Value,
         contents_buf: Vec<u8>,
     ) -> anyhow::Result<ApiSpecFile> {
+        let openapi: OpenAPI = serde_json::from_value(value.clone())
+            .with_context(|| {
+                format!(
+                    "file {:?}: parsing OpenAPI document",
+                    spec_file_name.path()
+                )
+            })?;
+
         let parsed_version: semver::Version =
             openapi.info.version.parse().with_context(|| {
                 format!(
@@ -205,6 +215,7 @@ impl ApiSpecFile {
 
         Ok(ApiSpecFile {
             name: spec_file_name,
+            value: DebugIgnore(value),
             contents: DebugIgnore(openapi),
             contents_buf: DebugIgnore(contents_buf),
             version: parsed_version,
@@ -219,6 +230,11 @@ impl ApiSpecFile {
     /// Returns the version of the API described in the document
     pub fn version(&self) -> &semver::Version {
         &self.version
+    }
+
+    /// Returns the [`serde_json::Value`] representation of the document
+    pub fn value(&self) -> &serde_json::Value {
+        &self.value
     }
 
     /// Returns a parsed representation of the document itself
@@ -502,10 +518,10 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         file_name: ApiSpecFileName,
         contents: Vec<u8>,
     ) {
-        let maybe_file = serde_json::from_slice(&contents)
+        let maybe_file = serde_json::to_value(&contents)
             .with_context(|| format!("parse {:?}", file_name.path()))
-            .and_then(|parsed| {
-                ApiSpecFile::for_contents(file_name, parsed, contents)
+            .and_then(|value| {
+                ApiSpecFile::for_contents(file_name, value, contents)
             });
         match maybe_file {
             Ok(file) => {
