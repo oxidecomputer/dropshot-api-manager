@@ -26,6 +26,7 @@ impl fmt::Display for OpenApiCompatibilityError {
             write!(f, " (-> {})", new_path_str)?;
         }
         write!(f, ": {}", message)?;
+        // foo bar
         Ok(())
     }
 }
