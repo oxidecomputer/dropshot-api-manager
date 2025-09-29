@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.2.0] - 2025-09-26
+
 ### Added
 
 - Add a way to specify an allowlist of unmanaged APIs within a local directory. See `ManagedApis::with_unknown_apis` for more.
@@ -23,5 +25,6 @@
 Initial release.
 
 <!-- next-url -->
+[0.2.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.0
 [0.1.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.1.1
 [0.1.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.1.0

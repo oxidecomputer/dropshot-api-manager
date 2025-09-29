@@ -170,10 +170,16 @@ pub struct ApiSpecFile {
 impl ApiSpecFile {
     pub fn for_contents(
         spec_file_name: ApiSpecFileName,
-        value: serde_json::Value,
         contents_buf: Vec<u8>,
     ) -> anyhow::Result<ApiSpecFile> {
-        let openapi: OpenAPI = serde_json::from_value(value.clone())
+        // Parse a serde_json::Value from the contents buffer.
+        let value: serde_json::Value = serde_json::from_slice(&contents_buf)
+            .with_context(|| {
+                format!("file {:?}: parsing as JSON", spec_file_name.path())
+            })?;
+        // Parse the OpenAPI document from the contents buffer rather than the
+        // value for better error messages.
+        let openapi: OpenAPI = serde_json::from_slice(&contents_buf)
             .with_context(|| {
                 format!(
                     "file {:?}: parsing OpenAPI document",
@@ -518,11 +524,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         file_name: ApiSpecFileName,
         contents: Vec<u8>,
     ) {
-        let maybe_file = serde_json::to_value(&contents)
-            .with_context(|| format!("parse {:?}", file_name.path()))
-            .and_then(|value| {
-                ApiSpecFile::for_contents(file_name, value, contents)
-            });
+        let maybe_file = ApiSpecFile::for_contents(file_name, contents);
         match maybe_file {
             Ok(file) => {
                 let ident = file.spec_file_name().ident();

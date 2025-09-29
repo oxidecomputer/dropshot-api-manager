@@ -21,7 +21,7 @@ impl fmt::Display for OpenApiCompatibilityError {
         } = &self.0;
         let old_path_str = old_path.iter().next().unwrap();
         let new_path_str = new_path.iter().next().unwrap();
-        write!(f, "{} change at {}", change_class_str(class), old_path_str)?;
+        write!(f, "{}change at {}", change_class_str(class), old_path_str)?;
         if new_path_str != old_path_str {
             write!(f, " (-> {})", new_path_str)?;
         }
@@ -51,10 +51,14 @@ pub fn api_compatible(
 
 pub fn change_class_str(class: &ChangeClass) -> &'static str {
     match class {
-        ChangeClass::BackwardIncompatible => "backward-incompatible",
-        ChangeClass::ForwardIncompatible => "forward-incompatible",
-        ChangeClass::Incompatible => "incompatible",
-        ChangeClass::Unhandled => "unhandled",
-        ChangeClass::Trivial => "trivial",
+        // Add spaces to the end of everything so "unhandled" can return an
+        // empty string.
+        ChangeClass::BackwardIncompatible => "backward-incompatible ",
+        ChangeClass::ForwardIncompatible => "forward-incompatible ",
+        ChangeClass::Incompatible => "incompatible ",
+        // For unhandled changes, just say "change" in the error message (so
+        // nothing here).
+        ChangeClass::Unhandled => "",
+        ChangeClass::Trivial => "trivial ",
     }
 }

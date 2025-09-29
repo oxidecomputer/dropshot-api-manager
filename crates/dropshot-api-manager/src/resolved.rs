@@ -193,7 +193,7 @@ pub enum Problem<'a> {
 
     #[error(
         "OpenAPI document generated from the current code is not compatible \
-         with the blessed document (from upstream): {compatibility_issues}"
+         with the blessed document (from upstream)\n{compatibility_issues}"
     )]
     BlessedVersionBroken {
         compatibility_issues: ListDisplayableVec<OpenApiCompatibilityError>,
