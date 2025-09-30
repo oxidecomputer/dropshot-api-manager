@@ -18,7 +18,7 @@ use openapiv3::OpenAPI;
 #[test]
 fn test_lockstep_generate_basic() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_health_test_apis()?;
+    let apis = lockstep_health_apis()?;
 
     // Initially, no documents should exist.
     assert!(!env.lockstep_document_exists("health"));
@@ -49,7 +49,7 @@ fn test_lockstep_generate_basic() -> Result<()> {
 #[test]
 fn test_lockstep_always_up_to_date() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_multi_test_apis()?;
+    let apis = lockstep_multi_apis()?;
 
     // Generate all documents.
     env.generate_documents(&apis)?;
@@ -65,7 +65,7 @@ fn test_lockstep_always_up_to_date() -> Result<()> {
 #[test]
 fn test_lockstep_multiple_apis() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_multi_test_apis()?;
+    let apis = lockstep_multi_apis()?;
 
     // Generate all documents.
     env.generate_documents(&apis)?;

@@ -9,8 +9,7 @@
 use anyhow::{Context, Result};
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
 use integration_tests::common::{
-    create_versioned_health_test_apis_incompatible,
-    create_versioned_health_test_apis_skip_middle, *,
+    versioned_health_incompat_apis, versioned_health_skip_middle_apis, *,
 };
 use openapiv3::OpenAPI;
 
@@ -18,7 +17,7 @@ use openapiv3::OpenAPI;
 #[test]
 fn test_versioned_generate_basic() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Initially, no documents should exist.
     assert!(
@@ -76,7 +75,7 @@ fn test_versioned_generate_basic() -> Result<()> {
 #[test]
 fn test_versioned_content_by_version() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Generate documents.
     env.generate_documents(&apis)?;
@@ -116,7 +115,7 @@ fn test_versioned_content_by_version() -> Result<()> {
 #[test]
 fn test_versioned_latest_document() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Generate documents.
     env.generate_documents(&apis)?;
@@ -146,7 +145,7 @@ fn test_versioned_latest_document() -> Result<()> {
 #[test]
 fn test_multiple_versioned_apis() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_multi_versioned_test_apis()?;
+    let apis = multi_versioned_apis()?;
 
     // Generate all documents.
     env.generate_documents(&apis)?;
@@ -246,7 +245,7 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
 #[test]
 fn test_git_commit_documents() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Initially no uncommitted changes.
     assert!(!env.has_uncommitted_document_changes()?);
@@ -275,7 +274,7 @@ fn test_git_commit_documents() -> Result<()> {
 #[test]
 fn test_blessed_document_lifecycle() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Initially, APIs should fail the up-to-date check (no documents exist).
     let result = check_apis_up_to_date(env.environment(), &apis)?;
@@ -302,7 +301,7 @@ fn test_blessed_document_lifecycle() -> Result<()> {
 #[test]
 fn test_blessed_api_changes_should_not_do_trivial_updates() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents.
     env.generate_documents(&apis)?;
@@ -313,8 +312,7 @@ fn test_blessed_api_changes_should_not_do_trivial_updates() -> Result<()> {
     assert_eq!(result, CheckResult::Success);
 
     // Create a modified API with trivial changes (different title/description).
-    let modified_apis =
-        create_versioned_health_test_apis_with_trivial_change()?;
+    let modified_apis = versioned_health_trivial_change_apis()?;
 
     // The check should indicate that *no updates are needed* to the blessed version.
     let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
@@ -329,14 +327,14 @@ fn test_mixed_blessed_document_states() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Start with combined APIs to establish the proper context.
-    let combined_apis = create_multi_versioned_test_apis()?;
+    let combined_apis = multi_versioned_apis()?;
 
     // Initially, combined APIs should need update.
     let result = check_apis_up_to_date(env.environment(), &combined_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
 
     // Generate only health API documents first.
-    let health_apis = create_versioned_health_test_apis()?;
+    let health_apis = versioned_health_apis()?;
     env.generate_documents(&health_apis)?;
     env.commit_documents()?;
 
@@ -359,7 +357,7 @@ fn test_mixed_blessed_document_states() -> Result<()> {
 #[test]
 fn test_removing_api_version_fails_check() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents (3 versions).
     env.generate_documents(&apis)?;
@@ -389,7 +387,7 @@ fn test_removing_api_version_fails_check() -> Result<()> {
     );
 
     // Create API with fewer versions (simulating version removal).
-    let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
+    let reduced_apis = versioned_health_reduced_apis()?;
 
     // The check should result in NeedsUpdate when versions are removed.
     let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
@@ -404,7 +402,7 @@ fn test_adding_new_api_version_passes_check() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Start with reduced version API.
-    let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
+    let reduced_apis = versioned_health_reduced_apis()?;
     env.generate_documents(&reduced_apis)?;
     env.commit_documents()?;
 
@@ -413,7 +411,7 @@ fn test_adding_new_api_version_passes_check() -> Result<()> {
     assert_eq!(result, CheckResult::Success);
 
     // Add more versions.
-    let expanded_apis = create_versioned_health_test_apis()?;
+    let expanded_apis = versioned_health_apis()?;
 
     // Adding versions should require update (new documents to generate).
     let result = check_apis_up_to_date(env.environment(), &expanded_apis)?;
@@ -435,7 +433,7 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Start with the full versioned health API (3 versions).
-    let full_apis = create_versioned_health_test_apis()?;
+    let full_apis = versioned_health_apis()?;
 
     // Generate and commit the initial "blessed" documents.
     env.generate_documents(&full_apis)?;
@@ -470,7 +468,7 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
 
     // Now remove version 3.0.0 by switching to the reduced API.
     // This simulates a developer deciding to remove a version that was previously blessed.
-    let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
+    let reduced_apis = versioned_health_reduced_apis()?;
 
     // This check should return NeedsUpdate because the v3.0.0 document exists
     // and needs to be removed.
@@ -550,7 +548,7 @@ fn test_retiring_older_blessed_version() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Start with the full versioned health API (3 versions).
-    let full_apis = create_versioned_health_test_apis()?;
+    let full_apis = versioned_health_apis()?;
 
     // Generate and commit the initial "blessed" documents.
     env.generate_documents(&full_apis)?;
@@ -585,7 +583,7 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 
     // Now remove version 2.0.0 by switching to the skip middle API.
     // This simulates a developer deciding to retire an older version that was previously blessed.
-    let skip_middle_apis = create_versioned_health_test_apis_skip_middle()?;
+    let skip_middle_apis = versioned_health_skip_middle_apis()?;
 
     // This check should return NeedsUpdate because the v2.0.0 document exists
     // and needs to be removed.
@@ -665,7 +663,7 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Start with the original versioned health API (3 versions).
-    let original_apis = create_versioned_health_test_apis()?;
+    let original_apis = versioned_health_apis()?;
 
     // Generate and commit the initial "blessed" documents.
     env.generate_documents(&original_apis)?;
@@ -700,7 +698,7 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
 
     // Now introduce incompatible changes. This adds a new endpoint, which
     // (while forward-compatible) we treat as a breaking change.
-    let incompatible_apis = create_versioned_health_test_apis_incompatible()?;
+    let incompatible_apis = versioned_health_incompat_apis()?;
 
     // This check should return Failures.
     let result = check_apis_up_to_date(env.environment(), &incompatible_apis)?;
@@ -719,7 +717,7 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
 #[test]
 fn test_blessed_version_extra_local_spec() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = create_versioned_health_test_apis()?;
+    let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents to make them blessed.
     env.generate_documents(&apis)?;
@@ -731,7 +729,7 @@ fn test_blessed_version_extra_local_spec() -> Result<()> {
 
     // Generate with the incompatible APIs.
     let env2 = TestEnvironment::new()?;
-    let incompatible_apis = create_versioned_health_test_apis_incompatible()?;
+    let incompatible_apis = versioned_health_incompat_apis()?;
 
     env2.generate_documents(&incompatible_apis)?;
 
