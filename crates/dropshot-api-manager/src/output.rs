@@ -70,15 +70,18 @@ impl Styles {
 
 // This is copied from similar's UnifiedDiff::to_writer, except with colorized
 // output.
-pub(crate) fn write_diff<'diff, 'old, 'new, 'bufs>(
-    diff: &'diff TextDiff<'old, 'new, 'bufs, [u8]>,
+pub(crate) fn write_diff<'diff, 'old, 'new, 'bufs, T>(
+    diff: &'diff TextDiff<'old, 'new, 'bufs, T>,
     path1: &Utf8Path,
     path2: &Utf8Path,
     styles: &Styles,
+    context_radius: usize,
+    missing_newline_hint: bool,
     out: &mut dyn io::Write,
 ) -> io::Result<()>
 where
     'diff: 'old + 'new + 'bufs,
+    T: DiffableStr + ?Sized,
 {
     // The "a/" (/ courtesy full_path) and "b/" make it feel more like git diff.
     let a = Utf8Path::new("a").join(path1);
@@ -86,7 +89,10 @@ where
     let b = Utf8Path::new("b").join(path2);
     writeln!(out, "{}", format!("+++ {b}").style(styles.diff_after))?;
 
-    let udiff = diff.unified_diff();
+    let mut udiff = diff.unified_diff();
+    udiff
+        .context_radius(context_radius)
+        .missing_newline_hint(missing_newline_hint);
     for hunk in udiff.iter_hunks() {
         for (idx, change) in hunk.iter_changes().enumerate() {
             if idx == 0 {
@@ -479,6 +485,50 @@ pub fn display_resolution_problems<'a, T>(
             )
         );
 
+        // For BlessedVersionBroken, print each item separately, along with a
+        // diff between blessed and generated versions.
+        if let Problem::BlessedVersionBroken { compatibility_issues } = &p {
+            for issue in compatibility_issues {
+                // Print each compatibility issue on a new line, prefixed with
+                // "- ".
+                let nested_first_indent = format!("{}- ", more_indent);
+                let nested_more_indent = format!("{}  ", more_indent);
+                eprintln!(
+                    "{}",
+                    textwrap::fill(
+                        &issue.to_string(),
+                        textwrap::Options::with_termwidth()
+                            .initial_indent(&nested_first_indent)
+                            .subsequent_indent(&nested_more_indent)
+                    )
+                );
+
+                // Now print a textual diff between the blessed and generated
+                // versions.
+                let blessed_json = issue.blessed_json();
+                let generated_json = issue.generated_json();
+
+                let diff = TextDiff::from_lines(&blessed_json, &generated_json);
+                // We don't care about I/O errors here (just as we don't when
+                // using eprintln! above).
+                let _ = write_diff(
+                    &diff,
+                    "blessed".as_ref(),
+                    "generated".as_ref(),
+                    styles,
+                    // context_radius: use a large radius to ensure that most of
+                    // the schema is printed out.
+                    8,
+                    /* missing_newline_hint */ false,
+                    // Add an indent to align diff with the status message.
+                    &mut indent_write::io::IndentWriter::new(
+                        &nested_more_indent,
+                        std::io::stderr(),
+                    ),
+                );
+            }
+        }
+
         let Some(fix) = p.fix() else {
             continue;
         };
@@ -550,6 +600,10 @@ pub fn display_resolution_problems<'a, T>(
                 &path1,
                 &path2,
                 styles,
+                // context_radius: here, a small radius is sufficient to show
+                // differences.
+                3,
+                /* missing_newline_hint */ true,
                 // Add an indent to align diff with the status message.
                 &mut indent_write::io::IndentWriter::new(
                     &indent,

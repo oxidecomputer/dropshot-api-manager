@@ -4,7 +4,7 @@
 
 use crate::{
     apis::{ManagedApi, ManagedApis},
-    compatibility::{OpenApiCompatibilityError, api_compatible},
+    compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
@@ -19,11 +19,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, ValidationContext,
 };
-use indent_write::fmt::IndentWriter;
 use openapiv3::OpenAPI;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt::{Debug, Display, Write},
+    fmt::{Debug, Display},
 };
 use thiserror::Error;
 
@@ -42,26 +41,6 @@ where
 
         for item in iter {
             write!(f, ", {item}")?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct ListDisplayableVec<T>(pub Vec<T>);
-
-impl<T> Display for ListDisplayableVec<T>
-where
-    T: Display,
-{
-    fn fmt(&self, mut f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // slice::join would require the use of unstable Rust.
-        for item in &self.0 {
-            write!(f, "- ")?;
-            let mut writer = IndentWriter::new_skip_initial("  ", f);
-            writeln!(writer, "{item}")?;
-            f = writer.into_inner();
         }
 
         Ok(())
@@ -193,11 +172,9 @@ pub enum Problem<'a> {
 
     #[error(
         "OpenAPI document generated from the current code is not compatible \
-         with the blessed document (from upstream)\n{compatibility_issues}"
+         with the blessed document (from upstream)"
     )]
-    BlessedVersionBroken {
-        compatibility_issues: ListDisplayableVec<OpenApiCompatibilityError>,
-    },
+    BlessedVersionBroken { compatibility_issues: Vec<ApiCompatIssue> },
 
     #[error(
         "No local OpenAPI document was found for this lockstep API.  This is \
@@ -673,7 +650,7 @@ fn resolve_api<'a>(
             None,
         )
     } else {
-        let by_version = api
+        let by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
             .map(|version| {
                 let version = version.clone();
@@ -696,12 +673,62 @@ fn resolve_api<'a>(
             "\"generated\" source should always have a \"latest\" link",
         );
         let symlink = match api_local.and_then(|l| l.latest_link()) {
-            Some(latest_local) if latest_local == latest_generated => None,
-            Some(latest_local) => Some(Problem::LatestLinkStale {
-                api_ident: api.ident().clone(),
-                link: latest_generated,
-                found: latest_local,
-            }),
+            Some(latest_local) => {
+                if latest_local == latest_generated {
+                    None
+                } else {
+                    // latest_local is different from latest_generated.
+                    //
+                    // We never want to update blessed documents. But
+                    // latest_generated might have wire-compatible changes which
+                    // would cause the hash to change.
+                    //
+                    // There are two possibilities:
+                    //
+                    // 1. latest_local is blessed and latest_generated has
+                    //    wire-compatible changes. In that case, we don't update
+                    //    the symlink.
+                    // 2. latest_local is blessed and latest_generated has
+                    //    wire-*incompatible* changes. In that case, we'd have
+                    //    returned errors in the by_version map above, and we
+                    //    wouldn't want to update the symlink in any case.
+                    // 3. latest_local is not blessed. In that case, we do
+                    //    want to update the symlink.
+                    //
+                    // This boils down to simply checking if latest_generated is
+                    // a blessed version.
+                    let version = latest_generated
+                        .version()
+                        .expect("versioned APIs have a version");
+                    if let Some(resolution) = by_version.get(&version) {
+                        match resolution.kind() {
+                            ResolutionKind::Lockstep => {
+                                unreachable!("this is a versioned API");
+                            }
+                            ResolutionKind::Blessed => {
+                                // latest_generated is blessed, so don't update
+                                // the symlink.
+                                None
+                            }
+                            ResolutionKind::NewLocally => {
+                                // latest_generated is not blessed, so update
+                                // the symlink.
+                                Some(Problem::LatestLinkStale {
+                                    api_ident: api.ident().clone(),
+                                    link: latest_generated,
+                                    found: latest_local,
+                                })
+                            }
+                        }
+                    } else {
+                        unreachable!(
+                            "by_version map should have a version \
+                             corresponding to latest_generated ({})",
+                            latest_generated
+                        )
+                    }
+                }
+            }
             None => Some(Problem::LatestLinkMissing {
                 api_ident: api.ident().clone(),
                 link: latest_generated,
@@ -811,7 +838,7 @@ fn resolve_api_version_blessed<'a>(
         Ok(issues) => {
             if !issues.is_empty() {
                 problems.push(Problem::BlessedVersionBroken {
-                    compatibility_issues: ListDisplayableVec(issues),
+                    compatibility_issues: issues,
                 });
             }
         }
