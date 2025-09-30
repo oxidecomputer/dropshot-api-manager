@@ -679,36 +679,81 @@ fn resolve_api<'a>(
                 } else {
                     // latest_local is different from latest_generated.
                     //
-                    // We never want to update blessed documents. But
-                    // latest_generated might have wire-compatible changes which
-                    // would cause the hash to change.
+                    // We never want to update the local copies of blessed
+                    // documents. But latest_generated might have
+                    // wire-compatible (trivial) changes which would cause the
+                    // hash to change, so we need to handle this case with care.
                     //
-                    // There are two possibilities:
+                    // The possibilities are:
                     //
-                    // 1. latest_local is blessed and latest_generated has
-                    //    wire-compatible changes. In that case, we don't update
-                    //    the symlink.
-                    // 2. latest_local is blessed and latest_generated has
+                    // 1. latest_local is blessed, latest_generated has the same
+                    //    version as latest_local, and it has wire-compatible
+                    //    changes. In that case, don't update the symlink.
+                    // 2. latest_local is blessed, latest_generated has the same
+                    //    version as latest_local, and latest_generated has
                     //    wire-*incompatible* changes. In that case, we'd have
                     //    returned errors in the by_version map above, and we
                     //    wouldn't want to update the symlink in any case.
-                    // 3. latest_local is not blessed. In that case, we do
+                    // 3. latest_local is blessed, and latest_generated is
+                    //    blessed but a *different* version. This means that
+                    //    the latest version was retired. In this case,
+                    //    we want to update the symlink to the blessed hash
+                    //    corresponding to the latest generated version.
+                    // 4. latest_local is not blessed. In that case, we do
                     //    want to update the symlink.
-                    //
-                    // This boils down to simply checking if latest_generated is
-                    // a blessed version.
-                    let version = latest_generated
+                    let generated_version = latest_generated
                         .version()
                         .expect("versioned APIs have a version");
-                    if let Some(resolution) = by_version.get(version) {
+                    let local_version = latest_local
+                        .version()
+                        .expect("versioned APIs have a version");
+                    if let Some(resolution) = by_version.get(generated_version)
+                    {
                         match resolution.kind() {
                             ResolutionKind::Lockstep => {
                                 unreachable!("this is a versioned API");
                             }
-                            ResolutionKind::Blessed => {
-                                // latest_generated is blessed, so don't update
-                                // the symlink.
+                            // Case 1 and 2 above.
+                            ResolutionKind::Blessed
+                                if generated_version == local_version =>
+                            {
+                                // latest_generated is blessed and the same
+                                // version as latest_local, so don't update the
+                                // symlink.
                                 None
+                            }
+                            ResolutionKind::Blessed => {
+                                // latest_generated is blessed, and has a
+                                // different version from latest_local. In this
+                                // case, we want to update the symlink to the
+                                // blessed version matching latest_generated
+                                // (not latest_generated, in case it's different
+                                // from the blessed version in a wire-compatible
+                                // way!)
+                                let api_blessed =
+                                    api_blessed.unwrap_or_else(|| {
+                                        panic!(
+                                            "for {}, Blessed means \
+                                             api_blessed exists",
+                                            api.ident()
+                                        )
+                                    });
+                                let blessed = api_blessed
+                                    .versions()
+                                    .get(generated_version)
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "for {} v{}, Blessed means \
+                                             generated_version exists",
+                                            api.ident(),
+                                            generated_version
+                                        );
+                                    });
+                                Some(Problem::LatestLinkStale {
+                                    api_ident: api.ident().clone(),
+                                    link: blessed.spec_file_name(),
+                                    found: latest_local,
+                                })
                             }
                             ResolutionKind::NewLocally => {
                                 // latest_generated is not blessed, so update

@@ -20,9 +20,10 @@ NewtypeFrom! { () pub struct GitRevision(String); }
 
 /// Given a revision, return its merge base with HEAD
 pub fn git_merge_base_head(
+    repo_root: &Utf8Path,
     revision: &GitRevision,
 ) -> anyhow::Result<GitRevision> {
-    let mut cmd = git_start();
+    let mut cmd = git_start(repo_root);
     cmd.arg("merge-base").arg("--all").arg("HEAD").arg(revision.as_str());
     let label = cmd_label(&cmd);
     let stdout = do_run(&mut cmd)?;
@@ -39,10 +40,11 @@ pub fn git_merge_base_head(
 
 /// List files recursively under some path `path` in Git revision `revision`.
 pub fn git_ls_tree(
+    repo_root: &Utf8Path,
     revision: &GitRevision,
     directory: &Utf8Path,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    let mut cmd = git_start();
+    let mut cmd = git_start(repo_root);
     cmd.arg("ls-tree")
         .arg("-r")
         .arg("-z")
@@ -75,19 +77,22 @@ pub fn git_ls_tree(
 /// Returns the contents of the file at the given path `path` in Git revision
 /// `revision`.
 pub fn git_show_file(
+    repo_root: &Utf8Path,
     revision: &GitRevision,
     path: &Utf8Path,
 ) -> anyhow::Result<Vec<u8>> {
-    let mut cmd = git_start();
+    let mut cmd = git_start(repo_root);
     cmd.arg("cat-file").arg("blob").arg(format!("{}:{}", revision, path));
     let stdout = do_run(&mut cmd)?;
     Ok(stdout.into_bytes())
 }
 
 /// Begin assembling an invocation of git(1)
-fn git_start() -> Command {
+fn git_start(repo_root: &Utf8Path) -> Command {
     let git = std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
-    Command::new(&git)
+    let mut command = Command::new(&git);
+    command.current_dir(repo_root);
+    command
 }
 
 /// Runs an assembled git(1) command, returning stdout on success and an error

@@ -65,7 +65,11 @@ impl TestEnvironment {
             "test-openapi-manager",
             workspace_root.as_path(),
             "documents",
-        )?;
+        )?
+        // Use "main" rather than the default "origin/main" since we're not
+        // pushing to an upstream. A commit to main automatically marks the
+        // document blessed.
+        .with_default_git_branch("main");
 
         Ok(Self { temp_dir, workspace_root, documents_dir, environment })
     }
@@ -103,6 +107,15 @@ impl TestEnvironment {
         let path = self.workspace_root.join(relative_path);
         fs::read_to_string(&path)
             .with_context(|| format!("failed to read file: {}", path))
+    }
+
+    pub fn read_link(
+        &self,
+        relative_path: impl AsRef<Utf8Path>,
+    ) -> Result<Utf8PathBuf> {
+        let path = self.workspace_root.join(relative_path);
+        path.read_link_utf8()
+            .with_context(|| format!("failed to read link: {}", path))
     }
 
     /// Check if a file exists in the workspace.
@@ -188,10 +201,13 @@ impl TestEnvironment {
         &self,
         api_ident: &str,
     ) -> Result<String> {
-        self.read_file(format!(
-            "documents/{}/{}-latest.json",
-            api_ident, api_ident
-        ))
+        // Try reading the link to ensure it's a symlink.
+        let file_name =
+            format!("documents/{}/{}-latest.json", api_ident, api_ident);
+        let target = self.read_link(&file_name)?;
+        eprintln!("** symlink target: {}", target);
+
+        self.read_file(&file_name)
     }
 
     /// Commit documents to git (for blessed document workflow testing).
@@ -434,4 +450,43 @@ pub fn create_mixed_test_apis() -> Result<ManagedApis> {
         versioned_user_test_api(),
     ];
     ManagedApis::new(configs).context("failed to create mixed ManagedApis")
+}
+
+/// Create versioned health API with a trivial change (title/metadata updated).
+pub fn create_versioned_health_test_apis_with_trivial_change()
+-> Result<ManagedApis> {
+    // Create a modified API config that would produce different OpenAPI documents.
+    let mut config = versioned_health_test_api();
+
+    // Modify the title to create a different document signature.
+    config.title = "Modified Versioned Health API";
+    config.metadata.description =
+        Some("A versioned health API with breaking changes");
+
+    ManagedApis::new(vec![config])
+        .context("failed to create trivial change versioned health ManagedApis")
+}
+
+/// Create versioned health API with reduced versions (simulating version removal).
+pub fn create_versioned_health_test_apis_reduced_versions()
+-> Result<ManagedApis> {
+    // Create a configuration similar to versioned health but with fewer versions.
+    // We'll create a new fixture for this.
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            // Use a subset of versions (only 1.0.0 and 2.0.0, not 3.0.0).
+            supported_versions: fixtures::versioned_health_reduced::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some("A versioned health API with reduced versions"),
+            ..Default::default()
+        },
+        api_description: fixtures::versioned_health_reduced::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create reduced versioned health ManagedApis")
 }

@@ -49,7 +49,8 @@ pub(crate) fn generate_impl(
     let (local_files, errors) = env.local_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
-    let (blessed, errors) = blessed_source.load(apis, &styles)?;
+    let (blessed, errors) =
+        blessed_source.load(&env.repo_root, apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
     let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);

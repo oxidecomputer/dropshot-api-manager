@@ -7,6 +7,7 @@
 //! and must remain stable across changes.
 
 use anyhow::Result;
+use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
 use integration_tests::common::*;
 use openapiv3::OpenAPI;
 
@@ -225,6 +226,209 @@ fn test_git_commit_documents() -> Result<()> {
     let commit_hash = env.get_current_commit_hash()?;
     assert!(!commit_hash.is_empty());
     assert!(commit_hash.len() >= 7); // Git short hash is typically 7+ chars.
+
+    Ok(())
+}
+
+/// Test blessed document lifecycle - generate, commit, then verify check passes.
+#[test]
+fn test_blessed_document_lifecycle() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = create_versioned_health_test_apis()?;
+
+    // Initially, APIs should fail the up-to-date check (no documents exist).
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate the documents.
+    env.generate_documents(&apis)?;
+
+    // After generation, for new APIs, they are considered fresh/up-to-date.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Commit the documents to "bless" them.
+    env.commit_documents()?;
+
+    // Should still pass after committing.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that API changes require regeneration and recommitting.
+#[test]
+fn test_blessed_api_changes_should_not_do_trivial_updates() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = create_versioned_health_test_apis()?;
+
+    // Generate and commit initial documents.
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Verify initial state is up-to-date.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Create a modified API with trivial changes (different title/description).
+    let modified_apis =
+        create_versioned_health_test_apis_with_trivial_change()?;
+
+    // The check should indicate that *no updates are needed* to the blessed version.
+    let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test multiple versioned APIs with mixed blessed document states.
+#[test]
+fn test_mixed_blessed_document_states() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Start with combined APIs to establish the proper context.
+    let combined_apis = create_multi_versioned_test_apis()?;
+
+    // Initially, combined APIs should need update.
+    let result = check_apis_up_to_date(env.environment(), &combined_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate only health API documents first.
+    let health_apis = create_versioned_health_test_apis()?;
+    env.generate_documents(&health_apis)?;
+    env.commit_documents()?;
+
+    // Combined APIs should still need update (user API missing).
+    let result = check_apis_up_to_date(env.environment(), &combined_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate and commit all APIs documents.
+    env.generate_documents(&combined_apis)?;
+    env.commit_documents()?;
+
+    // Now combined APIs should pass.
+    let result = check_apis_up_to_date(env.environment(), &combined_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that removing API versions fails the check.
+#[test]
+fn test_removing_api_version_fails_check() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = create_versioned_health_test_apis()?;
+
+    // Generate and commit initial documents (3 versions).
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Verify all versions exist.
+    assert!(env.versioned_document_exists("versioned-health", "1.0.0"));
+    assert!(env.versioned_document_exists("versioned-health", "2.0.0"));
+    assert!(env.versioned_document_exists("versioned-health", "3.0.0"));
+
+    // Create API with fewer versions (simulating version removal).
+    let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
+
+    // The check should result in NeedsUpdate when versions are removed.
+    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    Ok(())
+}
+
+/// Test that adding new API versions passes the check.
+#[test]
+fn test_adding_new_api_version_passes_check() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Start with reduced version API.
+    let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
+    env.generate_documents(&reduced_apis)?;
+    env.commit_documents()?;
+
+    // Should pass check with reduced versions.
+    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Add more versions.
+    let expanded_apis = create_versioned_health_test_apis()?;
+
+    // Adding versions should require update (new documents to generate).
+    let result = check_apis_up_to_date(env.environment(), &expanded_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate the new versions.
+    env.generate_documents(&expanded_apis)?;
+
+    // Should now pass with all versions.
+    let result = check_apis_up_to_date(env.environment(), &expanded_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test retirement of the latest blessed API version.
+#[test]
+fn test_retiring_latest_blessed_version() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Start with the full versioned health API (3 versions).
+    let full_apis = create_versioned_health_test_apis()?;
+
+    // Generate and commit the initial "blessed" documents.
+    env.generate_documents(&full_apis)?;
+    env.commit_documents()?;
+
+    // Verify initial state is up-to-date.
+    let result = check_apis_up_to_date(env.environment(), &full_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Verify all 3 versions exist in the blessed state.
+    assert!(env.versioned_document_exists("versioned-health", "1.0.0"));
+    assert!(env.versioned_document_exists("versioned-health", "2.0.0"));
+    assert!(env.versioned_document_exists("versioned-health", "3.0.0"));
+
+    // Now remove version 3.0.0 by switching to the reduced API.
+    // This simulates a developer deciding to remove a version that was previously blessed.
+    let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
+
+    // This check should return NeedsUpdate because the v3.0.0 document exists
+    // and needs to be removed.
+    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate documents with the retired version.
+    env.generate_documents(&reduced_apis)?;
+
+    // After generation, should be up-to-date with the new API definition.
+    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Verify the v3.0.0 document was removed and v1/v2 were updated.
+    assert!(env.versioned_document_exists("versioned-health", "1.0.0"));
+    assert!(env.versioned_document_exists("versioned-health", "2.0.0"));
+    assert!(!env.versioned_document_exists("versioned-health", "3.0.0"));
+
+    // Verify the latest document now points to v2.0.0 (the new highest version).
+    let latest_content =
+        env.read_versioned_latest_document("versioned-health")?;
+    let latest_spec: OpenAPI = serde_json::from_str(&latest_content)?;
+    assert_eq!(latest_spec.info.version, "2.0.0");
+
+    // Commit the retired version to "approve" it.
+    env.commit_documents()?;
+
+    // Should still pass after committing the retired change.
+    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Verify we can no longer use the old full API against the new blessed
+    // documents.
+    let result = check_apis_up_to_date(env.environment(), &full_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
 
     Ok(())
 }

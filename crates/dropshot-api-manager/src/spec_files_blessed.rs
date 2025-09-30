@@ -95,13 +95,15 @@ impl BlessedFiles {
     /// `M1` for blessed documents because you haven't yet merged in commits M2,
     /// M3, and M4.
     pub fn load_from_git_parent_branch(
+        repo_root: &Utf8Path,
         branch: &GitRevision,
         directory: &Utf8Path,
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
     ) -> anyhow::Result<BlessedFiles> {
-        let revision = git_merge_base_head(branch)?;
+        let revision = git_merge_base_head(repo_root, branch)?;
         Self::load_from_git_revision(
+            repo_root,
             &revision,
             directory,
             apis,
@@ -111,6 +113,7 @@ impl BlessedFiles {
 
     /// Load OpenAPI documents from the given Git revision and directory.
     pub fn load_from_git_revision(
+        repo_root: &Utf8Path,
         commit: &GitRevision,
         directory: &Utf8Path,
         apis: &ManagedApis,
@@ -118,7 +121,7 @@ impl BlessedFiles {
     ) -> anyhow::Result<BlessedFiles> {
         let mut api_files: ApiSpecFilesBuilder<BlessedApiSpecFile> =
             ApiSpecFilesBuilder::new(apis, error_accumulator);
-        let files_found = git_ls_tree(commit, directory)?;
+        let files_found = git_ls_tree(repo_root, commit, directory)?;
         for f in files_found {
             // We should be looking at either a single-component path
             // ("api.json") or a file inside one level of directory hierarchy
@@ -134,7 +137,8 @@ impl BlessedFiles {
 
             // Read the contents. Use "/" rather than "\" on Windows.
             let file_name = format!("{directory}/{f}");
-            let contents = git_show_file(commit, file_name.as_ref())?;
+            let contents =
+                git_show_file(repo_root, commit, file_name.as_ref())?;
             if parts.len() == 1 {
                 if let Some(file_name) = api_files.lockstep_file_name(parts[0])
                 {
