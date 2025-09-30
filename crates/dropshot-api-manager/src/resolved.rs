@@ -4,10 +4,10 @@
 
 use crate::{
     apis::{ManagedApi, ManagedApis},
-    compatibility::{OpenApiCompatibilityError, api_compatible},
+    compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
     iter_only::iter_only,
-    output::plural,
+    output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
     spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
     spec_files_generic::ApiFiles,
@@ -164,12 +164,17 @@ pub enum Problem<'a> {
     BlessedVersionExtraLocalSpec { spec_file_name: ApiSpecFileName },
 
     #[error(
-        "OpenAPI document generated from the current code is not compatible \
-         with the blessed document (from upstream): {compatibility_issues}"
+        "error comparing OpenAPI document generated from current code with \
+         blessed document (from upstream): {}",
+        InlineErrorChain::new(error.as_ref())
     )]
-    BlessedVersionBroken {
-        compatibility_issues: DisplayableVec<OpenApiCompatibilityError>,
-    },
+    BlessedVersionCompareError { error: anyhow::Error },
+
+    #[error(
+        "OpenAPI document generated from the current code is not compatible \
+         with the blessed document (from upstream)"
+    )]
+    BlessedVersionBroken { compatibility_issues: Vec<ApiCompatIssue> },
 
     #[error(
         "No local OpenAPI document was found for this lockstep API.  This is \
@@ -274,6 +279,7 @@ impl<'a> Problem<'a> {
                     files: DisplayableVec(vec![spec_file_name.clone()]),
                 })
             }
+            Problem::BlessedVersionCompareError { .. } => None,
             Problem::BlessedVersionBroken { .. } => None,
             Problem::LockstepMissingLocal { generated }
             | Problem::LockstepStale { generated, .. } => {
@@ -644,7 +650,7 @@ fn resolve_api<'a>(
             None,
         )
     } else {
-        let by_version = api
+        let by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
             .map(|version| {
                 let version = version.clone();
@@ -667,12 +673,62 @@ fn resolve_api<'a>(
             "\"generated\" source should always have a \"latest\" link",
         );
         let symlink = match api_local.and_then(|l| l.latest_link()) {
-            Some(latest_local) if latest_local == latest_generated => None,
-            Some(latest_local) => Some(Problem::LatestLinkStale {
-                api_ident: api.ident().clone(),
-                link: latest_generated,
-                found: latest_local,
-            }),
+            Some(latest_local) => {
+                if latest_local == latest_generated {
+                    None
+                } else {
+                    // latest_local is different from latest_generated.
+                    //
+                    // We never want to update blessed documents. But
+                    // latest_generated might have wire-compatible changes which
+                    // would cause the hash to change.
+                    //
+                    // There are two possibilities:
+                    //
+                    // 1. latest_local is blessed and latest_generated has
+                    //    wire-compatible changes. In that case, we don't update
+                    //    the symlink.
+                    // 2. latest_local is blessed and latest_generated has
+                    //    wire-*incompatible* changes. In that case, we'd have
+                    //    returned errors in the by_version map above, and we
+                    //    wouldn't want to update the symlink in any case.
+                    // 3. latest_local is not blessed. In that case, we do
+                    //    want to update the symlink.
+                    //
+                    // This boils down to simply checking if latest_generated is
+                    // a blessed version.
+                    let version = latest_generated
+                        .version()
+                        .expect("versioned APIs have a version");
+                    if let Some(resolution) = by_version.get(version) {
+                        match resolution.kind() {
+                            ResolutionKind::Lockstep => {
+                                unreachable!("this is a versioned API");
+                            }
+                            ResolutionKind::Blessed => {
+                                // latest_generated is blessed, so don't update
+                                // the symlink.
+                                None
+                            }
+                            ResolutionKind::NewLocally => {
+                                // latest_generated is not blessed, so update
+                                // the symlink.
+                                Some(Problem::LatestLinkStale {
+                                    api_ident: api.ident().clone(),
+                                    link: latest_generated,
+                                    found: latest_local,
+                                })
+                            }
+                        }
+                    } else {
+                        unreachable!(
+                            "by_version map should have a version \
+                             corresponding to latest_generated ({})",
+                            latest_generated
+                        )
+                    }
+                }
+            }
             None => Some(Problem::LatestLinkMissing {
                 api_ident: api.ident().clone(),
                 link: latest_generated,
@@ -778,12 +834,18 @@ fn resolve_api_version_blessed<'a>(
     // If not, someone has made an incompatible change to the API
     // *implementation*, such that the implementation no longer faithfully
     // implements this older, supported version.
-    let issues = api_compatible(blessed.openapi(), generated.openapi());
-    if !issues.is_empty() {
-        problems.push(Problem::BlessedVersionBroken {
-            compatibility_issues: DisplayableVec(issues),
-        });
-    }
+    match api_compatible(blessed.value(), generated.value()) {
+        Ok(issues) => {
+            if !issues.is_empty() {
+                problems.push(Problem::BlessedVersionBroken {
+                    compatibility_issues: issues,
+                });
+            }
+        }
+        Err(error) => {
+            problems.push(Problem::BlessedVersionCompareError { error })
+        }
+    };
 
     // Now, there should be at least one local spec that exactly matches the
     // blessed one.

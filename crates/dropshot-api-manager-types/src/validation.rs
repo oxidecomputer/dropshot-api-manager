@@ -132,6 +132,14 @@ impl ApiSpecFileName {
         }
     }
 
+    /// For versioned APIs, returns the version part of the filename
+    pub fn version(&self) -> Option<&semver::Version> {
+        match &self.kind {
+            ApiSpecFileNameKind::Lockstep => None,
+            ApiSpecFileNameKind::Versioned { version, .. } => Some(version),
+        }
+    }
+
     /// For versioned APIs, returns the hash part of the filename
     pub fn hash(&self) -> Option<&str> {
         match &self.kind {

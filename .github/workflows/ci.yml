@@ -46,6 +46,10 @@ jobs:
       RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      # The e2e-example tests require origin/main to be present.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: main
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust-version }}

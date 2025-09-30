@@ -76,6 +76,12 @@ pub mod versioned {
 
     #[derive(Serialize, JsonSchema)]
     struct ThingV2 {
-        thing_number: u32,
+        // Note: this was originally `thing_number: u32`, but a wrapper type was
+        // added afterwards to test out wire-compatible changes to the schema
+        // (which don't require changing the version).
+        thing_number: Number,
     }
+
+    #[derive(Serialize, JsonSchema)]
+    struct Number(u32);
 }

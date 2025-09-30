@@ -371,6 +371,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "drift"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43eb40edecda6106744f5e4f3d4dc78b3adf19d3cfb2d81cc4faa007da91e527"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "openapiv3",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dropshot"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -430,6 +444,7 @@ dependencies = [
  "camino",
  "clap",
  "debug-ignore",
+ "drift",
  "dropshot",
  "dropshot-api-manager-types",
  "fs-err",
