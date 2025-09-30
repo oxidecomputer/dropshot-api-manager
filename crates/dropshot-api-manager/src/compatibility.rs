@@ -145,8 +145,8 @@ fn get_json_value(
     spec.pointer(pointer).map(|v| {
         // Add a map around the value, with the key being the last
         // component of the pointer.
-        let last_component = pointer.split('/').last().unwrap_or("");
-        surround_with_map(&last_component, v)
+        let last_component = pointer.split('/').next_back().unwrap_or("");
+        surround_with_map(last_component, v)
     })
 }
 
@@ -155,7 +155,7 @@ fn surround_with_map(
     value: &serde_json::Value,
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    let last_component = pointer.split('/').last().unwrap_or("");
+    let last_component = pointer.split('/').next_back().unwrap_or("");
     map.insert(unescape_pointer_component(last_component), value.clone());
     serde_json::Value::Object(map)
 }
@@ -187,12 +187,12 @@ impl<'a> ApiCompatPointer<'a> {
 
         // If one of the pointers (transformed into a prefix-free string by
         // adding a trailing `/`) is a parent of the other, return the child.
-        if let Some(suffix) = blessed_pointer.strip_prefix(&generated_pointer) {
+        if let Some(suffix) = blessed_pointer.strip_prefix(generated_pointer) {
             if suffix.starts_with('/') {
                 return ApiCompatPointer::Blessed(blessed_pointer);
             }
         }
-        if let Some(suffix) = generated_pointer.strip_prefix(&blessed_pointer) {
+        if let Some(suffix) = generated_pointer.strip_prefix(blessed_pointer) {
             if suffix.starts_with('/') {
                 return ApiCompatPointer::Generated(generated_pointer);
             }

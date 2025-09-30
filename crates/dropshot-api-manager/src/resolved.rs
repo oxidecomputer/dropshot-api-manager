@@ -700,7 +700,7 @@ fn resolve_api<'a>(
                     let version = latest_generated
                         .version()
                         .expect("versioned APIs have a version");
-                    if let Some(resolution) = by_version.get(&version) {
+                    if let Some(resolution) = by_version.get(version) {
                         match resolution.kind() {
                             ResolutionKind::Lockstep => {
                                 unreachable!("this is a versioned API");
