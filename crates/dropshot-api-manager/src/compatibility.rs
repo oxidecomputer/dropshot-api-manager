@@ -2,9 +2,8 @@
 
 //! Determine if one OpenAPI spec is a subset of another
 
-use std::{collections::BTreeMap, fmt};
-
 use drift::{Change, ChangeClass};
+use std::{collections::BTreeMap, fmt};
 
 /// A compatibility error between two OpenAPI documents, indexed by the blessed
 /// and generated paths.
