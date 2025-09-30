@@ -163,9 +163,7 @@ pub mod versioned_health {
     use super::*;
     use dropshot_api_manager_types::api_versions;
 
-    api_versions!(
-        [(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL),]
-    );
+    api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
     #[dropshot::api_description]
     pub trait VersionedHealthApi {
@@ -457,7 +455,7 @@ pub mod versioned_health_reduced {
     use super::*;
     use dropshot_api_manager_types::api_versions;
 
-    api_versions!([(2, WITH_DETAILED_STATUS), (1, INITIAL),]);
+    api_versions!([(2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
     #[dropshot::api_description]
     pub trait VersionedHealthApi {
@@ -489,5 +487,133 @@ pub mod versioned_health_reduced {
     // Reuse the same response types from the main versioned_health module.
     pub use super::versioned_health::{
         DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+    };
+}
+
+/// Versioned health API fixture that skips the middle version (2.0.0). This has
+/// versions 3.0.0 and 1.0.0 only, simulating retirement of an older blessed
+/// version.
+pub mod versioned_health_skip_middle {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(3, WITH_METRICS), (1, INITIAL)]);
+
+    #[dropshot::api_description]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+, but only available in v3 since we skip v2).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "3.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+).
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetrics>, HttpError>;
+    }
+
+    // Reuse the same response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
+    };
+}
+
+/// Versioned health API with incompatible changes - this breaks backward
+/// compatibility by changing the response schema of an existing endpoint.
+pub mod versioned_health_incompatible {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
+
+    #[dropshot::api_description]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+).
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetrics>, HttpError>;
+
+        /// Get system info (v3+): new endpoint added to existing version.
+        ///
+        /// This breaks backward compatibility by adding a new endpoint to
+        /// v3.0.0.
+        #[endpoint {
+            method = GET,
+            path = "/system/info",
+            operation_id = "get_system_info",
+            versions = "3.0.0"..
+        }]
+        async fn get_system_info(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<SystemInfo>, HttpError>;
+    }
+
+    /// System information response for the new endpoint.
+    #[derive(JsonSchema, Serialize)]
+    pub struct SystemInfo {
+        pub version: String,
+        pub build_time: DateTime<Utc>,
+        pub environment: String,
+    }
+
+    // Reuse response types from the main versioned_health module for other
+    // endpoints.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
     };
 }
