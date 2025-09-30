@@ -202,6 +202,7 @@ impl BlessedSource {
     /// Load the blessed OpenAPI documents
     pub fn load(
         &self,
+        repo_root: &Utf8Path,
         apis: &ManagedApis,
         styles: &Styles,
     ) -> anyhow::Result<(BlessedFiles, ErrorAccumulator)> {
@@ -227,6 +228,7 @@ impl BlessedSource {
                 );
                 Ok((
                     BlessedFiles::load_from_git_parent_branch(
+                        repo_root,
                         revision,
                         directory,
                         apis,

@@ -451,3 +451,43 @@ pub mod versioned_user {
         pub permissions: Vec<String>,
     }
 }
+
+/// Reduced versioned health API for testing version removal scenarios.
+pub mod versioned_health_reduced {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(2, WITH_DETAILED_STATUS), (1, INITIAL),]);
+
+    #[dropshot::api_description]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+    }
+
+    // Reuse the same response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+    };
+}

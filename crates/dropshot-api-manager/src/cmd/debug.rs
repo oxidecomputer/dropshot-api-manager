@@ -30,7 +30,8 @@ pub(crate) fn debug_impl(
     dump_structure(&local_files, &errors);
 
     // Print information about what we found in Git.
-    let (blessed, errors) = blessed_source.load(apis, &styles)?;
+    let (blessed, errors) =
+        blessed_source.load(&env.repo_root, apis, &styles)?;
     dump_structure(&blessed, &errors);
 
     // Print information about generated files.
