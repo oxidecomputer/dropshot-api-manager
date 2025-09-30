@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.2.1] - 2025-09-30
+
 ### Added
 
 - For versioned APIs, comparisons between blessed and generated documents now use the [`drift`](https://docs.rs/drift) crate rather than simple string comparisons. This means that trivial/wire-compatible changes between blessed and generated documents (such as adding or removing newtypes) are now allowed.
@@ -34,6 +36,7 @@
 Initial release.
 
 <!-- next-url -->
+[0.2.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.1
 [0.2.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.0
 [0.1.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.1.1
 [0.1.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.1.0
