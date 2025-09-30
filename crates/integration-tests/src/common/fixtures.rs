@@ -457,7 +457,7 @@ pub mod versioned_health_reduced {
 
     api_versions!([(2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedHealthApi {
         type Context;
 
@@ -499,7 +499,7 @@ pub mod versioned_health_skip_middle {
 
     api_versions!([(3, WITH_METRICS), (1, INITIAL)]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedHealthApi {
         type Context;
 
@@ -545,13 +545,13 @@ pub mod versioned_health_skip_middle {
 
 /// Versioned health API with incompatible changes - this breaks backward
 /// compatibility by changing the response schema of an existing endpoint.
-pub mod versioned_health_incompatible {
+pub mod versioned_health_incompat {
     use super::*;
     use dropshot_api_manager_types::api_versions;
 
     api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedHealthApi {
         type Context;
 
