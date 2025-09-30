@@ -141,22 +141,55 @@ impl TestEnvironment {
         self.read_file(format!("documents/{}.json", api_ident))
     }
 
-    /// Check if a document exists for a versioned API at a specific version.
-    pub fn versioned_document_exists(
+    /// Check if a document exists for a versioned API at a specific version in
+    /// the working copy.
+    pub fn versioned_local_document_exists(
         &self,
         api_ident: &str,
         version: &str,
     ) -> bool {
+        self.find_versioned_document(api_ident, version).is_some()
+    }
+
+    /// Check that a versioned document exists for a versioned API at a specific
+    /// version, and is blessed.
+    pub fn versioned_local_and_blessed_document_exists(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(path) = self.find_versioned_document(api_ident, version)
+        else {
+            return Ok(false);
+        };
+
+        // Query git on main at the blessed path (main)
+        let output = Self::run_git_command(
+            &self.workspace_root,
+            &["ls-tree", "-r", "--name-only", "main", path.as_str()],
+        )?;
+        // If the output equals the path, the document is present and blessed.
+        Ok(output.trim() == path)
+    }
+
+    fn find_versioned_document(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Option<Utf8PathBuf> {
+        let files = self
+            .list_document_files()
+            .expect("reading document files succeeded");
+
         // Versioned documents are stored in subdirectories like:
         // documents/api/api-version-hash.json.
         let pattern =
             format!("documents/{}/{}-{}-", api_ident, api_ident, version);
-        let files = self
-            .list_document_files()
-            .expect("reading document files succeeded");
-        files
-            .iter()
-            .any(|f| rel_path_forward_slashes(f.as_ref()).starts_with(&pattern))
+
+        files.iter().find_map(|f| {
+            let rel_path = rel_path_forward_slashes(f.as_ref());
+            rel_path.starts_with(&pattern).then(|| Utf8PathBuf::from(rel_path))
+        })
     }
 
     /// Read the content of a versioned API document for a specific version.
@@ -165,7 +198,7 @@ impl TestEnvironment {
         api_ident: &str,
         version: &str,
     ) -> Result<String> {
-        // Find the document file that matches the version pattern
+        // Find the document file that matches the version pattern.
         let files = self.list_document_files()?;
         let pattern =
             format!("documents/{}/{}-{}-", api_ident, api_ident, version);
@@ -208,6 +241,19 @@ impl TestEnvironment {
             "documents/{}/{}-latest.json",
             api_ident, api_ident
         ))
+    }
+
+    /// Delete the latest symlink for a versioned API.
+    pub fn delete_versioned_latest_symlink(
+        &self,
+        api_ident: &str,
+    ) -> Result<()> {
+        let latest_link = self
+            .documents_dir()
+            .join(format!("{}/{}-latest.json", api_ident, api_ident));
+        std::fs::remove_file(&latest_link).with_context(|| {
+            format!("failed to delete latest symlink: {latest_link}")
+        })
     }
 
     /// Read the latest document for a versioned API.
@@ -479,7 +525,8 @@ pub fn create_mixed_test_apis() -> Result<ManagedApis> {
 /// Create versioned health API with a trivial change (title/metadata updated).
 pub fn create_versioned_health_test_apis_with_trivial_change()
 -> Result<ManagedApis> {
-    // Create a modified API config that would produce different OpenAPI documents.
+    // Create a modified API config that would produce different OpenAPI
+    // documents.
     let mut config = versioned_health_test_api();
 
     // Modify the title to create a different document signature.
@@ -491,11 +538,12 @@ pub fn create_versioned_health_test_apis_with_trivial_change()
         .context("failed to create trivial change versioned health ManagedApis")
 }
 
-/// Create versioned health API with reduced versions (simulating version removal).
+/// Create versioned health API with reduced versions (simulating version
+/// removal).
 pub fn create_versioned_health_test_apis_reduced_versions()
 -> Result<ManagedApis> {
-    // Create a configuration similar to versioned health but with fewer versions.
-    // We'll create a new fixture for this.
+    // Create a configuration similar to versioned health but with fewer
+    // versions. We'll create a new fixture for this.
     let config = ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
@@ -513,4 +561,50 @@ pub fn create_versioned_health_test_apis_reduced_versions()
 
     ManagedApis::new(vec![config])
         .context("failed to create reduced versioned health ManagedApis")
+}
+
+pub fn create_versioned_health_test_apis_skip_middle() -> Result<ManagedApis> {
+    // Create a configuration similar to versioned health but skipping the
+    // middle version. This has versions 3.0.0 and 1.0.0, simulating retirement
+    // of version 2.0.0.
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            // Use versions 3.0.0 and 1.0.0 (skip 2.0.0).
+            supported_versions: fixtures::versioned_health_skip_middle::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some("A versioned health API that skips middle version"),
+            ..Default::default()
+        },
+        api_description: fixtures::versioned_health_skip_middle::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create skip middle versioned health ManagedApis")
+}
+
+/// Create a versioned health API with incompatible changes that break backward
+/// compatibility.
+pub fn create_versioned_health_test_apis_incompatible() -> Result<ManagedApis> {
+    // Create a configuration similar to versioned health but with incompatible
+    // changes that break backward compatibility.
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: fixtures::versioned_health_incompatible::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some("A versioned health API with incompatible changes"),
+            ..Default::default()
+        },
+        api_description: fixtures::versioned_health_incompatible::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create incompatible versioned health ManagedApis")
 }
