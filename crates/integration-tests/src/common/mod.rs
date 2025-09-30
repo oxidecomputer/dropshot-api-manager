@@ -53,9 +53,14 @@ impl TestEnvironment {
             &["config", "user.email", "test@example.com"],
         )?;
 
-        // Create initial commit to establish git history.
+        // Create initial commit to establish git history, including
+        // .gitattributes to ensure Windows line endings are disabled.
+        workspace_root.child(".gitattributes").write_str("* -text\n")?;
         workspace_root.child("README.md").write_str("# Test workspace\n")?;
-        Self::run_git_command(&workspace_root, &["add", "README.md"])?;
+        Self::run_git_command(
+            &workspace_root,
+            &["add", ".gitattributes", "README.md"],
+        )?;
         Self::run_git_command(
             &workspace_root,
             &["commit", "-m", "initial commit"],
