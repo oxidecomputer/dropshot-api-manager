@@ -10,7 +10,10 @@ use clap::Parser;
 use dropshot_api_manager::{Environment, ManagedApiConfig, ManagedApis};
 use dropshot_api_manager_types::{ManagedApiMetadata, Versions};
 use semver::Version;
-use std::{fs, process::ExitCode};
+use std::{
+    fs,
+    process::{Command, ExitCode},
+};
 
 pub mod fixtures;
 
@@ -28,7 +31,7 @@ pub struct TestEnvironment {
 }
 
 impl TestEnvironment {
-    /// Create a new test environment with temporary directories.
+    /// Create a new test environment with temporary directories and git repo.
     pub fn new() -> Result<Self> {
         let temp_dir =
             Utf8TempDir::with_prefix("dropshot-api-manager-integration-")
@@ -38,6 +41,25 @@ impl TestEnvironment {
 
         let workspace_root = temp_dir.child("workspace");
         let documents_dir = workspace_root.child("documents");
+
+        // Initialize git repository in workspace root.
+        Self::run_git_command(&workspace_root, &["init"])?;
+        Self::run_git_command(
+            &workspace_root,
+            &["config", "user.name", "Test User"],
+        )?;
+        Self::run_git_command(
+            &workspace_root,
+            &["config", "user.email", "test@example.com"],
+        )?;
+
+        // Create initial commit to establish git history.
+        workspace_root.child("README.md").write_str("# Test workspace\n")?;
+        Self::run_git_command(&workspace_root, &["add", "README.md"])?;
+        Self::run_git_command(
+            &workspace_root,
+            &["commit", "-m", "initial commit"],
+        )?;
 
         let environment = Environment::new(
             "test-openapi-manager",
@@ -98,6 +120,147 @@ impl TestEnvironment {
         self.read_file(format!("documents/{}.json", api_ident))
     }
 
+    /// Check if a document exists for a versioned API at a specific version.
+    pub fn versioned_document_exists(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> bool {
+        // Versioned documents are stored in subdirectories like: documents/api/api-version-hash.json
+        let pattern =
+            format!("documents/{}/{}-{}-", api_ident, api_ident, version);
+        if let Ok(files) = self.list_document_files() {
+            files.iter().any(|f| f.to_string().starts_with(&pattern))
+        } else {
+            false
+        }
+    }
+
+    /// Read the content of a versioned API document for a specific version.
+    pub fn read_versioned_document(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Result<String> {
+        // Find the document file that matches the version pattern
+        let files = self.list_document_files()?;
+        let pattern =
+            format!("documents/{}/{}-{}-", api_ident, api_ident, version);
+
+        let matching_file = files
+            .iter()
+            .find(|f| f.to_string().starts_with(&pattern))
+            .ok_or_else(|| {
+                anyhow!(
+                    "No versioned document found for {} version {}",
+                    api_ident,
+                    version
+                )
+            })?;
+
+        self.read_file(matching_file)
+    }
+
+    /// List all versioned documents for a specific API.
+    pub fn list_versioned_documents(
+        &self,
+        api_ident: &str,
+    ) -> Result<Vec<Utf8PathBuf>> {
+        let files = self.list_document_files()?;
+        let prefix = format!("documents/{}/", api_ident);
+
+        Ok(files
+            .into_iter()
+            .filter(|f| f.to_string().starts_with(&prefix))
+            .collect())
+    }
+
+    /// Check if the latest document exists for a versioned API.
+    pub fn versioned_latest_document_exists(&self, api_ident: &str) -> bool {
+        self.file_exists(format!(
+            "documents/{}/{}-latest.json",
+            api_ident, api_ident
+        ))
+    }
+
+    /// Read the latest document for a versioned API.
+    pub fn read_versioned_latest_document(
+        &self,
+        api_ident: &str,
+    ) -> Result<String> {
+        self.read_file(format!(
+            "documents/{}/{}-latest.json",
+            api_ident, api_ident
+        ))
+    }
+
+    /// Commit documents to git (for blessed document workflow testing).
+    pub fn commit_documents(&self) -> Result<()> {
+        // Add all files in documents directory to git.
+        Self::run_git_command(&self.workspace_root, &["add", "documents/"])?;
+
+        // Check if there are any changes to commit.
+        let status_output = Self::run_git_command(
+            &self.workspace_root,
+            &["status", "--porcelain"],
+        )?;
+        if status_output.trim().is_empty() {
+            // No changes to commit.
+            return Ok(());
+        }
+
+        // Commit the changes.
+        Self::run_git_command(
+            &self.workspace_root,
+            &["commit", "-m", "Update API documents"],
+        )?;
+        Ok(())
+    }
+
+    /// Check if files in the documents directory have uncommitted changes.
+    pub fn has_uncommitted_document_changes(&self) -> Result<bool> {
+        let output = Self::run_git_command(
+            &self.workspace_root,
+            &["status", "--porcelain", "documents/"],
+        )?;
+        Ok(!output.trim().is_empty())
+    }
+
+    /// Get the current git commit hash (short form).
+    pub fn get_current_commit_hash(&self) -> Result<String> {
+        let output = Self::run_git_command(
+            &self.workspace_root,
+            &["rev-parse", "--short", "HEAD"],
+        )?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Helper to run git commands in the workspace root.
+    fn run_git_command(
+        workspace_root: &Utf8Path,
+        args: &[&str],
+    ) -> Result<String> {
+        let git =
+            std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
+        let output = Command::new(git)
+            .current_dir(workspace_root)
+            .args(args)
+            .output()
+            .context("failed to execute git command")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "git command failed: git {}\nstderr: {}",
+                args.join(" "),
+                stderr
+            ));
+        }
+
+        String::from_utf8(output.stdout)
+            .context("git command output was not valid UTF-8")
+    }
+
     /// List all files in the documents directory.
     pub fn list_document_files(&self) -> Result<Vec<Utf8PathBuf>> {
         let mut files = Vec::new();
@@ -141,6 +304,40 @@ impl TestEnvironment {
             }
         }
         Ok(())
+    }
+}
+
+/// Create a versioned health API test configuration.
+pub fn versioned_health_test_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: fixtures::versioned_health::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some("A versioned health API for testing version evolution"),
+            ..Default::default()
+        },
+        api_description: fixtures::versioned_health::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    }
+}
+
+/// Create a versioned user API test configuration.
+pub fn versioned_user_test_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-user",
+        versions: Versions::Versioned {
+            supported_versions: fixtures::versioned_user::supported_versions(),
+        },
+        title: "Versioned User API",
+        metadata: ManagedApiMetadata {
+            description: Some("A versioned user API for testing complex schema evolution"),
+            ..Default::default()
+        },
+        api_description: fixtures::versioned_user::versioned_user_api_mod::stub_api_description,
+        extra_validation: None,
     }
 }
 
@@ -208,4 +405,33 @@ pub fn create_user_test_apis() -> Result<ManagedApis> {
 pub fn create_multi_test_apis() -> Result<ManagedApis> {
     let configs = vec![health_test_api(), counter_test_api(), user_test_api()];
     ManagedApis::new(configs).context("failed to create ManagedApis")
+}
+
+/// Create a versioned health API for testing.
+pub fn create_versioned_health_test_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_test_api()])
+        .context("failed to create versioned health ManagedApis")
+}
+
+/// Create a versioned user API for testing.
+pub fn create_versioned_user_test_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_user_test_api()])
+        .context("failed to create versioned user ManagedApis")
+}
+
+/// Helper to create multiple versioned test APIs.
+pub fn create_multi_versioned_test_apis() -> Result<ManagedApis> {
+    let configs = vec![versioned_health_test_api(), versioned_user_test_api()];
+    ManagedApis::new(configs).context("failed to create versioned ManagedApis")
+}
+
+/// Helper to create mixed lockstep and versioned test APIs.
+pub fn create_mixed_test_apis() -> Result<ManagedApis> {
+    let configs = vec![
+        health_test_api(),
+        counter_test_api(),
+        versioned_health_test_api(),
+        versioned_user_test_api(),
+    ];
+    ManagedApis::new(configs).context("failed to create mixed ManagedApis")
 }
