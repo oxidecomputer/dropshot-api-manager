@@ -402,7 +402,7 @@ pub fn display_resolution(
 /// The result of a check operation.
 ///
 /// Returned by the `check_apis_up_to_date` function.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CheckResult {
     /// The APIs are up-to-date.
     Success,
