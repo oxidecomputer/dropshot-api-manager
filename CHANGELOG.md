@@ -3,6 +3,15 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+- For versioned APIs, comparisons between blessed and generated documents now use the [`drift`](https://docs.rs/drift) crate rather than simple string comparisons. This means that trivial/wire-compatible changes between blessed and generated documents (such as adding or removing newtypes) are now allowed.
+
+### Fixed
+
+- Git commands are now run in the repository root instead of the current directory.
+- Changed some error output to use stderr instead of stdout.
+
 ## [0.2.0] - 2025-09-26
 
 ### Added
