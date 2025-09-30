@@ -43,7 +43,10 @@ impl TestEnvironment {
         let documents_dir = workspace_root.child("documents");
 
         // Initialize git repository in workspace root.
-        Self::run_git_command(&workspace_root, &["init"])?;
+        Self::run_git_command(
+            &workspace_root,
+            &["init", "--initial-branch", "main"],
+        )?;
         Self::run_git_command(
             &workspace_root,
             &["config", "user.name", "Test User"],
