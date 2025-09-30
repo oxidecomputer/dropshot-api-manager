@@ -53,9 +53,14 @@ impl TestEnvironment {
             &["config", "user.email", "test@example.com"],
         )?;
 
-        // Create initial commit to establish git history.
+        // Create initial commit to establish git history, including disabling
+        // Windows line endings.
+        workspace_root.child(".gitattributes").write_str("* -text\n")?;
         workspace_root.child("README.md").write_str("# Test workspace\n")?;
-        Self::run_git_command(&workspace_root, &["add", "README.md"])?;
+        Self::run_git_command(
+            &workspace_root,
+            &["add", ".gitattributes", "README.md"],
+        )?;
         Self::run_git_command(
             &workspace_root,
             &["commit", "-m", "initial commit"],
@@ -126,14 +131,16 @@ impl TestEnvironment {
         api_ident: &str,
         version: &str,
     ) -> bool {
-        // Versioned documents are stored in subdirectories like: documents/api/api-version-hash.json
+        // Versioned documents are stored in subdirectories like:
+        // documents/api/api-version-hash.json.
         let pattern =
             format!("documents/{}/{}-{}-", api_ident, api_ident, version);
-        if let Ok(files) = self.list_document_files() {
-            files.iter().any(|f| f.to_string().starts_with(&pattern))
-        } else {
-            false
-        }
+        let files = self
+            .list_document_files()
+            .expect("reading document files succeeded");
+        files
+            .iter()
+            .any(|f| rel_path_forward_slashes(f.as_ref()).starts_with(&pattern))
     }
 
     /// Read the content of a versioned API document for a specific version.
@@ -149,7 +156,9 @@ impl TestEnvironment {
 
         let matching_file = files
             .iter()
-            .find(|f| f.to_string().starts_with(&pattern))
+            .find(|f| {
+                rel_path_forward_slashes(f.as_ref()).starts_with(&pattern)
+            })
             .ok_or_else(|| {
                 anyhow!(
                     "No versioned document found for {} version {}",
@@ -171,7 +180,9 @@ impl TestEnvironment {
 
         Ok(files
             .into_iter()
-            .filter(|f| f.to_string().starts_with(&prefix))
+            .filter(|f| {
+                rel_path_forward_slashes(f.as_ref()).starts_with(&prefix)
+            })
             .collect())
     }
 
@@ -305,6 +316,16 @@ impl TestEnvironment {
         }
         Ok(())
     }
+}
+
+#[cfg(windows)]
+pub fn rel_path_forward_slashes(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+#[cfg(not(windows))]
+pub fn rel_path_forward_slashes(path: &str) -> String {
+    path.to_string()
 }
 
 /// Create a versioned health API test configuration.

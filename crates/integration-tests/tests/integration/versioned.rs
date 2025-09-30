@@ -177,7 +177,7 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
     let lockstep_files: Vec<_> = all_files
         .iter()
         .filter(|f| {
-            let path_str = f.to_string();
+            let path_str = rel_path_forward_slashes(f.as_ref());
             f.extension() == Some("json")
                 && path_str.starts_with("documents/")
                 && !path_str[10..].contains('/') // No subdirectories after "documents/"
@@ -186,7 +186,7 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
     let versioned_files: Vec<_> = all_files
         .iter()
         .filter(|f| {
-            let path_str = f.to_string();
+            let path_str = rel_path_forward_slashes(f.as_ref());
             path_str.starts_with("documents/") && path_str[10..].contains('/') // Has subdirectories
         })
         .collect();
@@ -195,7 +195,7 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
     assert_eq!(lockstep_files.len(), 2);
 
     // Should have versioned files (each API has 4 files: 3 versions + latest).
-    assert!(versioned_files.len() >= 8);
+    assert_eq!(versioned_files.len(), 8);
 
     Ok(())
 }
