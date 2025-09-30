@@ -147,8 +147,10 @@ impl TestEnvironment {
         &self,
         api_ident: &str,
         version: &str,
-    ) -> bool {
-        self.find_versioned_document(api_ident, version).is_some()
+    ) -> anyhow::Result<bool> {
+        let maybe_path =
+            self.find_versioned_document_path(api_ident, version)?;
+        Ok(maybe_path.is_some())
     }
 
     /// Check that a versioned document exists for a versioned API at a specific
@@ -158,7 +160,8 @@ impl TestEnvironment {
         api_ident: &str,
         version: &str,
     ) -> anyhow::Result<bool> {
-        let Some(path) = self.find_versioned_document(api_ident, version)
+        let Some(path) =
+            self.find_versioned_document_path(api_ident, version)?
         else {
             return Ok(false);
         };
@@ -172,24 +175,25 @@ impl TestEnvironment {
         Ok(output.trim() == path)
     }
 
-    fn find_versioned_document(
+    /// Find the path of a versioned API document for a specific version,
+    /// relative to the workspace root.
+    pub fn find_versioned_document_path(
         &self,
         api_ident: &str,
         version: &str,
-    ) -> Option<Utf8PathBuf> {
-        let files = self
-            .list_document_files()
-            .expect("reading document files succeeded");
+    ) -> Result<Option<Utf8PathBuf>> {
+        let files = self.list_document_files()?;
 
         // Versioned documents are stored in subdirectories like:
         // documents/api/api-version-hash.json.
         let pattern =
             format!("documents/{}/{}-{}-", api_ident, api_ident, version);
 
-        files.iter().find_map(|f| {
+        let path = files.iter().find_map(|f| {
             let rel_path = rel_path_forward_slashes(f.as_ref());
             rel_path.starts_with(&pattern).then(|| Utf8PathBuf::from(rel_path))
-        })
+        });
+        Ok(path)
     }
 
     /// Read the content of a versioned API document for a specific version.
@@ -198,25 +202,15 @@ impl TestEnvironment {
         api_ident: &str,
         version: &str,
     ) -> Result<String> {
-        // Find the document file that matches the version pattern.
-        let files = self.list_document_files()?;
-        let pattern =
-            format!("documents/{}/{}-{}-", api_ident, api_ident, version);
-
-        let matching_file = files
-            .iter()
-            .find(|f| {
-                rel_path_forward_slashes(f.as_ref()).starts_with(&pattern)
-            })
-            .ok_or_else(|| {
-                anyhow!(
-                    "No versioned document found for {} version {}",
-                    api_ident,
-                    version
+        let path = self
+            .find_versioned_document_path(api_ident, version)?
+            .with_context(|| {
+                format!(
+                    "did not find versioned document for {} v{}",
+                    api_ident, version
                 )
             })?;
-
-        self.read_file(matching_file)
+        self.read_file(&path)
     }
 
     /// List all versioned documents for a specific API.

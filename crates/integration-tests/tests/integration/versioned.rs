@@ -6,7 +6,7 @@
 //! OpenAPI document. These are "blessed" documents that are checked into git
 //! and must remain stable across changes.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
 use integration_tests::common::{
     create_versioned_health_test_apis_incompatible,
@@ -21,18 +21,36 @@ fn test_versioned_generate_basic() -> Result<()> {
     let apis = create_versioned_health_test_apis()?;
 
     // Initially, no documents should exist.
-    assert!(!env.versioned_local_document_exists("versioned-health", "1.0.0"));
-    assert!(!env.versioned_local_document_exists("versioned-health", "2.0.0"));
-    assert!(!env.versioned_local_document_exists("versioned-health", "3.0.0"));
+    assert!(
+        !env.versioned_local_document_exists("versioned-health", "1.0.0")
+            .unwrap()
+    );
+    assert!(
+        !env.versioned_local_document_exists("versioned-health", "2.0.0")
+            .unwrap()
+    );
+    assert!(
+        !env.versioned_local_document_exists("versioned-health", "3.0.0")
+            .unwrap()
+    );
     assert!(!env.versioned_latest_document_exists("versioned-health"));
 
     // Generate the documents.
     env.generate_documents(&apis)?;
 
     // Now the version documents should exist.
-    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0"));
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "1.0.0")
+            .unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "2.0.0")
+            .unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")
+            .unwrap()
+    );
     assert!(env.versioned_latest_document_exists("versioned-health"));
 
     // Read and validate one of the documents is valid JSON.
@@ -135,15 +153,30 @@ fn test_multiple_versioned_apis() -> Result<()> {
 
     // Check that documents exist for both APIs and all their versions.
     // Versioned health API (3 versions).
-    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0"));
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "1.0.0")
+            .unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "2.0.0")
+            .unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")
+            .unwrap()
+    );
     assert!(env.versioned_latest_document_exists("versioned-health"));
 
     // Versioned user API (3 versions).
-    assert!(env.versioned_local_document_exists("versioned-user", "1.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-user", "2.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-user", "3.0.0"));
+    assert!(
+        env.versioned_local_document_exists("versioned-user", "1.0.0").unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-user", "2.0.0").unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-user", "3.0.0").unwrap()
+    );
     assert!(env.versioned_latest_document_exists("versioned-user"));
 
     // List all versioned documents for each API.
@@ -171,8 +204,13 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
     assert!(env.lockstep_document_exists("counter"));
 
     // Check versioned APIs exist as version-specific files.
-    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-user", "1.0.0"));
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "1.0.0")
+            .unwrap()
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-user", "1.0.0").unwrap()
+    );
 
     // List all document files to verify proper structure.
     let all_files = env.list_document_files()?;
@@ -328,9 +366,27 @@ fn test_removing_api_version_fails_check() -> Result<()> {
     env.commit_documents()?;
 
     // Verify all versions exist.
-    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0"));
-    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0"));
+    assert!(
+        env.versioned_local_and_blessed_document_exists(
+            "versioned-health",
+            "1.0.0"
+        )
+        .unwrap()
+    );
+    assert!(
+        env.versioned_local_and_blessed_document_exists(
+            "versioned-health",
+            "2.0.0"
+        )
+        .unwrap()
+    );
+    assert!(
+        env.versioned_local_and_blessed_document_exists(
+            "versioned-health",
+            "3.0.0"
+        )
+        .unwrap()
+    );
 
     // Create API with fewer versions (simulating version removal).
     let reduced_apis = create_versioned_health_test_apis_reduced_versions()?;
@@ -649,6 +705,71 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
     // This check should return Failures.
     let result = check_apis_up_to_date(env.environment(), &incompatible_apis)?;
     assert_eq!(result, CheckResult::Failures);
+
+    Ok(())
+}
+
+/// Test BlessedVersionExtraLocalSpec problems.
+///
+/// This test:
+///
+/// * creates blessed versions
+/// * in a separate environment, creates another blessed version
+/// * copies over this extra version
+#[test]
+fn test_blessed_version_extra_local_spec() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = create_versioned_health_test_apis()?;
+
+    // Generate and commit initial documents to make them blessed.
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Verify initial state is up-to-date.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Generate with the incompatible APIs.
+    let env2 = TestEnvironment::new()?;
+    let incompatible_apis = create_versioned_health_test_apis_incompatible()?;
+
+    env2.generate_documents(&incompatible_apis)?;
+
+    // Ensure that the v3 documents are actually different between env and env2.
+    let env_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("should find v3.0.0 document");
+    let env2_path = env2
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("should find v3.0.0 document");
+    assert_ne!(
+        env_path, env2_path,
+        "incompatible APIs should lead to different hashes"
+    );
+
+    // Copy env2's document into env's documents directory.
+    let src = env2.workspace_root().join(&env2_path);
+    let dst = env
+        .documents_dir()
+        .join("versioned-health")
+        .join(env2_path.file_name().unwrap());
+
+    std::fs::copy(&src, &dst)
+        .with_context(|| format!("failed to copy {} to {}", src, dst))?;
+    assert!(dst.exists(), "destination path {dst} exists");
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Regenerating documents should remove the file.
+    env.generate_documents(&apis)?;
+
+    // After fix-up, should be up-to-date again.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // The destination path should be missing now.
+    assert!(!dst.exists(), "destination path {dst} no longer exists");
 
     Ok(())
 }

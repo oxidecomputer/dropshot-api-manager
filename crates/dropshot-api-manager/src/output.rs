@@ -225,7 +225,7 @@ pub fn display_load_problems(
     let mut nerrors = 0;
     for e in error_accumulator.iter_errors() {
         nerrors += 1;
-        println!(
+        eprintln!(
             "{:>HEADER_WIDTH$} {:#}",
             FAILURE.style(styles.failure_header),
             e
