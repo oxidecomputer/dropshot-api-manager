@@ -143,7 +143,12 @@ api_versions!([
 **For both lockstep and versioned APIs:** once the API crate is defined, update the OpenAPI manager to manage the new OpenAPI document(s). Within this directory:
 
 1. In your repository's integration point's `Cargo.toml`, add a dependency on the API crate.
-2. Add the crate to the list of APIs managed by the OpenAPI manager. For versioned APIs, the `api_versions` macro defines a `supported_versions()` function, which you'll need to use
+2. Add the crate to the list of APIs managed by the OpenAPI manager. For versioned APIs, the `api_versions` macro defines a `supported_versions()` function, which you'll need to use.
+
+> [!NOTE]
+> The `api_versions!` macro also generates a `latest_version` function which returns the latest version (the first version on the list).
+>
+> When creating the server, you must configure a [`version_policy`](https://docs.rs/dropshot/latest/dropshot/struct.ServerBuilder.html#method.version_policy) to indicate that the API is versioned. If you use the [`ClientSpecifiesVersionInHeader`](https://docs.rs/dropshot/latest/dropshot/struct.ClientSpecifiesVersionInHeader.html) policy, set the `max_version` to the output of `latest_version()`.
 
 To ensure everything works well, run `cargo openapi generate`. Your OpenAPI document should be generated on disk and listed in the output.
 
