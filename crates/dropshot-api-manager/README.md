@@ -148,7 +148,7 @@ api_versions!([
 > [!NOTE]
 > The `api_versions!` macro also generates a `latest_version` function which returns the latest version (the first version on the list).
 >
-> When creating the server, you must configure a [`version_policy`](https://docs.rs/dropshot/latest/dropshot/struct.ServerBuilder.html#method.version_policy) to indicate that the API is versioned. If you use the [`ClientSpecifiesVersionInHeader`](https://docs.rs/dropshot/latest/dropshot/struct.ClientSpecifiesVersionInHeader.html) policy, then set the `max_version` to the output of `latest_version()`.
+> When creating the server, you must configure a [`version_policy`](https://docs.rs/dropshot/latest/dropshot/struct.ServerBuilder.html#method.version_policy) to indicate that the API is versioned. If you use the [`ClientSpecifiesVersionInHeader`](https://docs.rs/dropshot/latest/dropshot/struct.ClientSpecifiesVersionInHeader.html) policy, set the `max_version` to the output of `latest_version()`.
 
 To ensure everything works well, run `cargo openapi generate`. Your OpenAPI document should be generated on disk and listed in the output.
 
