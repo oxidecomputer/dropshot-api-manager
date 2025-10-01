@@ -631,10 +631,13 @@ pub fn versioned_health_api() -> ManagedApiConfig {
         },
         title: "Versioned Health API",
         metadata: ManagedApiMetadata {
-            description: Some("A versioned health API for testing version evolution"),
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
             ..Default::default()
         },
-        api_description: versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description:
+            versioned_health::versioned_health_api_mod::stub_api_description,
         extra_validation: None,
     }
 }
@@ -647,10 +650,13 @@ pub fn versioned_user_api() -> ManagedApiConfig {
         },
         title: "Versioned User API",
         metadata: ManagedApiMetadata {
-            description: Some("A versioned user API for testing complex schema evolution"),
+            description: Some(
+                "A versioned user API for testing complex schema evolution",
+            ),
             ..Default::default()
         },
-        api_description: versioned_user::versioned_user_api_mod::stub_api_description,
+        api_description:
+            versioned_user::versioned_user_api_mod::stub_api_description,
         extra_validation: None,
     }
 }
@@ -778,8 +784,7 @@ pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
         ident: "versioned-health",
         versions: Versions::Versioned {
             // Use a subset of versions (only 1.0.0 and 2.0.0, not 3.0.0).
-            supported_versions:
-                versioned_health_reduced::supported_versions(),
+            supported_versions: versioned_health_reduced::supported_versions(),
         },
         title: "Versioned Health API",
         metadata: ManagedApiMetadata {
@@ -803,14 +808,18 @@ pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
         ident: "versioned-health",
         versions: Versions::Versioned {
             // Use versions 3.0.0 and 1.0.0 (skip 2.0.0).
-            supported_versions: versioned_health_skip_middle::supported_versions(),
+            supported_versions:
+                versioned_health_skip_middle::supported_versions(),
         },
         title: "Versioned Health API",
         metadata: ManagedApiMetadata {
-            description: Some("A versioned health API that skips middle version"),
+            description: Some(
+                "A versioned health API that skips middle version",
+            ),
             ..Default::default()
         },
-        api_description: versioned_health_skip_middle::api_mod::stub_api_description,
+        api_description:
+            versioned_health_skip_middle::api_mod::stub_api_description,
         extra_validation: None,
     };
 
@@ -826,8 +835,7 @@ pub fn versioned_health_incompat_apis() -> Result<ManagedApis> {
     let config = ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
-            supported_versions:
-                versioned_health_incompat::supported_versions(),
+            supported_versions: versioned_health_incompat::supported_versions(),
         },
         title: "Versioned Health API",
         metadata: ManagedApiMetadata {
