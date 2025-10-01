@@ -11,7 +11,7 @@ use dropshot_api_manager::{
     ManagedApis,
     test_util::{CheckResult, check_apis_up_to_date},
 };
-use integration_tests::common::*;
+use integration_tests::*;
 use openapiv3::OpenAPI;
 
 /// Test basic lockstep API document generation.
