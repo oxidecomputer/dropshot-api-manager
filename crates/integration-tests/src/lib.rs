@@ -2,4 +2,8 @@
 
 //! Integration tests for dropshot-api-manager.
 
-pub mod common;
+mod environment;
+mod fixtures;
+
+pub use environment::{TestEnvironment, rel_path_forward_slashes};
+pub use fixtures::*;

@@ -8,9 +8,7 @@
 
 use anyhow::{Context, Result};
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
-use integration_tests::common::{
-    versioned_health_incompat_apis, versioned_health_skip_middle_apis, *,
-};
+use integration_tests::*;
 use openapiv3::OpenAPI;
 
 /// Test basic versioned API document generation.

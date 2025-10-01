@@ -2,11 +2,15 @@
 
 //! Test fixtures for common API scenarios in dropshot-api-manager tests.
 
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use dropshot::{
     HttpError, HttpResponseOk, Path, Query, RequestContext, TypedBody,
 };
+use dropshot_api_manager::{ManagedApiConfig, ManagedApis};
+use dropshot_api_manager_types::{ManagedApiMetadata, Versions};
 use schemars::JsonSchema;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 /// A minimal API with just a health check endpoint.
@@ -490,9 +494,9 @@ pub mod versioned_health_reduced {
     };
 }
 
-/// Versioned health API fixture that skips the middle version (2.0.0). This has
-/// versions 3.0.0 and 1.0.0 only, simulating retirement of an older blessed
-/// version.
+/// Versioned health API fixture that skips the middle version (2.0.0).
+/// This has versions 3.0.0 and 1.0.0 only, simulating retirement of an older
+/// blessed version.
 pub mod versioned_health_skip_middle {
     use super::*;
     use dropshot_api_manager_types::api_versions;
@@ -514,7 +518,8 @@ pub mod versioned_health_skip_middle {
             rqctx: RequestContext<Self::Context>,
         ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
 
-        /// Get detailed health status (v2+, but only available in v3 since we skip v2).
+        /// Get detailed health status (v2+, but only available in v3 since we
+        /// skip v2).
         #[endpoint {
             method = GET,
             path = "/health/detailed",
@@ -616,4 +621,234 @@ pub mod versioned_health_incompat {
     pub use super::versioned_health::{
         DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
     };
+}
+
+pub fn versioned_health_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    }
+}
+
+pub fn versioned_user_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-user",
+        versions: Versions::Versioned {
+            supported_versions: versioned_user::supported_versions(),
+        },
+        title: "Versioned User API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned user API for testing complex schema evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_user::versioned_user_api_mod::stub_api_description,
+        extra_validation: None,
+    }
+}
+
+pub fn lockstep_health_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "health",
+        versions: Versions::Lockstep { version: Version::new(1, 0, 0) },
+        title: "Health API",
+        metadata: ManagedApiMetadata {
+            description: Some("A health API for testing schema evolution"),
+            ..Default::default()
+        },
+        api_description: health_api_mod::stub_api_description,
+        extra_validation: None,
+    }
+}
+
+pub fn lockstep_counter_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "counter",
+        versions: Versions::Lockstep { version: Version::new(1, 0, 0) },
+        title: "Counter Test API",
+        metadata: ManagedApiMetadata {
+            description: Some("A counter API for testing state changes"),
+            ..Default::default()
+        },
+        api_description: counter_api_mod::stub_api_description,
+        extra_validation: None,
+    }
+}
+
+pub fn lockstep_user_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "user",
+        versions: Versions::Lockstep { version: Version::new(1, 0, 0) },
+        title: "User Test API",
+        metadata: ManagedApiMetadata {
+            description: Some("A user API for testing state changes"),
+            ..Default::default()
+        },
+        api_description: user_api_mod::stub_api_description,
+        extra_validation: None,
+    }
+}
+
+/// Create a health API for basic testing.
+pub fn lockstep_health_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![lockstep_health_api()])
+        .context("failed to create ManagedApis")
+}
+
+/// Create a counter test API configuration.
+pub fn lockstep_counter_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![lockstep_counter_api()])
+        .context("failed to create ManagedApis")
+}
+
+/// Create a user test API configuration.
+pub fn lockstep_user_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![lockstep_user_api()])
+        .context("failed to create ManagedApis")
+}
+
+/// Helper to create multiple test APIs.
+pub fn lockstep_multi_apis() -> Result<ManagedApis> {
+    let configs = vec![
+        lockstep_health_api(),
+        lockstep_counter_api(),
+        lockstep_user_api(),
+    ];
+    ManagedApis::new(configs).context("failed to create ManagedApis")
+}
+
+/// Create a versioned health API for testing.
+pub fn versioned_health_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_api()])
+        .context("failed to create versioned health ManagedApis")
+}
+
+/// Create a versioned user API for testing.
+pub fn versioned_user_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_user_api()])
+        .context("failed to create versioned user ManagedApis")
+}
+
+/// Helper to create multiple versioned test APIs.
+pub fn multi_versioned_apis() -> Result<ManagedApis> {
+    let configs = vec![versioned_health_api(), versioned_user_api()];
+    ManagedApis::new(configs).context("failed to create versioned ManagedApis")
+}
+
+/// Helper to create mixed lockstep and versioned test APIs.
+pub fn create_mixed_test_apis() -> Result<ManagedApis> {
+    let configs = vec![
+        lockstep_health_api(),
+        lockstep_counter_api(),
+        versioned_health_api(),
+        versioned_user_api(),
+    ];
+    ManagedApis::new(configs).context("failed to create mixed ManagedApis")
+}
+
+/// Create versioned health API with a trivial change (title/metadata updated).
+pub fn versioned_health_trivial_change_apis() -> Result<ManagedApis> {
+    // Create a modified API config that would produce different OpenAPI
+    // documents.
+    let mut config = versioned_health_api();
+
+    // Modify the title to create a different document signature.
+    config.title = "Modified Versioned Health API";
+    config.metadata.description =
+        Some("A versioned health API with breaking changes");
+
+    ManagedApis::new(vec![config])
+        .context("failed to create trivial change versioned health ManagedApis")
+}
+
+/// Create versioned health API with reduced versions (simulating version
+/// removal).
+pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
+    // Create a configuration similar to versioned health but with fewer
+    // versions. We'll create a new fixture for this.
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            // Use a subset of versions (only 1.0.0 and 2.0.0, not 3.0.0).
+            supported_versions: versioned_health_reduced::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some("A versioned health API with reduced versions"),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_reduced::api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create reduced versioned health ManagedApis")
+}
+
+pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
+    // Create a configuration similar to versioned health but skipping the
+    // middle version. This has versions 3.0.0 and 1.0.0, simulating retirement
+    // of version 2.0.0.
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            // Use versions 3.0.0 and 1.0.0 (skip 2.0.0).
+            supported_versions:
+                versioned_health_skip_middle::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API that skips middle version",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_skip_middle::api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create skip middle versioned health ManagedApis")
+}
+
+/// Create a versioned health API with incompatible changes that break backward
+/// compatibility.
+pub fn versioned_health_incompat_apis() -> Result<ManagedApis> {
+    // Create a configuration similar to versioned health but with incompatible
+    // changes that break backward compatibility.
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_incompat::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API with incompatible changes",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_incompat::api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create incompatible versioned health ManagedApis")
 }
