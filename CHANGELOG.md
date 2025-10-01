@@ -3,6 +3,11 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+- The `api_versions!` macro now generates a `latest_version` function.
+- The README has a new note about how to create versioned Dropshot servers using the `latest_version` function.
+
 ## [0.2.1] - 2025-09-30
 
 ### Added
