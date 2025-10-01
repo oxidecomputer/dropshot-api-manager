@@ -17,6 +17,12 @@ fn test_versioned_generate_basic() -> Result<()> {
     let env = TestEnvironment::new()?;
     let apis = versioned_health_apis()?;
 
+    // Check that latest_version exists.
+    assert_eq!(
+        versioned_health::latest_version(),
+        semver::Version::new(3, 0, 0),
+    );
+
     // Initially, no documents should exist.
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")

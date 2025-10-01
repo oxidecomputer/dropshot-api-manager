@@ -200,7 +200,7 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
     }
 }
 
-/// Helper macro used to define API versions
+/// Helper macro used to define API versions.
 ///
 /// ```
 /// use dropshot_api_manager_types::{
@@ -208,7 +208,7 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
 /// };
 ///
 /// api_versions!([
-///     // Define the API versions here.
+///     // Define the API versions here. They must be in descending order.
 ///     (2, ADD_FOOBAR_OPERATION),
 ///     (1, INITIAL),
 /// ]);
@@ -225,9 +225,15 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
 /// pub const VERSION_INITIAL: semver::Version = semver::Version::new(1, 0, 0);
 /// ```
 ///
-/// It also defines a function called `pub fn supported_versions() ->
-/// SupportedVersions` that, as the name suggests, returns a
-/// [`SupportedVersions`] that describes these two supported API versions.
+/// It also defines two functions:
+///
+/// * `pub fn supported_versions() -> SupportedVersions` that,
+///   as the name suggests, returns a [`SupportedVersions`] that describes these
+///   two supported API versions.
+///
+/// * `pub fn latest_version() -> semver::Version` that returns the latest
+///   supported API version. The latest supported version is the first version
+///   in the list (hence versions must be in descending order).
 // Design constraints:
 // - For each new API version, we need a developer-chosen semver and label that
 //   can be used to construct an identifier.
@@ -254,11 +260,24 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
 //   sure there wasn't a mismerge.
 #[macro_export]
 macro_rules! api_versions {
-    ( [ $( (
-        $major:literal,
-        $name:ident
-    ) ),* $(,)? ] ) => {
+    (
+        [
+            (
+                $latest_major:literal,
+                $latest_name: ident
+            )
+            $(,
+                (
+                    $major:literal,
+                    $name:ident
+                )
+            )*
+            $(,)?
+        ] ) => {
         dropshot_api_manager_types::paste! {
+            pub const [<VERSION_ $latest_name>]: $crate::semver::Version =
+                $crate::semver::Version::new($latest_major, 0, 0);
+
             $(
                 pub const [<VERSION_ $name>]: $crate::semver::Version =
                     $crate::semver::Version::new($major, 0, 0);
@@ -266,10 +285,15 @@ macro_rules! api_versions {
 
             pub fn supported_versions() -> $crate::SupportedVersions {
                 let mut literal_versions = vec![
+                    $crate::SupportedVersion::new([<VERSION_ $latest_name>], stringify!($latest_name)),
                     $( $crate::SupportedVersion::new([<VERSION_ $name>], stringify!($name)) ),*
                 ];
                 literal_versions.reverse();
                 $crate::SupportedVersions::new(literal_versions)
+            }
+
+            pub const fn latest_version() -> $crate::semver::Version {
+                [<VERSION_ $latest_name>]
             }
         }
     };
@@ -283,25 +307,41 @@ macro_rules! api_versions {
 /// so we can just always bump the major number.
 #[macro_export]
 macro_rules! api_versions_picky {
-    ( [ $( (
-        $major:literal,
-        $minor:literal,
-        $patch:literal,
-        $name:ident
-    ) ),* $(,)? ] ) => {
+    ( [
+        (
+            $latest_major:literal,
+            $latest_minor:literal,
+            $latest_patch:literal,
+            $latest_name: ident
+        )
+        $(,
+            (
+                $major:literal,
+                $minor:literal,
+                $patch:literal,
+                $name:ident
+            )
+        )* $(,)? ] ) => {
         dropshot_api_manager_types::paste! {
+            pub const [<VERSION_ $latest_name>]: $crate::semver::Version =
+                $crate::semver::Version::new($latest_major, $latest_minor, $latest_patch);
+
             $(
-                pub const [<VERSION_ $name>]: semver::Version =
-                    semver::Version::new($major, $minor, $patch);
+                pub const [<VERSION_ $name>]: $crate::semver::Version =
+                    $crate::semver::Version::new($major, $minor, $patch);
             )*
 
-            #[track_caller]
-            pub fn supported_versions() -> SupportedVersions {
+            pub fn supported_versions() -> $crate::SupportedVersions {
                 let mut literal_versions = vec![
-                    $( SupportedVersion::new([<VERSION_ $name>], $desc) ),*
+                    $crate::SupportedVersion::new([<VERSION_ $latest_name>], stringify!($latest_name)),
+                    $( $crate::SupportedVersion::new([<VERSION_ $name>], stringify!($name)) ),*
                 ];
                 literal_versions.reverse();
-                SupportedVersions::new(literal_versions)
+                $crate::SupportedVersions::new(literal_versions)
+            }
+
+            pub const fn latest_version() -> $crate::semver::Version {
+                [<VERSION_ $latest_name>]
             }
         }
     };
