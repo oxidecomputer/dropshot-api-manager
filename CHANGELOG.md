@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Fixed
+
+Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
+
 ## [0.2.2] - 2025-10-01
 
 ### Added
