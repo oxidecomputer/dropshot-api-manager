@@ -9,7 +9,8 @@ For more information about API traits, see [Oxide RFD 479](https://rfd.shared.ox
 >
 > * [Enable developer mode](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development#activate-developer-mode), which allows non-administrators to create symlinks.
 > * Run `git config --global core.symlinks true`.
-> * Disable CRLF conversions within Git by checking in a `.gitattributes` file with:
+>
+> Also, disable CRLF conversions within Git by checking in a `.gitattributes` file with:
 >
 >   ```
 >   # Disable CRLF conversions on Windows.
@@ -238,7 +239,20 @@ For much more on this, see [RFD 532 "Versioning for internal HTTP APIs"](https:/
 
 For a versioned API, the set of all supported versions is defined by the `api_versions!` macro in the API crate.  More precisely: in configuring the OpenAPI manager tool to know about a versioned API, you use the `supported_versions()` function defined by the macro.  **This is critical: the OpenAPI documents in the `openapi` directory are _not_ the source of truth about what versions are supported.  The Rust `api_versions!` call is.**
 
-Each of these supported versions is either **blessed** (meaning it's been committed-to -- i.e., shipped, or potentially deployed on a system that we care about upgrading smoothly) or **locally-added**. Currently, blessed versions are not allowed to change _at all_. In the near future, we hope to relax this a bit so that they can be changed in ways that are provably compatible (e.g., doc changes).
+Each of these supported versions is either **blessed** (meaning it's been committed-to -- i.e., shipped, or potentially deployed on a system that we care about upgrading smoothly) or **locally-added**. Blessed versions are only allowed to change in provably wire-compatible ways.
+
+Changes **allowed** in blessed versions include:
+
+* Documentation updates
+* Renaming types while keeping the overall structure the same
+* Adding or removing newtype wrappers
+
+Changes **not allowed** in blessed versions include:
+
+* Adding or removing endpoints
+* Adding or removing fields from a struct
+* Adding or removing variants from an enum
+* Changing string validation regexes
 
 When you run `cargo openapi check` or `cargo openapi generate`, the tool loads OpenAPI documents from three sources:
 
@@ -248,7 +262,7 @@ When you run `cargo openapi check` or `cargo openapi generate`, the tool loads O
 
 Putting all this together, the tool is pretty straightforward.  For each supported version of a versioned API:
 
-* If there is a blessed file for that version, then the version is blessed.  The generated file must exactly match the blessed one. If not, the tool cannot fix this.  You have to undo whatever changes you made that affected the blessed version. (See above on how to make changes to the API trait without affecting older versions.)
+* If there is a blessed file for that version, then the version is blessed.  The generated file must match the blessed one (up to wire-compatibility). If they don't, the tool cannot fix this.  You have to undo whatever changes you made that affected the blessed version. (See above on how to make changes to the API trait without affecting older versions.)
 * If there is no blessed file for that version, then the version is locally-added.  There should be exactly one local file for it and it should exactly match the generated file.  The tool can fix any problems here by removing all local files and generating a new one based on the generated one.
 * The tool also ensures that a "latest" symlink exists and points to the highest-numbered OpenAPI document.
 
