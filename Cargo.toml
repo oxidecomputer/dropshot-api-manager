@@ -18,7 +18,7 @@ rust-version = "1.85"
 anyhow = "1.0.99"
 assert_matches = "1.5.0"
 atomicwrites = "0.4.4"
-camino = "1.2.0"
+camino = "1.2.1"
 camino-tempfile = "1.4.1"
 camino-tempfile-ext = "0.3.3"
 chrono = { version = "0.4.38", features = ["serde"] }
