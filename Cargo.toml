@@ -35,7 +35,7 @@ indent_write = "2.2.0"
 newtype_derive = "0.1.6"
 openapi-lint = { git = "https://github.com/oxidecomputer/openapi-lint", branch = "main" }
 openapiv3 = "2.2.0"
-owo-colors = "4.2.2"
+owo-colors = "4.2.3"
 paste = "1.0.15"
 schemars = "0.8.22"
 semver = "1.0.27"
