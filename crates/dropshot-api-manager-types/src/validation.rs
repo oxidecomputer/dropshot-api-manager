@@ -32,8 +32,8 @@ impl<'a> ValidationContext<'a> {
         self.backend.file_name()
     }
 
-    /// Returns true if this is the latest version of the API, or if the API is
-    /// lockstep.
+    /// Returns true if this is the latest version of a versioned API, or if the
+    /// API is lockstep.
     ///
     /// This is particularly useful for extra files which might not themselves
     /// be versioned. In that case, you may wish to only generate the extra file
