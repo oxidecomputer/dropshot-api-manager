@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.2.4] - 2025-11-13
+
 ### Added
 
 - `ValidationContext::is_latest()` returns `true` if this is the latest version of a versioned API, or if it is a lockstep API.
@@ -58,6 +60,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.2.4]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.4
 [0.2.3]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.3
 [0.2.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.2
 [0.2.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.1
