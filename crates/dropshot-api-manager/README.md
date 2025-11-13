@@ -346,3 +346,9 @@ An existing lockstep API can be made versioned.  You would do this when transiti
 That should be it!  Now, when iterating on the API, you'll need to follow the procedure described above for versioned APIs (which is slightly more complicated than the one for lockstep APIs).
 
 In principle, this process could be reversed to convert an API from versioned to lockstep, but this almost certainly has runtime implications that would need to be considered.
+
+## Contributing
+
+Bugfixes and other minor fixes are welcome! Before working on a major feature, please [open an issue](https://github.com/oxidecomputer/dropshot-api-manager/issues/new) to discuss it.
+
+Tests must be run using [cargo-nextest](https://nexte.st/).

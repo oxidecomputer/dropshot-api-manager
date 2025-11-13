@@ -260,6 +260,25 @@ impl TestEnvironment {
         self.read_file(&file_name)
     }
 
+    /// Add files to git staging area.
+    pub fn git_add(&self, paths: &[&Utf8Path]) -> Result<()> {
+        let mut args = vec!["add"];
+        for path in paths {
+            args.push(path.as_str());
+        }
+        Self::run_git_command(&self.workspace_root, &args)?;
+        Ok(())
+    }
+
+    /// Commit staged changes to git.
+    pub fn git_commit(&self, message: &str) -> Result<()> {
+        Self::run_git_command(
+            &self.workspace_root,
+            &["commit", "-m", message],
+        )?;
+        Ok(())
+    }
+
     /// Commit documents to git (for blessed document workflow testing).
     pub fn commit_documents(&self) -> Result<()> {
         // Add all files in documents directory to git.

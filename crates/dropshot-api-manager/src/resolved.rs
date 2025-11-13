@@ -423,10 +423,13 @@ impl Fix<'_> {
                     CheckStale::Modified { expected, .. } => expected,
                     CheckStale::New { expected } => expected,
                 };
+                // Extra file paths are relative to the repo root, not the
+                // documents directory.
+                let full_path = env.repo_root.join(path);
                 Ok(vec![format!(
                     "wrote {}: {:?}",
                     &path,
-                    overwrite_file(path, expected_contents)?
+                    overwrite_file(&full_path, expected_contents)?
                 )])
             }
             Fix::UpdateSymlink { api_ident, link } => {
@@ -652,18 +655,32 @@ fn resolve_api<'a>(
     } else {
         let by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
-            .map(|version| {
+            // Reverse the order of versions: they are stored in sorted order,
+            // so the last version (first one from the back) is the latest.
+            .rev()
+            .enumerate()
+            .map(|(index, version)| {
+                let is_latest = index == 0;
                 let version = version.clone();
                 let blessed =
                     api_blessed.and_then(|b| b.versions().get(&version));
+                let is_blessed = Some(blessed.is_some());
                 let generated = api_generated.versions().get(&version).unwrap();
                 let local = api_local
                     .and_then(|b| b.versions().get(&version))
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
+
                 let resolution = resolve_api_version(
-                    env, api, validation, &version, blessed, generated, local,
+                    env,
+                    api,
+                    validation,
+                    ApiVersion { version: &version, is_latest, is_blessed },
+                    blessed,
+                    generated,
+                    local,
                 );
+
                 (version, resolution)
             })
             .collect();
@@ -869,7 +886,18 @@ fn resolve_api_lockstep<'a>(
     let mut problems = Vec::new();
 
     // Validate the generated API document.
-    validate_generated(env, api, validation, version, generated, &mut problems);
+    validate_generated(
+        env,
+        api,
+        validation,
+        ApiVersion {
+            version,
+            is_latest: true, // is_latest is always true for lockstep APIs
+            is_blessed: None,
+        },
+        generated,
+        &mut problems,
+    );
 
     match local {
         Some(local_file) if local_file.contents() == generated.contents() => (),
@@ -882,11 +910,17 @@ fn resolve_api_lockstep<'a>(
     BTreeMap::from([(version.clone(), Resolution::new_lockstep(problems))])
 }
 
+struct ApiVersion<'a> {
+    version: &'a semver::Version,
+    is_latest: bool,
+    is_blessed: Option<bool>,
+}
+
 fn resolve_api_version<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &'_ semver::Version,
+    version: ApiVersion<'_>,
     blessed: Option<&'a BlessedApiSpecFile>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
@@ -905,7 +939,7 @@ fn resolve_api_version_blessed<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &'_ semver::Version,
+    version: ApiVersion<'_>,
     blessed: &'a BlessedApiSpecFile,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
@@ -913,6 +947,13 @@ fn resolve_api_version_blessed<'a>(
     let mut problems = Vec::new();
 
     // Validate the generated API document.
+    //
+    // Blessed versions are immutable, so why do we call validation on them in a
+    // way that can fail? The reason is that validation may also want to
+    // generate extra files, particularly for the latest version. Whether or not
+    // the API version is blessed, the user might still want to generate extra
+    // files for that version. So we validate unconditionally, but let the user
+    // know via `is_blessed`, letting them skip validation where appropriate.
     validate_generated(env, api, validation, version, generated, &mut problems);
 
     // First off, the blessed spec must be a subset of the generated one.
@@ -980,13 +1021,13 @@ fn resolve_api_version_local<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &'_ semver::Version,
+    version: ApiVersion<'_>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
 
-    // Validate the generated API document.
+    // alidate the generated API document.
     validate_generated(env, api, validation, version, generated, &mut problems);
 
     let (matching, non_matching): (Vec<_>, Vec<_>) = local
@@ -1021,15 +1062,22 @@ fn validate_generated(
     env: &ResolvedEnv,
     api: &ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &semver::Version,
+    version: ApiVersion<'_>,
     generated: &GeneratedApiSpecFile,
     problems: &mut Vec<Problem<'_>>,
 ) {
-    match validate(env, api, validation, generated) {
+    match validate(
+        env,
+        api,
+        version.is_latest,
+        version.is_blessed,
+        validation,
+        generated,
+    ) {
         Err(source) => {
             problems.push(Problem::GeneratedValidationError {
                 api_ident: api.ident().clone(),
-                version: version.clone(),
+                version: version.version.clone(),
                 source,
             });
         }

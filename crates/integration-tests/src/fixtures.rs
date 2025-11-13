@@ -8,10 +8,13 @@ use dropshot::{
     HttpError, HttpResponseOk, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager::{ManagedApiConfig, ManagedApis};
-use dropshot_api_manager_types::{ManagedApiMetadata, Versions};
+use dropshot_api_manager_types::{
+    ManagedApiMetadata, ValidationContext, Versions,
+};
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 
 /// A minimal API with just a health check endpoint.
 #[dropshot::api_description]
@@ -851,4 +854,117 @@ pub fn versioned_health_incompat_apis() -> Result<ManagedApis> {
 
     ManagedApis::new(vec![config])
         .context("failed to create incompatible versioned health ManagedApis")
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidationCall {
+    pub version: Version,
+    pub is_latest: bool,
+    pub is_blessed: Option<bool>,
+}
+
+// Nextest runs each test in its own process, so this static is isolated per
+// test.
+static VALIDATION_CALLS: Mutex<Vec<ValidationCall>> = Mutex::new(Vec::new());
+
+pub fn get_validation_calls() -> Vec<ValidationCall> {
+    VALIDATION_CALLS.lock().unwrap().clone()
+}
+
+pub fn clear_validation_calls() {
+    VALIDATION_CALLS.lock().unwrap().clear();
+}
+
+fn record_validation_call(
+    version: Version,
+    is_latest: bool,
+    is_blessed: Option<bool>,
+) {
+    VALIDATION_CALLS.lock().unwrap().push(ValidationCall {
+        version,
+        is_latest,
+        is_blessed,
+    });
+}
+
+fn validate(_spec: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
+    // Only used with versioned APIs, so version is always present.
+    let version = cx
+        .file_name()
+        .version()
+        .cloned()
+        .expect("version should be present for versioned APIs");
+
+    record_validation_call(version, cx.is_latest(), cx.is_blessed());
+}
+
+fn validate_with_extra_file(
+    _spec: &openapiv3::OpenAPI,
+    mut cx: ValidationContext<'_>,
+) {
+    // Only used with versioned APIs, so version is always present.
+    let version = cx
+        .file_name()
+        .version()
+        .cloned()
+        .expect("version should be present for versioned APIs");
+
+    record_validation_call(version.clone(), cx.is_latest(), cx.is_blessed());
+
+    if cx.is_latest() {
+        cx.record_file_contents(
+            format!("documents/{}/latest-{}.txt", cx.ident(), version),
+            format!("This is the latest version: {}", version).into(),
+        );
+    }
+}
+
+pub fn versioned_health_with_validation_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API with extra validation tracking",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health::versioned_health_api_mod::stub_api_description,
+        extra_validation: Some(validate),
+    }
+}
+
+pub fn versioned_health_with_extra_file_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API with conditional file generation",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health::versioned_health_api_mod::stub_api_description,
+        extra_validation: Some(validate_with_extra_file),
+    }
+}
+
+pub fn versioned_health_with_validation_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_validation_api()]).context(
+        "failed to create versioned health with validation ManagedApis",
+    )
+}
+
+pub fn versioned_health_with_extra_file_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_extra_file_api()]).context(
+        "failed to create versioned health with conditional files ManagedApis",
+    )
 }
