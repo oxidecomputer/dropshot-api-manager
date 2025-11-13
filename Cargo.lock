@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager-types"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "camino",
