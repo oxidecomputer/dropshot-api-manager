@@ -3,6 +3,15 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+- `ValidationContext::is_latest()` returns `true` if this is the latest version of a versioned API, or if it is a lockstep API.
+- `ValidationContext::is_blessed()` returns `Some(true)` if a version is blessed, `Some(false)` if not, or `None` for non-versioned APIs.
+
+### Changed
+
+- `extra_validation` is now compatible with versioned APIs. Use the `ValidationContext::is_blessed` to filter out validation checks for blessed APIs as appropriate (since those APIs are immutable), and `is_latest` to only write out extra files for the latest version of the API.
+
 ## [0.2.3] - 2025-10-08
 
 ### Fixed
