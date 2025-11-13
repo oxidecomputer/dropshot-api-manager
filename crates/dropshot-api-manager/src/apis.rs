@@ -39,8 +39,10 @@ pub struct ManagedApiConfig {
 
     /// Extra validation to perform on the OpenAPI document, if any.
     ///
-    /// For versioned APIs, extra validation is only performed on non-blessed
-    /// versions. Blessed versions are assumed to be committed and unchanging.
+    /// For versioned APIs, extra validation is performed on *all* versions,
+    /// including blessed ones. You may want to skip performing validation on
+    /// blessed versions, though, because they're immutable. To do so, use
+    /// [`ValidationContext::is_blessed`].
     pub extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 

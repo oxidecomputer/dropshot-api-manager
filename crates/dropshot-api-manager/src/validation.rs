@@ -18,6 +18,7 @@ pub fn validate(
     env: &ResolvedEnv,
     api: &ManagedApi,
     is_latest: bool,
+    is_blessed: Option<bool>,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
     generated: &GeneratedApiSpecFile,
 ) -> anyhow::Result<Vec<(Utf8PathBuf, CheckStatus)>> {
@@ -27,6 +28,7 @@ pub fn validate(
         openapi,
         generated.spec_file_name(),
         is_latest,
+        is_blessed,
         validation,
     )?;
     let extra_files = validation_result
@@ -46,6 +48,7 @@ fn validate_generated_openapi_document(
     openapi_doc: &OpenAPI,
     file_name: &ApiSpecFileName,
     is_latest: bool,
+    is_blessed: Option<bool>,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 ) -> anyhow::Result<ValidationResult> {
     let mut validation_context = ValidationContextImpl {
@@ -53,6 +56,7 @@ fn validate_generated_openapi_document(
         file_name: file_name.clone(),
         versions: api.versions().clone(),
         is_latest,
+        is_blessed,
         title: api.title(),
         metadata: api.metadata().clone(),
         errors: Vec::new(),
@@ -187,6 +191,7 @@ struct ValidationContextImpl {
     file_name: ApiSpecFileName,
     versions: Versions,
     is_latest: bool,
+    is_blessed: Option<bool>,
     title: &'static str,
     metadata: ManagedApiMetadata,
     errors: Vec<anyhow::Error>,
@@ -208,6 +213,10 @@ impl ValidationBackend for ValidationContextImpl {
 
     fn is_latest(&self) -> bool {
         self.is_latest
+    }
+
+    fn is_blessed(&self) -> Option<bool> {
+        self.is_blessed
     }
 
     fn title(&self) -> &str {

@@ -779,7 +779,7 @@ struct VersionValidationPair {
     second: ValidationCall,
 }
 
-fn get_version_validation_pair(
+fn get_validation_pair(
     calls: &[ValidationCall],
     version: Version,
 ) -> VersionValidationPair {
@@ -807,16 +807,22 @@ fn test_extra_validation_blessed_vs_non_blessed() -> Result<()> {
     let calls = get_validation_calls();
     assert_eq!(calls.len(), 6, "3 versions must have 2 validation calls each");
 
-    let v1 = get_version_validation_pair(&calls, Version::new(1, 0, 0));
-    let v2 = get_version_validation_pair(&calls, Version::new(2, 0, 0));
-    let v3 = get_version_validation_pair(&calls, Version::new(3, 0, 0));
+    let v1 = get_validation_pair(&calls, Version::new(1, 0, 0));
+    let v2 = get_validation_pair(&calls, Version::new(2, 0, 0));
+    let v3 = get_validation_pair(&calls, Version::new(3, 0, 0));
 
     assert!(!v1.first.is_latest);
     assert!(!v1.second.is_latest);
+    assert_eq!(v1.first.is_blessed, Some(false));
+    assert_eq!(v1.second.is_blessed, Some(false));
     assert!(!v2.first.is_latest);
     assert!(!v2.second.is_latest);
+    assert_eq!(v2.first.is_blessed, Some(false));
+    assert_eq!(v2.second.is_blessed, Some(false));
     assert!(v3.first.is_latest);
     assert!(v3.second.is_latest);
+    assert_eq!(v3.first.is_blessed, Some(false));
+    assert_eq!(v3.second.is_blessed, Some(false));
 
     // Commit only v1.0.0 to make it blessed.
     let v1_file = env
@@ -827,25 +833,21 @@ fn test_extra_validation_blessed_vs_non_blessed() -> Result<()> {
 
     clear_validation_calls();
 
-    // Generate again - v1.0.0 is blessed (no validation), v2.0.0 and v3.0.0 are
-    // non-blessed (validation called).
     env.generate_documents(&apis)?;
 
     let calls = get_validation_calls();
-    assert_eq!(calls.len(), 4, "2 versions must have 2 validation calls each");
+    assert_eq!(calls.len(), 6, "3 versions must have 2 validation calls each");
 
-    assert!(
-        !calls.iter().any(|c| c.version == Version::new(1, 0, 0)),
-        "blessed v1.0.0 should not be validated"
-    );
+    let v1 = get_validation_pair(&calls, Version::new(1, 0, 0));
+    let v2 = get_validation_pair(&calls, Version::new(2, 0, 0));
+    let v3 = get_validation_pair(&calls, Version::new(3, 0, 0));
 
-    let v2 = get_version_validation_pair(&calls, Version::new(2, 0, 0));
-    let v3 = get_version_validation_pair(&calls, Version::new(3, 0, 0));
-
-    assert!(!v2.first.is_latest);
-    assert!(!v2.second.is_latest);
-    assert!(v3.first.is_latest);
-    assert!(v3.second.is_latest);
+    assert_eq!(v1.first.is_blessed, Some(true));
+    assert_eq!(v1.second.is_blessed, Some(true));
+    assert_eq!(v2.first.is_blessed, Some(false));
+    assert_eq!(v2.second.is_blessed, Some(false));
+    assert_eq!(v3.first.is_blessed, Some(false));
+    assert_eq!(v3.second.is_blessed, Some(false));
 
     Ok(())
 }
@@ -891,6 +893,34 @@ fn test_extra_validation_with_extra_file() -> Result<()> {
         .join("latest-2.0.0.txt");
     assert!(!v1_file.exists(), "marker file should not exist for v1.0.0");
     assert!(!v2_file.exists(), "marker file should not exist for v2.0.0");
+
+    // Commit v3.0.0 to make it blessed (while being the latest version).
+    let v3_doc = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 document should exist");
+    env.git_add(&[&v3_doc])?;
+    env.git_commit("Add v3.0.0")?;
+
+    // Remove the file to verify it gets regenerated.
+    std::fs::remove_file(&latest_file)
+        .context("failed to remove marker file")?;
+
+    clear_validation_calls();
+
+    env.generate_documents(&apis)?;
+
+    // The file should be regenerated for the blessed+latest version.
+    assert!(
+        latest_file.exists(),
+        "marker file should be regenerated for blessed+latest version"
+    );
+
+    let calls = get_validation_calls();
+    let v3 = get_validation_pair(&calls, Version::new(3, 0, 0));
+    assert_eq!(v3.first.is_blessed, Some(true));
+    assert!(v3.first.is_latest);
+    assert_eq!(v3.second.is_blessed, Some(true));
+    assert!(v3.second.is_latest);
 
     Ok(())
 }

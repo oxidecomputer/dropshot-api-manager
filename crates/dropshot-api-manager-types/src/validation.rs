@@ -42,6 +42,12 @@ impl<'a> ValidationContext<'a> {
         self.backend.is_latest()
     }
 
+    /// Returns whether this version is blessed, or None if this is not a
+    /// versioned API.
+    pub fn is_blessed(&self) -> Option<bool> {
+        self.backend.is_blessed()
+    }
+
     /// Retrieves the versioning strategy for this API.
     pub fn versions(&self) -> &Versions {
         self.backend.versions()
@@ -87,6 +93,7 @@ pub trait ValidationBackend {
     fn file_name(&self) -> &ApiSpecFileName;
     fn versions(&self) -> &Versions;
     fn is_latest(&self) -> bool;
+    fn is_blessed(&self) -> Option<bool>;
     fn title(&self) -> &str;
     fn metadata(&self) -> &ManagedApiMetadata;
     fn report_error(&mut self, error: anyhow::Error);

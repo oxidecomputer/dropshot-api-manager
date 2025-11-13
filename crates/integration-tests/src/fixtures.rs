@@ -860,6 +860,7 @@ pub fn versioned_health_incompat_apis() -> Result<ManagedApis> {
 pub struct ValidationCall {
     pub version: Version,
     pub is_latest: bool,
+    pub is_blessed: Option<bool>,
 }
 
 // Nextest runs each test in its own process, so this static is isolated per
@@ -874,11 +875,16 @@ pub fn clear_validation_calls() {
     VALIDATION_CALLS.lock().unwrap().clear();
 }
 
-fn record_validation_call(version: Version, is_latest: bool) {
-    VALIDATION_CALLS
-        .lock()
-        .unwrap()
-        .push(ValidationCall { version, is_latest });
+fn record_validation_call(
+    version: Version,
+    is_latest: bool,
+    is_blessed: Option<bool>,
+) {
+    VALIDATION_CALLS.lock().unwrap().push(ValidationCall {
+        version,
+        is_latest,
+        is_blessed,
+    });
 }
 
 fn validate(_spec: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
@@ -889,7 +895,7 @@ fn validate(_spec: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
         .cloned()
         .expect("version should be present for versioned APIs");
 
-    record_validation_call(version, cx.is_latest());
+    record_validation_call(version, cx.is_latest(), cx.is_blessed());
 }
 
 fn validate_with_extra_file(
@@ -903,10 +909,9 @@ fn validate_with_extra_file(
         .cloned()
         .expect("version should be present for versioned APIs");
 
-    record_validation_call(version.clone(), cx.is_latest());
+    record_validation_call(version.clone(), cx.is_latest(), cx.is_blessed());
 
     if cx.is_latest() {
-        // Place in the API's directory alongside the OpenAPI documents.
         cx.record_file_contents(
             format!("documents/{}/latest-{}.txt", cx.ident(), version),
             format!("This is the latest version: {}", version).into(),
