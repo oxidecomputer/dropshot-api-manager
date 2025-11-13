@@ -423,10 +423,13 @@ impl Fix<'_> {
                     CheckStale::Modified { expected, .. } => expected,
                     CheckStale::New { expected } => expected,
                 };
+                // Extra file paths are relative to the repo root, not the
+                // documents directory.
+                let full_path = env.repo_root.join(path);
                 Ok(vec![format!(
                     "wrote {}: {:?}",
                     &path,
-                    overwrite_file(path, expected_contents)?
+                    overwrite_file(&full_path, expected_contents)?
                 )])
             }
             Fix::UpdateSymlink { api_ident, link } => {
@@ -652,7 +655,12 @@ fn resolve_api<'a>(
     } else {
         let by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
-            .map(|version| {
+            // Reverse the order of versions: they are stored in sorted order,
+            // so the last version (first one from the back) is the latest.
+            .rev()
+            .enumerate()
+            .map(|(index, version)| {
+                let is_latest = index == 0;
                 let version = version.clone();
                 let blessed =
                     api_blessed.and_then(|b| b.versions().get(&version));
@@ -662,7 +670,13 @@ fn resolve_api<'a>(
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
                 let resolution = resolve_api_version(
-                    env, api, validation, &version, blessed, generated, local,
+                    env,
+                    api,
+                    validation,
+                    ApiVersion { version: &version, is_latest },
+                    blessed,
+                    generated,
+                    local,
                 );
                 (version, resolution)
             })
@@ -869,7 +883,17 @@ fn resolve_api_lockstep<'a>(
     let mut problems = Vec::new();
 
     // Validate the generated API document.
-    validate_generated(env, api, validation, version, generated, &mut problems);
+    validate_generated(
+        env,
+        api,
+        validation,
+        ApiVersion {
+            version,
+            is_latest: true, // is_latest is always true for lockstep APIs
+        },
+        generated,
+        &mut problems,
+    );
 
     match local {
         Some(local_file) if local_file.contents() == generated.contents() => (),
@@ -882,19 +906,22 @@ fn resolve_api_lockstep<'a>(
     BTreeMap::from([(version.clone(), Resolution::new_lockstep(problems))])
 }
 
+struct ApiVersion<'a> {
+    version: &'a semver::Version,
+    is_latest: bool,
+}
+
 fn resolve_api_version<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &'_ semver::Version,
+    version: ApiVersion<'_>,
     blessed: Option<&'a BlessedApiSpecFile>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
     match blessed {
-        Some(blessed) => resolve_api_version_blessed(
-            env, api, validation, version, blessed, generated, local,
-        ),
+        Some(blessed) => resolve_api_version_blessed(blessed, generated, local),
         None => resolve_api_version_local(
             env, api, validation, version, generated, local,
         ),
@@ -902,18 +929,13 @@ fn resolve_api_version<'a>(
 }
 
 fn resolve_api_version_blessed<'a>(
-    env: &'_ ResolvedEnv,
-    api: &'_ ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &'_ semver::Version,
     blessed: &'a BlessedApiSpecFile,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
 
-    // Validate the generated API document.
-    validate_generated(env, api, validation, version, generated, &mut problems);
+    // We do *not* validate the generated API document for blessed versions.
 
     // First off, the blessed spec must be a subset of the generated one.
     // If not, someone has made an incompatible change to the API
@@ -980,13 +1002,14 @@ fn resolve_api_version_local<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &'_ semver::Version,
+    version: ApiVersion<'_>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
 
-    // Validate the generated API document.
+    // This is not a blessed version: validate the generated API document for
+    // it.
     validate_generated(env, api, validation, version, generated, &mut problems);
 
     let (matching, non_matching): (Vec<_>, Vec<_>) = local
@@ -1021,15 +1044,15 @@ fn validate_generated(
     env: &ResolvedEnv,
     api: &ManagedApi,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
-    version: &semver::Version,
+    version: ApiVersion<'_>,
     generated: &GeneratedApiSpecFile,
     problems: &mut Vec<Problem<'_>>,
 ) {
-    match validate(env, api, validation, generated) {
+    match validate(env, api, version.is_latest, validation, generated) {
         Err(source) => {
             problems.push(Problem::GeneratedValidationError {
                 api_ident: api.ident().clone(),
-                version: version.clone(),
+                version: version.version.clone(),
                 source,
             });
         }

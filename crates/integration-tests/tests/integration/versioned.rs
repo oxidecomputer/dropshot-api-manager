@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
 use integration_tests::*;
 use openapiv3::OpenAPI;
+use semver::Version;
 
 /// Test basic versioned API document generation.
 #[test]
@@ -18,10 +19,7 @@ fn test_versioned_generate_basic() -> Result<()> {
     let apis = versioned_health_apis()?;
 
     // Check that latest_version exists.
-    assert_eq!(
-        versioned_health::latest_version(),
-        semver::Version::new(3, 0, 0),
-    );
+    assert_eq!(versioned_health::latest_version(), Version::new(3, 0, 0),);
 
     // Initially, no documents should exist.
     assert!(
@@ -772,6 +770,127 @@ fn test_blessed_version_extra_local_spec() -> Result<()> {
 
     // The destination path should be missing now.
     assert!(!dst.exists(), "destination path {dst} no longer exists");
+
+    Ok(())
+}
+
+struct VersionValidationPair {
+    first: ValidationCall,
+    second: ValidationCall,
+}
+
+fn get_version_validation_pair(
+    calls: &[ValidationCall],
+    version: Version,
+) -> VersionValidationPair {
+    let version_calls: Vec<_> =
+        calls.iter().filter(|c| c.version == version).cloned().collect();
+    assert_eq!(
+        version_calls.len(),
+        2,
+        "expected exactly 2 validation calls for version {}",
+        version
+    );
+    VersionValidationPair {
+        first: version_calls[0].clone(),
+        second: version_calls[1].clone(),
+    }
+}
+
+#[test]
+fn test_extra_validation_blessed_vs_non_blessed() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_with_validation_apis()?;
+
+    env.generate_documents(&apis)?;
+
+    let calls = get_validation_calls();
+    assert_eq!(calls.len(), 6, "3 versions must have 2 validation calls each");
+
+    let v1 = get_version_validation_pair(&calls, Version::new(1, 0, 0));
+    let v2 = get_version_validation_pair(&calls, Version::new(2, 0, 0));
+    let v3 = get_version_validation_pair(&calls, Version::new(3, 0, 0));
+
+    assert!(!v1.first.is_latest);
+    assert!(!v1.second.is_latest);
+    assert!(!v2.first.is_latest);
+    assert!(!v2.second.is_latest);
+    assert!(v3.first.is_latest);
+    assert!(v3.second.is_latest);
+
+    // Commit only v1.0.0 to make it blessed.
+    let v1_file = env
+        .find_versioned_document_path("versioned-health", "1.0.0")?
+        .expect("v1 document should exist");
+    env.git_add(&[&v1_file])?;
+    env.git_commit("Add v1.0.0")?;
+
+    clear_validation_calls();
+
+    // Generate again - v1.0.0 is blessed (no validation), v2.0.0 and v3.0.0 are
+    // non-blessed (validation called).
+    env.generate_documents(&apis)?;
+
+    let calls = get_validation_calls();
+    assert_eq!(calls.len(), 4, "2 versions must have 2 validation calls each");
+
+    assert!(
+        !calls.iter().any(|c| c.version == Version::new(1, 0, 0)),
+        "blessed v1.0.0 should not be validated"
+    );
+
+    let v2 = get_version_validation_pair(&calls, Version::new(2, 0, 0));
+    let v3 = get_version_validation_pair(&calls, Version::new(3, 0, 0));
+
+    assert!(!v2.first.is_latest);
+    assert!(!v2.second.is_latest);
+    assert!(v3.first.is_latest);
+    assert!(v3.second.is_latest);
+
+    Ok(())
+}
+
+#[test]
+fn test_extra_validation_with_extra_file() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_with_extra_file_apis()?;
+
+    env.generate_documents(&apis)?;
+
+    let calls = get_validation_calls();
+
+    assert_eq!(
+        calls.len(),
+        6,
+        "validation should be called twice for each of the 3 versions"
+    );
+
+    let latest_file = env
+        .workspace_root()
+        .join("documents")
+        .join("versioned-health")
+        .join("latest-3.0.0.txt");
+    assert!(
+        latest_file.exists(),
+        "marker file should be generated for latest version"
+    );
+
+    let content = std::fs::read_to_string(&latest_file)
+        .context("failed to read marker file")?;
+    assert_eq!(content, "This is the latest version: 3.0.0");
+
+    let v1_file = env
+        .workspace_root()
+        .join("documents")
+        .join("versioned-health")
+        .join("latest-1.0.0.txt");
+    let v2_file = env
+        .workspace_root()
+        .join("documents")
+        .join("versioned-health")
+        .join("latest-2.0.0.txt");
+    assert!(!v1_file.exists(), "marker file should not exist for v1.0.0");
+    assert!(!v2_file.exists(), "marker file should not exist for v2.0.0");
 
     Ok(())
 }

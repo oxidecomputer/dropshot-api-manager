@@ -3,7 +3,8 @@
 use anyhow::{Context, bail};
 use dropshot::{ApiDescription, ApiDescriptionBuildErrors, StubContext};
 use dropshot_api_manager_types::{
-    ApiIdent, ManagedApiMetadata, SupportedVersion, ValidationContext, Versions,
+    ApiIdent, IterVersionsSemvers, ManagedApiMetadata, SupportedVersion,
+    ValidationContext, Versions,
 };
 use openapiv3::OpenAPI;
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,12 +32,15 @@ pub struct ManagedApiConfig {
     /// The API description function, typically a reference to
     /// `stub_api_description`
     ///
-    /// This is used to generate the OpenAPI spec that matches the current
+    /// This is used to generate the OpenAPI document that matches the current
     /// server implementation.
     pub api_description:
         fn() -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors>,
 
-    /// Extra validation to perform on the OpenAPI spec, if any.
+    /// Extra validation to perform on the OpenAPI document, if any.
+    ///
+    /// For versioned APIs, extra validation is only performed on non-blessed
+    /// versions. Blessed versions are assumed to be committed and unchanging.
     pub extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 
@@ -60,12 +64,12 @@ pub(crate) struct ManagedApi {
     /// The API description function, typically a reference to
     /// `stub_api_description`
     ///
-    /// This is used to generate the OpenAPI spec that matches the current
+    /// This is used to generate the OpenAPI document that matches the current
     /// server implementation.
     api_description:
         fn() -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors>,
 
-    /// Extra validation to perform on the OpenAPI spec, if any.
+    /// Extra validation to perform on the OpenAPI document, if any.
     extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 
@@ -113,9 +117,7 @@ impl ManagedApi {
         self.versions.iter_versioned_versions()
     }
 
-    pub fn iter_versions_semver(
-        &self,
-    ) -> impl Iterator<Item = &semver::Version> + '_ {
+    pub fn iter_versions_semver(&self) -> IterVersionsSemvers<'_> {
         self.versions.iter_versions_semvers()
     }
 
@@ -192,20 +194,6 @@ impl ManagedApis {
         let mut apis = BTreeMap::new();
         for api in api_list {
             let api = ManagedApi::from(api);
-            if api.extra_validation.is_some() && api.is_versioned() {
-                // Extra validation is not yet supported for versioned APIs.
-                // The reason is that extra validation can instruct this tool to
-                // check the contents of additional files (e.g.,
-                // nexus_tags.txt).  We'd need to figure out if we want to
-                // maintain expected output for each supported version, only
-                // check the latest version, or what.  (Since this is currenty
-                // only used for nexus_tags, it would probably be okay to just
-                // check the latest version.)  Rather than deal with any of
-                // this, we punt for now.  We can revisit this if/when it comes
-                // up.
-                bail!("extra validation is not supported for versioned APIs");
-            }
-
             if let Some(old) = apis.insert(api.ident.clone(), api) {
                 bail!("API is defined twice: {:?}", &old.ident);
             }

@@ -25,8 +25,21 @@ impl<'a> ValidationContext<'a> {
     }
 
     /// Returns a descriptor for the API's file name.
+    ///
+    /// The file name can be used to identify the version of the API being
+    /// validated.
     pub fn file_name(&self) -> &ApiSpecFileName {
         self.backend.file_name()
+    }
+
+    /// Returns true if this is the latest version of the API, or if the API is
+    /// lockstep.
+    ///
+    /// This is particularly useful for extra files which might not themselves
+    /// be versioned. In that case, you may wish to only generate the extra file
+    /// for the latest version.
+    pub fn is_latest(&self) -> bool {
+        self.backend.is_latest()
     }
 
     /// Retrieves the versioning strategy for this API.
@@ -73,6 +86,7 @@ pub trait ValidationBackend {
     fn ident(&self) -> &ApiIdent;
     fn file_name(&self) -> &ApiSpecFileName;
     fn versions(&self) -> &Versions;
+    fn is_latest(&self) -> bool;
     fn title(&self) -> &str;
     fn metadata(&self) -> &ManagedApiMetadata;
     fn report_error(&mut self, error: anyhow::Error);

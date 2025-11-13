@@ -17,6 +17,7 @@ use std::io::Write;
 pub fn validate(
     env: &ResolvedEnv,
     api: &ManagedApi,
+    is_latest: bool,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
     generated: &GeneratedApiSpecFile,
 ) -> anyhow::Result<Vec<(Utf8PathBuf, CheckStatus)>> {
@@ -25,6 +26,7 @@ pub fn validate(
         api,
         openapi,
         generated.spec_file_name(),
+        is_latest,
         validation,
     )?;
     let extra_files = validation_result
@@ -43,12 +45,14 @@ fn validate_generated_openapi_document(
     api: &ManagedApi,
     openapi_doc: &OpenAPI,
     file_name: &ApiSpecFileName,
+    is_latest: bool,
     validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 ) -> anyhow::Result<ValidationResult> {
     let mut validation_context = ValidationContextImpl {
         ident: api.ident().clone(),
         file_name: file_name.clone(),
         versions: api.versions().clone(),
+        is_latest,
         title: api.title(),
         metadata: api.metadata().clone(),
         errors: Vec::new(),
@@ -182,6 +186,7 @@ struct ValidationContextImpl {
     ident: ApiIdent,
     file_name: ApiSpecFileName,
     versions: Versions,
+    is_latest: bool,
     title: &'static str,
     metadata: ManagedApiMetadata,
     errors: Vec<anyhow::Error>,
@@ -199,6 +204,10 @@ impl ValidationBackend for ValidationContextImpl {
 
     fn versions(&self) -> &Versions {
         &self.versions
+    }
+
+    fn is_latest(&self) -> bool {
+        self.is_latest
     }
 
     fn title(&self) -> &str {

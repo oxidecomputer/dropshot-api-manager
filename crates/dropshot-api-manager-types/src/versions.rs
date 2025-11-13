@@ -166,6 +166,18 @@ impl<'a> Iterator for IterVersionsSemvers<'a> {
     }
 }
 
+impl<'a> ExactSizeIterator for IterVersionsSemvers<'a> {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<'a> DoubleEndedIterator for IterVersionsSemvers<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
 #[derive(Debug)]
 enum IterVersionsSemversInner<'a> {
     Lockstep(Option<&'a semver::Version>),
@@ -196,6 +208,17 @@ impl<'a> ExactSizeIterator for IterVersionsSemversInner<'a> {
                 usize::from(version.is_some())
             }
             IterVersionsSemversInner::Versioned(versions) => versions.len(),
+        }
+    }
+}
+
+impl<'a> DoubleEndedIterator for IterVersionsSemversInner<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            IterVersionsSemversInner::Lockstep(version) => version.take(),
+            IterVersionsSemversInner::Versioned(versions) => {
+                versions.next_back().map(|v| &v.semver)
+            }
         }
     }
 }
