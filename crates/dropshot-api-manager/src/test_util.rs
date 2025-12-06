@@ -45,5 +45,7 @@ pub fn get_diff_output(
             .to_blessed_source(&env)?;
     let output = OutputOpts { color: clap::ColorChoice::Auto };
 
+    // Normalize path separators for cross-platform consistency in tests.
     diff_impl(apis, &env, &blessed_source, &output)
+        .map(|s| s.replace('\\', "/"))
 }

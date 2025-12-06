@@ -812,8 +812,8 @@ fn test_diff_new_version_compares_to_previous() -> Result<()> {
     let full_apis = versioned_health_apis()?;
     env.generate_documents(&full_apis)?;
 
-    // Get the diff output (normalize line endings for cross-platform).
-    let diff_output = env.get_diff_output(&full_apis)?.replace("\r\n", "\n");
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&full_apis)?;
 
     // Diff output should compare 2.0.0 to 3.0.0 and only show the new /metrics
     // endpoint, not the full schema. If /health appeared as added, it would
