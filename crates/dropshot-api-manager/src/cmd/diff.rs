@@ -13,7 +13,7 @@ use camino::Utf8Path;
 use dropshot_api_manager_types::ApiIdent;
 use owo_colors::OwoColorize;
 use similar::TextDiff;
-use std::process::ExitCode;
+use std::{io::Write, process::ExitCode};
 
 /// Compare local OpenAPI documents against blessed (upstream) versions.
 ///
@@ -30,6 +30,8 @@ pub(crate) fn diff_impl(
         styles.colorize();
     }
 
+    // Load files and display any errors/warnings. We still proceed with the
+    // diff for files that loaded successfully.
     let (local_files, errors) = env.local_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
@@ -44,7 +46,13 @@ pub(crate) fn diff_impl(
         let local_api = local_files.get(ident);
         let blessed_api = blessed_files.get(ident);
 
-        let has_diff = diff_api(ident, local_api, blessed_api, &styles)?;
+        let has_diff = diff_api(
+            ident,
+            local_api,
+            blessed_api,
+            &styles,
+            &mut std::io::stdout(),
+        )?;
         any_diff = any_diff || has_diff;
     }
 
@@ -55,11 +63,12 @@ pub(crate) fn diff_impl(
     Ok(ExitCode::SUCCESS)
 }
 
-fn diff_api(
+pub(crate) fn diff_api<W: Write>(
     ident: &ApiIdent,
     local_api: Option<&ApiFiles<Vec<LocalApiSpecFile>>>,
     blessed_api: Option<&ApiFiles<BlessedApiSpecFile>>,
     styles: &Styles,
+    writer: &mut W,
 ) -> anyhow::Result<bool> {
     // Collect all versions from both sources
     let mut all_versions: Vec<semver::Version> = Vec::new();
@@ -128,7 +137,7 @@ fn diff_api(
                         styles,
                         3,    // context lines
                         true, // show missing newline hint
-                        &mut std::io::stdout(),
+                        writer,
                     )?;
                 } else {
                     // No previous version to compare against - show full file.
@@ -146,7 +155,7 @@ fn diff_api(
                         styles,
                         3,    // context lines
                         true, // show missing newline hint
-                        &mut std::io::stdout(),
+                        writer,
                     )?;
                 }
                 has_diff = true;
@@ -171,7 +180,7 @@ fn diff_api(
                     styles,
                     3,    // context lines
                     true, // show missing newline hint
-                    &mut std::io::stdout(),
+                    writer,
                 )?;
                 has_diff = true;
             }
@@ -200,7 +209,7 @@ fn diff_api(
                         styles,
                         3,    // context lines
                         true, // show missing newline hint
-                        &mut std::io::stdout(),
+                        writer,
                     )?;
                     has_diff = true;
                 }

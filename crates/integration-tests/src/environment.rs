@@ -365,6 +365,14 @@ impl TestEnvironment {
         }
     }
 
+    /// Get the diff output as a string.
+    pub fn get_diff_output(&self, apis: &ManagedApis) -> Result<String> {
+        dropshot_api_manager::test_util::get_diff_output(
+            &self.environment,
+            apis,
+        )
+    }
+
     fn collect_files_recursive(
         &self,
         dir: &Utf8Path,

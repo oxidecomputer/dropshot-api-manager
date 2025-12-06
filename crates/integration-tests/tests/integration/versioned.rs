@@ -774,6 +774,239 @@ fn test_blessed_version_extra_local_spec() -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// Diff command tests
+// ============================================================================
+
+/// Test that diff produces no output when local matches blessed.
+#[test]
+fn test_diff_empty_when_up_to_date() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate and commit documents to make them blessed.
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Diff should produce no output.
+    let diff_output = env.get_diff_output(&apis)?;
+    assert!(diff_output.is_empty(), "diff should be empty when up-to-date");
+
+    Ok(())
+}
+
+/// Test that diff shows changes when a new version is added locally.
+///
+/// When a new version is added, the diff should compare against the previous
+/// blessed version to show what actually changed in the schema.
+#[test]
+fn test_diff_new_version_compares_to_previous() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Start with reduced versions (1.0.0 and 2.0.0) and bless them.
+    let reduced_apis = versioned_health_reduced_apis()?;
+    env.generate_documents(&reduced_apis)?;
+    env.commit_documents()?;
+
+    // Generate with full APIs (adding version 3.0.0).
+    let full_apis = versioned_health_apis()?;
+    env.generate_documents(&full_apis)?;
+
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&full_apis)?;
+
+    // Diff output should compare 2.0.0 to 3.0.0 and only show the new /metrics
+    // endpoint, not the full schema. If /health appeared as added, it would
+    // mean we're dumping the entire file instead of diffing properly.
+    assert!(
+        diff_output.contains("--- a/versioned-health/versioned-health-2.0.0-"),
+        "diff should show 2.0.0 as base:\n{}",
+        diff_output
+    );
+    assert!(
+        diff_output.contains("+++ b/versioned-health/versioned-health-3.0.0-"),
+        "diff should show 3.0.0 as target:\n{}",
+        diff_output
+    );
+    assert!(
+        diff_output.contains(
+            r#"-    "version": "2.0.0"
++    "description": "A versioned health API for testing version evolution",
++    "version": "3.0.0""#
+        ),
+        "diff should show version change:\n{}",
+        diff_output
+    );
+    assert!(
+        diff_output.contains(
+            r#"+    "/metrics": {
++      "get": {
++        "summary": "Get service metrics (v3+).","#
+        ),
+        "diff should show /metrics addition:\n{}",
+        diff_output
+    );
+
+    // The /health endpoint exists in both versions, so it should not appear as
+    // added content.
+    let health_added = diff_output
+        .lines()
+        .any(|line| line.starts_with('+') && line.contains("\"/health\""));
+    assert!(!health_added, "diff shows /health as added:\n{}", diff_output);
+
+    Ok(())
+}
+
+/// Test that diff shows removed content when a version is removed locally.
+#[test]
+fn test_diff_shows_removed_version() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Start with full versions and bless them.
+    let full_apis = versioned_health_apis()?;
+    env.generate_documents(&full_apis)?;
+    env.commit_documents()?;
+
+    // Generate with reduced APIs (removing version 3.0.0).
+    let reduced_apis = versioned_health_reduced_apis()?;
+    env.generate_documents(&reduced_apis)?;
+
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&reduced_apis)?;
+
+    // The diff should show the removed version's content with - prefix.
+    assert!(
+        diff_output.contains("versioned-health-3.0.0"),
+        "diff should reference removed version (3.0.0), got: {}",
+        diff_output
+    );
+    assert!(
+        diff_output.contains("/dev/null"),
+        "diff should show /dev/null as target (file removed), got: {}",
+        diff_output
+    );
+
+    Ok(())
+}
+
+/// Test that diff shows file as removed when content is modified in-place.
+///
+/// Versioned document filenames include a content hash. When a file is edited
+/// directly without regenerating, the hash no longer matches and the file is
+/// treated as removed. This test verifies that behavior.
+#[test]
+fn test_diff_shows_file_removed_when_hash_invalidated() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Generate and bless the original documents.
+    let apis = versioned_health_apis()?;
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Manually modify a local file (this invalidates the filename hash).
+    let doc_path = env
+        .find_versioned_document_path("versioned-health", "1.0.0")?
+        .expect("should have v1.0.0 document");
+    let full_path = env.workspace_root().join(&doc_path);
+    let original_content = std::fs::read_to_string(&full_path)?;
+    let modified_content = original_content.replace(
+        "\"title\": \"Versioned Health API\"",
+        "\"title\": \"Modified Versioned Health API\"",
+    );
+    assert_ne!(
+        original_content, modified_content,
+        "replacement should have changed the content"
+    );
+    std::fs::write(&full_path, &modified_content)?;
+
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&apis)?;
+
+    // Since the hash no longer matches, the file is treated as removed.
+    assert!(!diff_output.is_empty(), "diff should show content");
+    assert!(
+        diff_output.contains("/dev/null"),
+        "diff should show file as removed (hash invalidated), got: {}",
+        diff_output
+    );
+    // The blessed content should be shown as being removed.
+    assert!(
+        diff_output.contains('-'),
+        "diff should contain - lines for removed content, got: {}",
+        diff_output
+    );
+
+    Ok(())
+}
+
+/// Test that diff shows full content when no blessed documents exist.
+#[test]
+fn test_diff_shows_full_content_when_no_blessed() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate documents but don't commit (no blessed documents exist).
+    env.generate_documents(&apis)?;
+
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&apis)?;
+
+    // Should show full file content since there's nothing to compare against.
+    assert!(
+        diff_output.contains("/dev/null"),
+        "diff should show /dev/null as source when no blessed exists, got: {}",
+        diff_output
+    );
+    // Should contain OpenAPI content.
+    assert!(
+        diff_output.contains("openapi"),
+        "diff should show OpenAPI content, got: {}",
+        diff_output
+    );
+
+    Ok(())
+}
+
+/// Test that diff shows removed content when local documents are deleted.
+#[test]
+fn test_diff_shows_removed_when_local_deleted() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate and commit to create blessed documents.
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Delete local documents.
+    let docs = env.list_versioned_documents("versioned-health")?;
+    for doc in docs {
+        let full_path = env.workspace_root().join(&doc);
+        std::fs::remove_file(&full_path)?;
+    }
+
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&apis)?;
+
+    // Should show files being removed (blessed exists, local missing).
+    assert!(
+        diff_output.contains("/dev/null"),
+        "diff should show /dev/null as target (files removed), got: {}",
+        diff_output
+    );
+    // Should show content being removed (- lines).
+    assert!(
+        diff_output.contains('-'),
+        "diff should contain - lines for removed content, got: {}",
+        diff_output
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// Extra validation tests
+// ============================================================================
+
 struct VersionValidationPair {
     first: ValidationCall,
     second: ValidationCall,
