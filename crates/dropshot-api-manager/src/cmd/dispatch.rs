@@ -3,8 +3,8 @@
 use crate::{
     apis::ManagedApis,
     cmd::{
-        check::check_impl, debug::debug_impl, generate::generate_impl,
-        list::list_impl,
+        check::check_impl, debug::debug_impl, diff::diff_impl,
+        generate::generate_impl, list::list_impl,
     },
     environment::{BlessedSource, Environment, GeneratedSource, ResolvedEnv},
     git::GitRevision,
@@ -33,6 +33,7 @@ impl App {
     pub fn exec(self, env: &Environment, apis: &ManagedApis) -> ExitCode {
         let result = match self.command {
             Command::Debug(args) => args.exec(env, apis, &self.output_opts),
+            Command::Diff(args) => args.exec(env, apis, &self.output_opts),
             Command::List(args) => args.exec(apis, &self.output_opts),
             Command::Generate(args) => args.exec(env, apis, &self.output_opts),
             Command::Check(args) => args.exec(env, apis, &self.output_opts),
@@ -52,6 +53,9 @@ impl App {
 pub enum Command {
     /// Dump debug information about everything the tool knows
     Debug(DebugArgs),
+
+    /// Show differences between local and blessed OpenAPI documents.
+    Diff(DiffArgs),
 
     /// List managed APIs.
     ///
@@ -199,6 +203,27 @@ impl ListArgs {
     ) -> anyhow::Result<ExitCode> {
         list_impl(apis, self.verbose, output)?;
         Ok(ExitCode::SUCCESS)
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct DiffArgs {
+    #[clap(flatten)]
+    local: LocalSourceArgs,
+    #[clap(flatten)]
+    blessed: BlessedSourceArgs,
+}
+
+impl DiffArgs {
+    fn exec(
+        self,
+        env: &Environment,
+        apis: &ManagedApis,
+        output: &OutputOpts,
+    ) -> anyhow::Result<ExitCode> {
+        let env = env.resolve(self.local.dir)?;
+        let blessed_source = self.blessed.to_blessed_source(&env)?;
+        diff_impl(apis, &env, &blessed_source, output)
     }
 }
 
