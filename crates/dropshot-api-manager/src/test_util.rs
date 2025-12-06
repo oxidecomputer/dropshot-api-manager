@@ -45,7 +45,12 @@ pub fn get_diff_output(
             .to_blessed_source(&env)?;
     let output = OutputOpts { color: clap::ColorChoice::Auto };
 
+    let mut buffer = Vec::new();
+    diff_impl(apis, &env, &blessed_source, &output, &mut buffer)?;
+
     // Normalize path separators for cross-platform consistency in tests.
-    diff_impl(apis, &env, &blessed_source, &output)
-        .map(|s| s.replace('\\', "/"))
+    let result = String::from_utf8(buffer).map_err(|e| {
+        anyhow::anyhow!("diff output is not valid UTF-8: {}", e)
+    })?;
+    Ok(result.replace('\\', "/"))
 }

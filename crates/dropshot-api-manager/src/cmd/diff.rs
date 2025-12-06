@@ -20,14 +20,15 @@ use std::io::Write;
 /// For each API with differences, shows the diff between what's on disk locally
 /// and what's blessed in the upstream branch (typically origin/main).
 ///
-/// Returns the diff output as a string. Headers describing each changed file
-/// are written to stderr.
-pub(crate) fn diff_impl(
+/// Diff output is written directly to `writer`. Headers describing each changed
+/// file are written to stderr.
+pub(crate) fn diff_impl<W: Write>(
     apis: &ManagedApis,
     env: &ResolvedEnv,
     blessed_source: &BlessedSource,
     output: &OutputOpts,
-) -> anyhow::Result<String> {
+    writer: &mut W,
+) -> anyhow::Result<()> {
     let mut styles = Styles::default();
     if output.use_color(supports_color::Stream::Stdout) {
         styles.colorize();
@@ -42,7 +43,6 @@ pub(crate) fn diff_impl(
         blessed_source.load(&env.repo_root, apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
-    let mut diff_output = Vec::new();
     let mut any_diff = false;
 
     for api in apis.iter_apis() {
@@ -51,15 +51,15 @@ pub(crate) fn diff_impl(
         let blessed_api = blessed_files.get(ident);
 
         let has_diff =
-            diff_api(ident, local_api, blessed_api, &styles, &mut diff_output)?;
-        any_diff = any_diff || has_diff;
+            diff_api(ident, local_api, blessed_api, &styles, writer)?;
+        any_diff |= has_diff;
     }
 
     if !any_diff {
         eprintln!("No differences from blessed.");
     }
 
-    String::from_utf8(diff_output).context("diff output is not valid UTF-8")
+    Ok(())
 }
 
 fn diff_api<W: Write>(

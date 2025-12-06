@@ -223,8 +223,8 @@ impl DiffArgs {
     ) -> anyhow::Result<ExitCode> {
         let env = env.resolve(self.local.dir)?;
         let blessed_source = self.blessed.to_blessed_source(&env)?;
-        let diff_output = diff_impl(apis, &env, &blessed_source, output)?;
-        print!("{}", diff_output);
+        let mut stdout = std::io::stdout();
+        diff_impl(apis, &env, &blessed_source, output, &mut stdout)?;
         Ok(ExitCode::SUCCESS)
     }
 }
