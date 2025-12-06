@@ -13,25 +13,28 @@ use camino::Utf8Path;
 use dropshot_api_manager_types::ApiIdent;
 use owo_colors::OwoColorize;
 use similar::TextDiff;
-use std::{io::Write, process::ExitCode};
+use std::io::Write;
 
 /// Compare local OpenAPI documents against blessed (upstream) versions.
 ///
 /// For each API with differences, shows the diff between what's on disk locally
 /// and what's blessed in the upstream branch (typically origin/main).
+///
+/// Returns the diff output as a string. Headers describing each changed file
+/// are written to stderr.
 pub(crate) fn diff_impl(
     apis: &ManagedApis,
     env: &ResolvedEnv,
     blessed_source: &BlessedSource,
     output: &OutputOpts,
-) -> anyhow::Result<ExitCode> {
+) -> anyhow::Result<String> {
     let mut styles = Styles::default();
     if output.use_color(supports_color::Stream::Stdout) {
         styles.colorize();
     }
 
-    // Load files and display any errors/warnings. We still proceed with the
-    // diff for files that loaded successfully.
+    // Load files and display any errors/warnings. We proceed with the diff for
+    // files that loaded successfully (treating unloadable files as missing).
     let (local_files, errors) = env.local_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
@@ -39,6 +42,7 @@ pub(crate) fn diff_impl(
         blessed_source.load(&env.repo_root, apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
+    let mut diff_output = Vec::new();
     let mut any_diff = false;
 
     for api in apis.iter_apis() {
@@ -46,13 +50,8 @@ pub(crate) fn diff_impl(
         let local_api = local_files.get(ident);
         let blessed_api = blessed_files.get(ident);
 
-        let has_diff = diff_api(
-            ident,
-            local_api,
-            blessed_api,
-            &styles,
-            &mut std::io::stdout(),
-        )?;
+        let has_diff =
+            diff_api(ident, local_api, blessed_api, &styles, &mut diff_output)?;
         any_diff = any_diff || has_diff;
     }
 
@@ -60,10 +59,10 @@ pub(crate) fn diff_impl(
         eprintln!("No differences from blessed.");
     }
 
-    Ok(ExitCode::SUCCESS)
+    String::from_utf8(diff_output).context("diff output is not valid UTF-8")
 }
 
-pub(crate) fn diff_api<W: Write>(
+fn diff_api<W: Write>(
     ident: &ApiIdent,
     local_api: Option<&ApiFiles<Vec<LocalApiSpecFile>>>,
     blessed_api: Option<&ApiFiles<BlessedApiSpecFile>>,

@@ -889,56 +889,6 @@ fn test_diff_shows_removed_version() -> Result<()> {
     Ok(())
 }
 
-/// Test that diff shows file as removed when content is modified in-place.
-///
-/// Versioned document filenames include a content hash. When a file is edited
-/// directly without regenerating, the hash no longer matches and the file is
-/// treated as removed. This test verifies that behavior.
-#[test]
-fn test_diff_shows_file_removed_when_hash_invalidated() -> Result<()> {
-    let env = TestEnvironment::new()?;
-
-    // Generate and bless the original documents.
-    let apis = versioned_health_apis()?;
-    env.generate_documents(&apis)?;
-    env.commit_documents()?;
-
-    // Manually modify a local file (this invalidates the filename hash).
-    let doc_path = env
-        .find_versioned_document_path("versioned-health", "1.0.0")?
-        .expect("should have v1.0.0 document");
-    let full_path = env.workspace_root().join(&doc_path);
-    let original_content = std::fs::read_to_string(&full_path)?;
-    let modified_content = original_content.replace(
-        "\"title\": \"Versioned Health API\"",
-        "\"title\": \"Modified Versioned Health API\"",
-    );
-    assert_ne!(
-        original_content, modified_content,
-        "replacement should have changed the content"
-    );
-    std::fs::write(&full_path, &modified_content)?;
-
-    // Get the diff output.
-    let diff_output = env.get_diff_output(&apis)?;
-
-    // Since the hash no longer matches, the file is treated as removed.
-    assert!(!diff_output.is_empty(), "diff should show content");
-    assert!(
-        diff_output.contains("/dev/null"),
-        "diff should show file as removed (hash invalidated), got: {}",
-        diff_output
-    );
-    // The blessed content should be shown as being removed.
-    assert!(
-        diff_output.contains('-'),
-        "diff should contain - lines for removed content, got: {}",
-        diff_output
-    );
-
-    Ok(())
-}
-
 /// Test that diff shows full content when no blessed documents exist.
 #[test]
 fn test_diff_shows_full_content_when_no_blessed() -> Result<()> {

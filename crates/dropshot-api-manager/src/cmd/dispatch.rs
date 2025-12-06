@@ -223,7 +223,9 @@ impl DiffArgs {
     ) -> anyhow::Result<ExitCode> {
         let env = env.resolve(self.local.dir)?;
         let blessed_source = self.blessed.to_blessed_source(&env)?;
-        diff_impl(apis, &env, &blessed_source, output)
+        let diff_output = diff_impl(apis, &env, &blessed_source, output)?;
+        print!("{}", diff_output);
+        Ok(ExitCode::SUCCESS)
     }
 }
 
