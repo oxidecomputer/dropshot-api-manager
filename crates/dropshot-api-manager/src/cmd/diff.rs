@@ -12,7 +12,10 @@ use camino::Utf8Path;
 use dropshot_api_manager_types::ApiIdent;
 use owo_colors::OwoColorize;
 use similar::TextDiff;
-use std::{collections::BTreeMap, io::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Write,
+};
 
 /// Compare local OpenAPI documents against blessed (upstream) versions.
 ///
@@ -112,8 +115,14 @@ fn diff_api<W: Write>(
 
     let mut has_diff = false;
 
-    // Iterate all versions from both sources. BTreeMap keys are sorted.
-    for version in local_versions.keys().chain(blessed_versions.keys()) {
+    // Collect unique versions from both sources to handle all combinations:
+    // local only (added), blessed only (removed), or both (potentially
+    // modified). We need a set because chaining the iterators would visit
+    // versions present in both maps twice.
+    let all_versions: BTreeSet<_> =
+        local_versions.keys().chain(blessed_versions.keys()).collect();
+
+    for version in all_versions {
         let local_file = local_versions.get(version).copied();
         let blessed_file = blessed_versions.get(version).copied();
 

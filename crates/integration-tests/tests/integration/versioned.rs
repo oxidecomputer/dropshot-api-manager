@@ -953,6 +953,70 @@ fn test_diff_shows_removed_when_local_deleted() -> Result<()> {
     Ok(())
 }
 
+/// Test that diff shows changes when a blessed version is modified locally.
+#[test]
+fn test_diff_shows_modified_version() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate and commit documents to make them blessed.
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Generate different content for the same version in a second environment.
+    // The incompat API has /health/detailed instead of /status for v2.
+    let env2 = TestEnvironment::new()?;
+    let incompat_apis = versioned_health_incompat_apis()?;
+    env2.generate_documents(&incompat_apis)?;
+
+    // Replace env's v2 file with env2's v2 file (different content, same
+    // version).
+    let env_path = env
+        .find_versioned_document_path("versioned-health", "2.0.0")?
+        .expect("should find v2.0.0 document in env");
+    let env2_path = env2
+        .find_versioned_document_path("versioned-health", "2.0.0")?
+        .expect("should find v2.0.0 document in env2");
+
+    let src = env2.workspace_root().join(&env2_path);
+    let old_dst = env.workspace_root().join(&env_path);
+    let new_dst = env
+        .documents_dir()
+        .join("versioned-health")
+        .join(env2_path.file_name().unwrap());
+
+    std::fs::remove_file(&old_dst)?;
+    std::fs::copy(&src, &new_dst)?;
+
+    // Get the diff output.
+    let diff_output = env.get_diff_output(&apis)?;
+
+    // Should show the modification (description differs between the APIs).
+    assert!(
+        diff_output.contains("-    \"description\": \"A versioned health API for testing version evolution\""),
+        "diff should show removed description, got: {}",
+        diff_output
+    );
+    assert!(
+        diff_output.contains("+    \"description\": \"A versioned health API with incompatible changes\""),
+        "diff should show added description, got: {}",
+        diff_output
+    );
+
+    // The v2 diff should only appear once (regression test for duplicate
+    // iteration bug where versions in both maps were visited twice).
+    let diff_header_count = diff_output
+        .matches("--- a/versioned-health/versioned-health-2.0.0")
+        .count();
+    assert_eq!(
+        diff_header_count, 1,
+        "v2.0.0 diff should appear exactly once, got: {}",
+        diff_output
+    );
+
+    Ok(())
+}
+
 // ============================================================================
 // Extra validation tests
 // ============================================================================
