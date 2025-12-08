@@ -5,15 +5,14 @@ use crate::{
     environment::{BlessedSource, ResolvedEnv},
     output::{OutputOpts, Styles, display_load_problems, write_diff},
     spec_files_blessed::BlessedApiSpecFile,
-    spec_files_generic::ApiFiles,
     spec_files_local::LocalApiSpecFile,
 };
-use anyhow::Context;
+use anyhow::{Context, bail};
 use camino::Utf8Path;
 use dropshot_api_manager_types::ApiIdent;
 use owo_colors::OwoColorize;
 use similar::TextDiff;
-use std::io::Write;
+use std::{collections::BTreeMap, io::Write};
 
 /// Compare local OpenAPI documents against blessed (upstream) versions.
 ///
@@ -39,6 +38,34 @@ pub(crate) fn diff_impl<W: Write>(
     let (local_files, errors) = env.local_source.load(apis, &styles)?;
     display_load_problems(&errors, &styles)?;
 
+    // Build maps from version to single file, validating that no version has
+    // multiple local files. Multiple files can happen if two developers create
+    // the same version with different content (resulting in different hashes).
+    let mut local_by_api: BTreeMap<&ApiIdent, BTreeMap<_, _>> = BTreeMap::new();
+    for (ident, api_files) in local_files.iter() {
+        let mut version_map = BTreeMap::new();
+        for (version, files) in api_files.versions() {
+            if files.len() > 1 {
+                let file_names: Vec<_> = files
+                    .iter()
+                    .map(|f| f.spec_file_name().path().to_string())
+                    .collect();
+                bail!(
+                    "{} v{}: found {} local files for the same version \
+                     ({}); run `generate` to resolve this conflict",
+                    ident,
+                    version,
+                    files.len(),
+                    file_names.join(", "),
+                );
+            }
+            if let Some(file) = files.first() {
+                version_map.insert(version, file);
+            }
+        }
+        local_by_api.insert(ident, version_map);
+    }
+
     let (blessed_files, errors) =
         blessed_source.load(&env.repo_root, apis, &styles)?;
     display_load_problems(&errors, &styles)?;
@@ -47,11 +74,21 @@ pub(crate) fn diff_impl<W: Write>(
 
     for api in apis.iter_apis() {
         let ident = api.ident();
-        let local_api = local_files.get(ident);
-        let blessed_api = blessed_files.get(ident);
+        let empty = BTreeMap::new();
+        let local_versions = local_by_api.get(ident).unwrap_or(&empty);
+        let blessed_versions: BTreeMap<_, _> = blessed_files
+            .get(ident)
+            .into_iter()
+            .flat_map(|api| api.versions())
+            .collect();
 
-        let has_diff =
-            diff_api(ident, local_api, blessed_api, &styles, writer)?;
+        let has_diff = diff_api(
+            ident,
+            local_versions,
+            &blessed_versions,
+            &styles,
+            writer,
+        )?;
         any_diff |= has_diff;
     }
 
@@ -64,48 +101,30 @@ pub(crate) fn diff_impl<W: Write>(
 
 fn diff_api<W: Write>(
     ident: &ApiIdent,
-    local_api: Option<&ApiFiles<Vec<LocalApiSpecFile>>>,
-    blessed_api: Option<&ApiFiles<BlessedApiSpecFile>>,
+    local_versions: &BTreeMap<&semver::Version, &LocalApiSpecFile>,
+    blessed_versions: &BTreeMap<&semver::Version, &BlessedApiSpecFile>,
     styles: &Styles,
     writer: &mut W,
 ) -> anyhow::Result<bool> {
-    // Collect all versions from both sources
-    let mut all_versions: Vec<semver::Version> = Vec::new();
-    if let Some(local) = local_api {
-        all_versions.extend(local.versions().keys().cloned());
-    }
-    if let Some(blessed) = blessed_api {
-        for v in blessed.versions().keys() {
-            if !all_versions.contains(v) {
-                all_versions.push(v.clone());
-            }
-        }
-    }
-    all_versions.sort();
-
-    if all_versions.is_empty() {
+    if local_versions.is_empty() && blessed_versions.is_empty() {
         return Ok(false);
     }
 
     let mut has_diff = false;
 
-    for version in &all_versions {
-        let local_file = local_api
-            .and_then(|a| a.versions().get(version))
-            .and_then(|files| files.first());
-        let blessed_file = blessed_api.and_then(|a| a.versions().get(version));
+    // Iterate all versions from both sources. BTreeMap keys are sorted.
+    for version in local_versions.keys().chain(blessed_versions.keys()) {
+        let local_file = local_versions.get(version).copied();
+        let blessed_file = blessed_versions.get(version).copied();
 
         match (blessed_file, local_file) {
             (None, Some(local)) => {
                 // New version added locally. Diff against the previous blessed
                 // version to show what actually changed in the schema.
-                let prev_blessed = blessed_api.and_then(|api| {
-                    api.versions()
-                        .iter()
-                        .filter(|(v, _)| *v < version)
-                        .max_by_key(|(v, _)| *v)
-                        .map(|(_, file)| file)
-                });
+                let prev_blessed = blessed_versions
+                    .range::<semver::Version, _>(..*version)
+                    .next_back()
+                    .map(|(_, file)| *file);
 
                 let local_content = std::str::from_utf8(local.contents())
                     .context("local file is not valid UTF-8")?;
