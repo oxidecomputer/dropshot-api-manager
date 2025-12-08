@@ -1017,6 +1017,66 @@ fn test_diff_shows_modified_version() -> Result<()> {
     Ok(())
 }
 
+/// Test that diff fails when there are multiple local files for the same
+/// version.
+///
+/// This can happen when two developers create the same API version in separate
+/// branches with different content, resulting in files with different hashes.
+#[test]
+fn test_diff_fails_with_duplicate_local_versions() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate and commit initial documents to make them blessed.
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Generate with the incompatible APIs in a second environment. This
+    // produces files with different hashes for the same version.
+    let env2 = TestEnvironment::new()?;
+    let incompatible_apis = versioned_health_incompat_apis()?;
+    env2.generate_documents(&incompatible_apis)?;
+
+    // Ensure that the v3 documents are actually different between env and env2.
+    let env_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("should find v3.0.0 document");
+    let env2_path = env2
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("should find v3.0.0 document");
+    assert_ne!(
+        env_path, env2_path,
+        "incompatible APIs should lead to different hashes"
+    );
+
+    // Copy env2's document into env's documents directory. Now env has two
+    // files for version 3.0.0.
+    let src = env2.workspace_root().join(&env2_path);
+    let dst = env
+        .documents_dir()
+        .join("versioned-health")
+        .join(env2_path.file_name().unwrap());
+    std::fs::copy(&src, &dst)
+        .with_context(|| format!("failed to copy {} to {}", src, dst))?;
+
+    // Diff should fail because there are two local files for the same version.
+    let result = env.get_diff_output(&apis);
+    let err = result.expect_err("diff should fail with duplicate local files");
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("found 2 local files for the same version"),
+        "error should mention duplicate files, got: {}",
+        err_msg
+    );
+    assert!(
+        err_msg.contains("versioned-health") && err_msg.contains("3.0.0"),
+        "error should identify the API and version, got: {}",
+        err_msg
+    );
+
+    Ok(())
+}
+
 // ============================================================================
 // Extra validation tests
 // ============================================================================
@@ -1095,66 +1155,6 @@ fn test_extra_validation_blessed_vs_non_blessed() -> Result<()> {
     assert_eq!(v2.second.is_blessed, Some(false));
     assert_eq!(v3.first.is_blessed, Some(false));
     assert_eq!(v3.second.is_blessed, Some(false));
-
-    Ok(())
-}
-
-/// Test that diff fails when there are multiple local files for the same
-/// version.
-///
-/// This can happen when two developers create the same API version in separate
-/// branches with different content, resulting in files with different hashes.
-#[test]
-fn test_diff_fails_with_duplicate_local_versions() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let apis = versioned_health_apis()?;
-
-    // Generate and commit initial documents to make them blessed.
-    env.generate_documents(&apis)?;
-    env.commit_documents()?;
-
-    // Generate with the incompatible APIs in a second environment. This
-    // produces files with different hashes for the same version.
-    let env2 = TestEnvironment::new()?;
-    let incompatible_apis = versioned_health_incompat_apis()?;
-    env2.generate_documents(&incompatible_apis)?;
-
-    // Ensure that the v3 documents are actually different between env and env2.
-    let env_path = env
-        .find_versioned_document_path("versioned-health", "3.0.0")?
-        .expect("should find v3.0.0 document");
-    let env2_path = env2
-        .find_versioned_document_path("versioned-health", "3.0.0")?
-        .expect("should find v3.0.0 document");
-    assert_ne!(
-        env_path, env2_path,
-        "incompatible APIs should lead to different hashes"
-    );
-
-    // Copy env2's document into env's documents directory. Now env has two
-    // files for version 3.0.0.
-    let src = env2.workspace_root().join(&env2_path);
-    let dst = env
-        .documents_dir()
-        .join("versioned-health")
-        .join(env2_path.file_name().unwrap());
-    std::fs::copy(&src, &dst)
-        .with_context(|| format!("failed to copy {} to {}", src, dst))?;
-
-    // Diff should fail because there are two local files for the same version.
-    let result = env.get_diff_output(&apis);
-    let err = result.expect_err("diff should fail with duplicate local files");
-    let err_msg = err.to_string();
-    assert!(
-        err_msg.contains("found 2 local files for the same version"),
-        "error should mention duplicate files, got: {}",
-        err_msg
-    );
-    assert!(
-        err_msg.contains("versioned-health") && err_msg.contains("3.0.0"),
-        "error should identify the API and version, got: {}",
-        err_msg
-    );
 
     Ok(())
 }
