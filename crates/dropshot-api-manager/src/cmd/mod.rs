@@ -9,5 +9,6 @@ pub mod dispatch;
 // subcommands
 pub(crate) mod check;
 mod debug;
+pub(crate) mod diff;
 mod generate;
 mod list;
