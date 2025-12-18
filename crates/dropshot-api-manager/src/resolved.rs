@@ -177,6 +177,20 @@ pub enum Problem<'a> {
     BlessedVersionBroken { compatibility_issues: Vec<ApiCompatIssue> },
 
     #[error(
+        "For the latest blessed version, the OpenAPI document generated from \
+         the current code is wire-compatible but not bytewise \
+         identical to the blessed document. This implies one or more \
+         trivial changes such as type renames or documentation updates. \
+         To proceed, bump the API version in the `api_versions!` macro; \
+         unless you're introducing other changes, there's no need to make \
+         changes to the API itself."
+    )]
+    BlessedLatestVersionBytewiseMismatch {
+        blessed: &'a BlessedApiSpecFile,
+        generated: &'a GeneratedApiSpecFile,
+    },
+
+    #[error(
         "No local OpenAPI document was found for this lockstep API.  This is \
          only expected if you're adding a new lockstep API.  This tool can \
          generate the file for you."
@@ -281,6 +295,7 @@ impl<'a> Problem<'a> {
             }
             Problem::BlessedVersionCompareError { .. } => None,
             Problem::BlessedVersionBroken { .. } => None,
+            Problem::BlessedLatestVersionBytewiseMismatch { .. } => None,
             Problem::LockstepMissingLocal { generated }
             | Problem::LockstepStale { generated, .. } => {
                 Some(Fix::UpdateLockstepFile { generated })
@@ -945,6 +960,7 @@ fn resolve_api_version_blessed<'a>(
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
+    let is_latest = version.is_latest;
 
     // Validate the generated API document.
     //
@@ -972,6 +988,19 @@ fn resolve_api_version_blessed<'a>(
             problems.push(Problem::BlessedVersionCompareError { error })
         }
     };
+
+    // For the latest version, also require bytewise equality. This ensures that
+    // trivial changes don't accumulate invisibly. If the generated spec is
+    // semantically equivalent but bytewise different, require a version bump.
+    if is_latest
+        && problems.is_empty()
+        && generated.contents() != blessed.contents()
+    {
+        problems.push(Problem::BlessedLatestVersionBytewiseMismatch {
+            blessed,
+            generated,
+        });
+    }
 
     // Now, there should be at least one local spec that exactly matches the
     // blessed one.

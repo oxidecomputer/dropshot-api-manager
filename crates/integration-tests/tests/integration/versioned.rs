@@ -299,13 +299,14 @@ fn test_blessed_document_lifecycle() -> Result<()> {
     Ok(())
 }
 
-/// Test that API changes require regeneration and recommitting.
+/// Test that trivial changes to the latest blessed version require a version
+/// bump.
 #[test]
-fn test_blessed_api_changes_should_not_do_trivial_updates() -> Result<()> {
+fn test_blessed_api_trivial_changes_fail_for_latest() -> Result<()> {
     let env = TestEnvironment::new()?;
     let apis = versioned_health_apis()?;
 
-    // Generate and commit initial documents.
+    // Generate and commit initial documents (v1, v2, v3).
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
@@ -314,9 +315,50 @@ fn test_blessed_api_changes_should_not_do_trivial_updates() -> Result<()> {
     assert_eq!(result, CheckResult::Success);
 
     // Create a modified API with trivial changes (different title/description).
+    // This affects all versions, including the latest (v3.0.0).
     let modified_apis = versioned_health_trivial_change_apis()?;
 
-    // The check should indicate that *no updates are needed* to the blessed version.
+    // The check should FAIL because the latest version (v3.0.0) has trivial
+    // changes that are semantically equivalent but bytewise different. This
+    // requires a version bump to make the changes visible in PR review.
+    let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
+    assert_eq!(result, CheckResult::Failures);
+
+    Ok(())
+}
+
+/// Test that trivial changes to older (non-latest) blessed versions pass with
+/// semantic equality only.
+#[test]
+fn test_blessed_api_trivial_changes_pass_for_older_versions() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate and commit initial documents (v1, v2, v3).
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Verify initial state is up-to-date.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Create a modified API with trivial changes AND a new version (v4).
+    // The trivial changes affect v1, v2, v3, but v4 is now the latest.
+    let modified_apis = versioned_health_trivial_change_with_new_latest_apis()?;
+
+    // The check should indicate NeedsUpdate because v4 is a new locally-added
+    // version that needs to be generated. Importantly, v1-v3 should pass
+    // despite having trivial changes because they're now older versions
+    // (semantic equality only).
+    let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate the new v4 document.
+    env.generate_documents(&modified_apis)?;
+
+    // Now everything should pass: v1-v3 use semantic equality (pass despite
+    // trivial changes), and v4 uses bytewise equality (passes because it was
+    // just generated).
     let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
     assert_eq!(result, CheckResult::Success);
 
