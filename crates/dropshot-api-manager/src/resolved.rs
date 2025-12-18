@@ -183,7 +183,7 @@ pub enum Problem<'a> {
          trivial changes such as type renames or documentation updates. \
          To proceed, bump the API version in the `api_versions!` macro; \
          unless you're introducing other changes, there's no need to make \
-         changes to the API itself."
+         changes to any endpoints."
     )]
     BlessedLatestVersionBytewiseMismatch {
         blessed: &'a BlessedApiSpecFile,
