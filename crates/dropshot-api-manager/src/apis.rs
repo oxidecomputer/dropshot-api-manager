@@ -100,41 +100,64 @@ impl From<ManagedApiConfig> for ManagedApi {
 }
 
 impl ManagedApi {
+    /// Returns the API identifier.
     pub fn ident(&self) -> &ApiIdent {
         &self.ident
     }
 
+    /// Returns the API versions.
     pub fn versions(&self) -> &Versions {
         &self.versions
     }
 
+    /// Returns the API title.
     pub fn title(&self) -> &'static str {
         self.title
     }
 
+    /// Returns the API metadata.
     pub fn metadata(&self) -> &ManagedApiMetadata {
         &self.metadata
     }
 
+    /// Returns true if the API is lockstep.
     pub fn is_lockstep(&self) -> bool {
         self.versions.is_lockstep()
     }
 
+    /// Returns true if the API is versioned.
     pub fn is_versioned(&self) -> bool {
         self.versions.is_versioned()
     }
 
-    pub fn iter_versioned_versions(
+    /// Allows trivial changes (doc updates, type renames) for the latest
+    /// blessed version without requiring a version bump.
+    ///
+    /// By default, the latest blessed version requires bytewise equality
+    /// between blessed and generated documents. This prevents trivial changes
+    /// from accumulating invisibly. Calling this method allows semantic-only
+    /// checking for all versions, including the latest.
+    pub fn allow_trivial_changes_for_latest(mut self) -> Self {
+        self.allow_trivial_changes_for_latest = true;
+        self
+    }
+
+    /// Returns true if trivial changes are allowed for the latest version.
+    pub fn allows_trivial_changes_for_latest(&self) -> bool {
+        self.allow_trivial_changes_for_latest
+    }
+
+    pub(crate) fn iter_versioned_versions(
         &self,
     ) -> Option<impl Iterator<Item = &SupportedVersion> + '_> {
         self.versions.iter_versioned_versions()
     }
 
-    pub fn iter_versions_semver(&self) -> IterVersionsSemvers<'_> {
+    pub(crate) fn iter_versions_semver(&self) -> IterVersionsSemvers<'_> {
         self.versions.iter_versions_semvers()
     }
 
-    pub fn generate_openapi_doc(
+    pub(crate) fn generate_openapi_doc(
         &self,
         version: &semver::Version,
     ) -> anyhow::Result<OpenAPI> {
@@ -147,7 +170,7 @@ impl ManagedApi {
             .context("generated document is not valid OpenAPI")
     }
 
-    pub fn generate_spec_bytes(
+    pub(crate) fn generate_spec_bytes(
         &self,
         version: &semver::Version,
     ) -> anyhow::Result<Vec<u8>> {
@@ -176,7 +199,7 @@ impl ManagedApi {
         Ok(contents)
     }
 
-    pub fn extra_validation(
+    pub(crate) fn extra_validation(
         &self,
         openapi: &OpenAPI,
         validation_context: ValidationContext<'_>,
@@ -184,22 +207,6 @@ impl ManagedApi {
         if let Some(extra_validation) = self.extra_validation {
             extra_validation(openapi, validation_context);
         }
-    }
-
-    /// Allow trivial changes (doc updates, type renames) for the latest
-    /// blessed version without requiring a version bump.
-    ///
-    /// By default, the latest blessed version requires bytewise equality
-    /// between blessed and generated documents. This prevents trivial changes
-    /// from accumulating invisibly. Calling this method allows semantic-only
-    /// checking for all versions, including the latest.
-    pub fn allow_trivial_changes_for_latest(mut self) -> Self {
-        self.allow_trivial_changes_for_latest = true;
-        self
-    }
-
-    pub(crate) fn allows_trivial_changes_for_latest(&self) -> bool {
-        self.allow_trivial_changes_for_latest
     }
 }
 
