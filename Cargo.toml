@@ -15,7 +15,7 @@ rust-version = "1.85"
 [workspace.lints]
 
 [workspace.dependencies]
-anyhow = "1.0.99"
+anyhow = "1.0.100"
 assert_matches = "1.5.0"
 atomicwrites = "0.4.4"
 camino = "1.2.1"
