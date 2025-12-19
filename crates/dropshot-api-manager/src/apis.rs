@@ -46,9 +46,13 @@ pub struct ManagedApiConfig {
     pub extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 
-/// Used internally to describe an API managed by this tool.
+/// Describes an API managed by the Dropshot API manager.
+///
+/// This type is typically created from a [`ManagedApiConfig`] and can be
+/// further configured using builder methods before being passed to
+/// [`ManagedApis::new`].
 #[derive(Debug)]
-pub(crate) struct ManagedApi {
+pub struct ManagedApi {
     /// The API-specific part of the filename that's used for API descriptions
     ///
     /// This string is sometimes used as an identifier for developers.
@@ -73,6 +77,12 @@ pub(crate) struct ManagedApi {
 
     /// Extra validation to perform on the OpenAPI document, if any.
     extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+
+    /// If true, allow trivial changes (doc updates, type renames) for the
+    /// latest blessed version without requiring version bumps.
+    ///
+    /// Default: false (bytewise check is performed for latest version).
+    allow_trivial_changes_for_latest: bool,
 }
 
 impl From<ManagedApiConfig> for ManagedApi {
@@ -84,6 +94,7 @@ impl From<ManagedApiConfig> for ManagedApi {
             metadata: value.metadata,
             api_description: value.api_description,
             extra_validation: value.extra_validation,
+            allow_trivial_changes_for_latest: false,
         }
     }
 }
@@ -174,6 +185,22 @@ impl ManagedApi {
             extra_validation(openapi, validation_context);
         }
     }
+
+    /// Allow trivial changes (doc updates, type renames) for the latest
+    /// blessed version without requiring a version bump.
+    ///
+    /// By default, the latest blessed version requires bytewise equality
+    /// between blessed and generated documents. This prevents trivial changes
+    /// from accumulating invisibly. Calling this method allows semantic-only
+    /// checking for all versions, including the latest.
+    pub fn allow_trivial_changes_for_latest(mut self) -> Self {
+        self.allow_trivial_changes_for_latest = true;
+        self
+    }
+
+    pub(crate) fn allows_trivial_changes_for_latest(&self) -> bool {
+        self.allow_trivial_changes_for_latest
+    }
 }
 
 /// Describes the Rust-defined configuration for all of the APIs managed by this
@@ -192,10 +219,16 @@ impl ManagedApis {
     /// configurations.
     ///
     /// This is the main entry point for creating a new `ManagedApis` instance.
-    pub fn new(api_list: Vec<ManagedApiConfig>) -> anyhow::Result<ManagedApis> {
+    /// Accepts any iterable of items that can be converted into [`ManagedApi`],
+    /// including `Vec<ManagedApiConfig>` and `Vec<ManagedApi>`.
+    pub fn new<I>(api_list: I) -> anyhow::Result<ManagedApis>
+    where
+        I: IntoIterator,
+        I::Item: Into<ManagedApi>,
+    {
         let mut apis = BTreeMap::new();
         for api in api_list {
-            let api = ManagedApi::from(api);
+            let api = api.into();
             if let Some(old) = apis.insert(api.ident.clone(), api) {
                 bail!("API is defined twice: {:?}", &old.ident);
             }

@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use dropshot_api_manager::{
-    ManagedApis,
+    ManagedApiConfig, ManagedApis,
     test_util::{CheckResult, check_apis_up_to_date},
 };
 use integration_tests::*;
@@ -95,7 +95,7 @@ fn test_lockstep_multiple_apis() -> Result<()> {
 #[test]
 fn test_empty_api_set() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = ManagedApis::new(vec![])?;
+    let apis = ManagedApis::new(Vec::<ManagedApiConfig>::new())?;
 
     env.generate_documents(&apis)?;
 

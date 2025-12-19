@@ -327,6 +327,31 @@ fn test_blessed_api_trivial_changes_fail_for_latest() -> Result<()> {
     Ok(())
 }
 
+/// Test that trivial changes to the latest blessed version pass when the
+/// `allow_trivial_changes_for_latest` option is set.
+#[test]
+fn test_blessed_api_trivial_changes_pass_when_allowed() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    // Generate and commit initial documents (v1, v2, v3).
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Verify initial state is up-to-date.
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Create a modified API with trivial changes AND the option set.
+    let modified_apis = versioned_health_trivial_change_allowed_apis()?;
+
+    // Should pass because the option allows trivial changes for latest.
+    let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
 /// Test that trivial changes to older (non-latest) blessed versions pass with
 /// semantic equality only.
 #[test]

@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use dropshot::{
     HttpError, HttpResponseOk, Path, Query, RequestContext, TypedBody,
 };
-use dropshot_api_manager::{ManagedApiConfig, ManagedApis};
+use dropshot_api_manager::{ManagedApi, ManagedApiConfig, ManagedApis};
 use dropshot_api_manager_types::{
     ManagedApiMetadata, ValidationContext, Versions,
 };
@@ -833,6 +833,33 @@ pub fn versioned_health_trivial_change_apis() -> Result<ManagedApis> {
 
     ManagedApis::new(vec![config])
         .context("failed to create trivial change versioned health ManagedApis")
+}
+
+/// Create versioned health API with trivial changes, but with the
+/// `allow_trivial_changes_for_latest` option set. This should pass the check
+/// because the option allows semantic-only checking for the latest version.
+pub fn versioned_health_trivial_change_allowed_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health::supported_versions(),
+        },
+        // Trivial change: different title.
+        title: "Modified Versioned Health API",
+        metadata: ManagedApiMetadata {
+            // Trivial change: different description.
+            description: Some("A versioned health API with trivial changes"),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![
+        ManagedApi::from(config).allow_trivial_changes_for_latest(),
+    ])
+    .context("failed to create trivial change allowed APIs")
 }
 
 /// Create versioned health API with trivial changes AND a new version (v4).

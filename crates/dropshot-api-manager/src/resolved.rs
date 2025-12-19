@@ -992,7 +992,10 @@ fn resolve_api_version_blessed<'a>(
     // For the latest version, also require bytewise equality. This ensures that
     // trivial changes don't accumulate invisibly. If the generated spec is
     // semantically equivalent but bytewise different, require a version bump.
+    //
+    // This check can be disabled via `allow_trivial_changes_for_latest()`.
     if is_latest
+        && !api.allows_trivial_changes_for_latest()
         && problems.is_empty()
         && generated.contents() != blessed.contents()
     {
