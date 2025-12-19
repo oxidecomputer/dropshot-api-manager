@@ -46,9 +46,13 @@ pub struct ManagedApiConfig {
     pub extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 
-/// Used internally to describe an API managed by this tool.
+/// Describes an API managed by the Dropshot API manager.
+///
+/// This type is typically created from a [`ManagedApiConfig`] and can be
+/// further configured using builder methods before being passed to
+/// [`ManagedApis::new`].
 #[derive(Debug)]
-pub(crate) struct ManagedApi {
+pub struct ManagedApi {
     /// The API-specific part of the filename that's used for API descriptions
     ///
     /// This string is sometimes used as an identifier for developers.
@@ -73,6 +77,12 @@ pub(crate) struct ManagedApi {
 
     /// Extra validation to perform on the OpenAPI document, if any.
     extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+
+    /// If true, allow trivial changes (doc updates, type renames) for the
+    /// latest blessed version without requiring version bumps.
+    ///
+    /// Default: false (bytewise check is performed for latest version).
+    allow_trivial_changes_for_latest: bool,
 }
 
 impl From<ManagedApiConfig> for ManagedApi {
@@ -84,46 +94,70 @@ impl From<ManagedApiConfig> for ManagedApi {
             metadata: value.metadata,
             api_description: value.api_description,
             extra_validation: value.extra_validation,
+            allow_trivial_changes_for_latest: false,
         }
     }
 }
 
 impl ManagedApi {
+    /// Returns the API identifier.
     pub fn ident(&self) -> &ApiIdent {
         &self.ident
     }
 
+    /// Returns the API versions.
     pub fn versions(&self) -> &Versions {
         &self.versions
     }
 
+    /// Returns the API title.
     pub fn title(&self) -> &'static str {
         self.title
     }
 
+    /// Returns the API metadata.
     pub fn metadata(&self) -> &ManagedApiMetadata {
         &self.metadata
     }
 
+    /// Returns true if the API is lockstep.
     pub fn is_lockstep(&self) -> bool {
         self.versions.is_lockstep()
     }
 
+    /// Returns true if the API is versioned.
     pub fn is_versioned(&self) -> bool {
         self.versions.is_versioned()
     }
 
-    pub fn iter_versioned_versions(
+    /// Allows trivial changes (doc updates, type renames) for the latest
+    /// blessed version without requiring a version bump.
+    ///
+    /// By default, the latest blessed version requires bytewise equality
+    /// between blessed and generated documents. This prevents trivial changes
+    /// from accumulating invisibly. Calling this method allows semantic-only
+    /// checking for all versions, including the latest.
+    pub fn allow_trivial_changes_for_latest(mut self) -> Self {
+        self.allow_trivial_changes_for_latest = true;
+        self
+    }
+
+    /// Returns true if trivial changes are allowed for the latest version.
+    pub fn allows_trivial_changes_for_latest(&self) -> bool {
+        self.allow_trivial_changes_for_latest
+    }
+
+    pub(crate) fn iter_versioned_versions(
         &self,
     ) -> Option<impl Iterator<Item = &SupportedVersion> + '_> {
         self.versions.iter_versioned_versions()
     }
 
-    pub fn iter_versions_semver(&self) -> IterVersionsSemvers<'_> {
+    pub(crate) fn iter_versions_semver(&self) -> IterVersionsSemvers<'_> {
         self.versions.iter_versions_semvers()
     }
 
-    pub fn generate_openapi_doc(
+    pub(crate) fn generate_openapi_doc(
         &self,
         version: &semver::Version,
     ) -> anyhow::Result<OpenAPI> {
@@ -136,7 +170,7 @@ impl ManagedApi {
             .context("generated document is not valid OpenAPI")
     }
 
-    pub fn generate_spec_bytes(
+    pub(crate) fn generate_spec_bytes(
         &self,
         version: &semver::Version,
     ) -> anyhow::Result<Vec<u8>> {
@@ -165,7 +199,7 @@ impl ManagedApi {
         Ok(contents)
     }
 
-    pub fn extra_validation(
+    pub(crate) fn extra_validation(
         &self,
         openapi: &OpenAPI,
         validation_context: ValidationContext<'_>,
@@ -192,10 +226,16 @@ impl ManagedApis {
     /// configurations.
     ///
     /// This is the main entry point for creating a new `ManagedApis` instance.
-    pub fn new(api_list: Vec<ManagedApiConfig>) -> anyhow::Result<ManagedApis> {
+    /// Accepts any iterable of items that can be converted into [`ManagedApi`],
+    /// including `Vec<ManagedApiConfig>` and `Vec<ManagedApi>`.
+    pub fn new<I>(api_list: I) -> anyhow::Result<ManagedApis>
+    where
+        I: IntoIterator,
+        I::Item: Into<ManagedApi>,
+    {
         let mut apis = BTreeMap::new();
         for api in api_list {
-            let api = ManagedApi::from(api);
+            let api = api.into();
             if let Some(old) = apis.insert(api.ident.clone(), api) {
                 bail!("API is defined twice: {:?}", &old.ident);
             }

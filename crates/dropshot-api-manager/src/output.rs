@@ -529,6 +529,35 @@ pub fn display_resolution_problems<'a, T>(
             }
         }
 
+        // For BlessedLatestVersionBytewiseMismatch, show a diff between blessed
+        // and generated versions even though there's no fix.
+        if let Problem::BlessedLatestVersionBytewiseMismatch {
+            blessed,
+            generated,
+        } = p
+        {
+            let diff =
+                TextDiff::from_lines(blessed.contents(), generated.contents());
+            let path1 =
+                env.openapi_abs_dir().join(blessed.spec_file_name().path());
+            let path2 =
+                env.openapi_abs_dir().join(generated.spec_file_name().path());
+            let indent = " ".repeat(HEADER_WIDTH + 1);
+            let _ = write_diff(
+                &diff,
+                &path1,
+                &path2,
+                styles,
+                // context_radius: show enough context to understand the changes.
+                3,
+                /* missing_newline_hint */ true,
+                &mut indent_write::io::IndentWriter::new(
+                    &indent,
+                    std::io::stderr(),
+                ),
+            );
+        }
+
         let Some(fix) = p.fix() else {
             continue;
         };

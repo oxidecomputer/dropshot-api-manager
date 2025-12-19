@@ -25,9 +25,10 @@ pub mod versioned {
     use serde::Serialize;
 
     api_versions!([
-        // EXERCISE: Try uncommenting the following line, then running
-        // `cargo example-openapi generate`.
-        // (3, THREE_DOT_OH),
+        // Version 3.0.0 was added to capture bytewise changes to the schema
+        // serialization (e.g., the Number wrapper type being serialized as a
+        // separate schema instead of inlined).
+        (3, THREE_DOT_OH),
         (2, TWO_DOT_OH),
         (1, INITIAL),
     ]);
@@ -77,8 +78,8 @@ pub mod versioned {
     #[derive(Serialize, JsonSchema)]
     struct ThingV2 {
         // Note: this was originally `thing_number: u32`, but a wrapper type was
-        // added afterwards to test out wire-compatible changes to the schema
-        // (which don't require changing the version).
+        // added afterwards to test out wire-compatible changes to the schema.
+        // This trivial change caused THREE_DOT_OH to be generated.
         thing_number: Number,
     }
 

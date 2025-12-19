@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use dropshot::{
     HttpError, HttpResponseOk, Path, Query, RequestContext, TypedBody,
 };
-use dropshot_api_manager::{ManagedApiConfig, ManagedApis};
+use dropshot_api_manager::{ManagedApi, ManagedApiConfig, ManagedApis};
 use dropshot_api_manager_types::{
     ManagedApiMetadata, ValidationContext, Versions,
 };
@@ -521,8 +521,7 @@ pub mod versioned_health_skip_middle {
             rqctx: RequestContext<Self::Context>,
         ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
 
-        /// Get detailed health status (v2+, but only available in v3 since we
-        /// skip v2).
+        /// Get detailed health status (v2+).
         #[endpoint {
             method = GET,
             path = "/health/detailed",
@@ -621,6 +620,64 @@ pub mod versioned_health_incompat {
 
     // Reuse response types from the main versioned_health module for other
     // endpoints.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
+    };
+}
+
+/// Versioned health API with 4 versions (adds v4 to the base API). Used to test
+/// that older versions (v1-v3) pass with semantic equality when v4 is the
+/// latest.
+pub mod versioned_health_with_v4 {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([
+        (4, WITH_ENHANCED_METRICS),
+        (3, WITH_METRICS),
+        (2, WITH_DETAILED_STATUS),
+        (1, INITIAL),
+    ]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+).
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetrics>, HttpError>;
+    }
+
+    // Reuse response types from the main versioned_health module.
     pub use super::versioned_health::{
         DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
     };
@@ -778,6 +835,60 @@ pub fn versioned_health_trivial_change_apis() -> Result<ManagedApis> {
         .context("failed to create trivial change versioned health ManagedApis")
 }
 
+/// Create versioned health API with trivial changes, but with the
+/// `allow_trivial_changes_for_latest` option set. This should pass the check
+/// because the option allows semantic-only checking for the latest version.
+pub fn versioned_health_trivial_change_allowed_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health::supported_versions(),
+        },
+        // Trivial change: different title.
+        title: "Modified Versioned Health API",
+        metadata: ManagedApiMetadata {
+            // Trivial change: different description.
+            description: Some("A versioned health API with trivial changes"),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health::versioned_health_api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![
+        ManagedApi::from(config).allow_trivial_changes_for_latest(),
+    ])
+    .context("failed to create trivial change allowed APIs")
+}
+
+/// Create versioned health API with trivial changes AND a new version (v4).
+/// This allows testing that older versions (v1-v3) pass with semantic equality
+/// even when they have trivial changes, since v4 is now the latest.
+pub fn versioned_health_trivial_change_with_new_latest_apis()
+-> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_with_v4::supported_versions(),
+        },
+        // Trivial change: different title.
+        title: "Modified Versioned Health API",
+        metadata: ManagedApiMetadata {
+            // Trivial change: different description.
+            description: Some("A versioned health API with trivial changes"),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_with_v4::api_mod::stub_api_description,
+        extra_validation: None,
+    };
+
+    ManagedApis::new(vec![config]).context(
+        "failed to create trivial change with new latest versioned health ManagedApis",
+    )
+}
+
 /// Create versioned health API with reduced versions (simulating version
 /// removal).
 pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
@@ -791,7 +902,11 @@ pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
         },
         title: "Versioned Health API",
         metadata: ManagedApiMetadata {
-            description: Some("A versioned health API with reduced versions"),
+            // Use the same description as the original to ensure bytewise
+            // equality for unchanged versions.
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
             ..Default::default()
         },
         api_description:
@@ -816,8 +931,10 @@ pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
         },
         title: "Versioned Health API",
         metadata: ManagedApiMetadata {
+            // Use the same description as the original to ensure bytewise
+            // equality for unchanged versions.
             description: Some(
-                "A versioned health API that skips middle version",
+                "A versioned health API for testing version evolution",
             ),
             ..Default::default()
         },
