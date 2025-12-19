@@ -3,6 +3,20 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+- For versioned APIs, the latest blessed version is now checked for bytewise equality, not just wire compatibility. This prevents trivial changes (such as documentation changes or type renames) from accumulating invisibly.
+
+  The previous behavior can be restored with the `allow_trivial_changes_for_latest` function.
+
+- Validation functions can now be `Fn` closures, not just function pointers.
+
+### Changed
+
+- The optional `extra_validation` argument no longer needs to be specified on `ManagedApiConfig`. Instead, first convert the `ManagedApiConfig` to a `ManagedApi`, then call `extra_validation` on the resulting `ManagedApi`.
+
+- `ManagedApis::new` is changed to accept an iterator over any kind of type that can be converted to `ManagedApi`, including `ManagedApiConfig`.
+
 ## [0.2.4] - 2025-11-13
 
 ### Added
