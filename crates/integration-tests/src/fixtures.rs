@@ -698,7 +698,6 @@ pub fn versioned_health_api() -> ManagedApiConfig {
         },
         api_description:
             versioned_health::versioned_health_api_mod::stub_api_description,
-        extra_validation: None,
     }
 }
 
@@ -717,7 +716,6 @@ pub fn versioned_user_api() -> ManagedApiConfig {
         },
         api_description:
             versioned_user::versioned_user_api_mod::stub_api_description,
-        extra_validation: None,
     }
 }
 
@@ -731,7 +729,6 @@ pub fn lockstep_health_api() -> ManagedApiConfig {
             ..Default::default()
         },
         api_description: health_api_mod::stub_api_description,
-        extra_validation: None,
     }
 }
 
@@ -745,7 +742,6 @@ pub fn lockstep_counter_api() -> ManagedApiConfig {
             ..Default::default()
         },
         api_description: counter_api_mod::stub_api_description,
-        extra_validation: None,
     }
 }
 
@@ -759,7 +755,6 @@ pub fn lockstep_user_api() -> ManagedApiConfig {
             ..Default::default()
         },
         api_description: user_api_mod::stub_api_description,
-        extra_validation: None,
     }
 }
 
@@ -853,7 +848,6 @@ pub fn versioned_health_trivial_change_allowed_apis() -> Result<ManagedApis> {
         },
         api_description:
             versioned_health::versioned_health_api_mod::stub_api_description,
-        extra_validation: None,
     };
 
     ManagedApis::new(vec![
@@ -881,7 +875,6 @@ pub fn versioned_health_trivial_change_with_new_latest_apis()
         },
         api_description:
             versioned_health_with_v4::api_mod::stub_api_description,
-        extra_validation: None,
     };
 
     ManagedApis::new(vec![config]).context(
@@ -911,7 +904,6 @@ pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
         },
         api_description:
             versioned_health_reduced::api_mod::stub_api_description,
-        extra_validation: None,
     };
 
     ManagedApis::new(vec![config])
@@ -940,7 +932,6 @@ pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
         },
         api_description:
             versioned_health_skip_middle::api_mod::stub_api_description,
-        extra_validation: None,
     };
 
     ManagedApis::new(vec![config])
@@ -966,7 +957,6 @@ pub fn versioned_health_incompat_apis() -> Result<ManagedApis> {
         },
         api_description:
             versioned_health_incompat::api_mod::stub_api_description,
-        extra_validation: None,
     };
 
     ManagedApis::new(vec![config])
@@ -1036,8 +1026,8 @@ fn validate_with_extra_file(
     }
 }
 
-pub fn versioned_health_with_validation_api() -> ManagedApiConfig {
-    ManagedApiConfig {
+pub fn versioned_health_with_validation_api() -> ManagedApi {
+    ManagedApi::from(ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
             supported_versions: versioned_health::supported_versions(),
@@ -1051,12 +1041,12 @@ pub fn versioned_health_with_validation_api() -> ManagedApiConfig {
         },
         api_description:
             versioned_health::versioned_health_api_mod::stub_api_description,
-        extra_validation: Some(validate),
-    }
+    })
+    .with_extra_validation(validate)
 }
 
-pub fn versioned_health_with_extra_file_api() -> ManagedApiConfig {
-    ManagedApiConfig {
+pub fn versioned_health_with_extra_file_api() -> ManagedApi {
+    ManagedApi::from(ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
             supported_versions: versioned_health::supported_versions(),
@@ -1070,8 +1060,8 @@ pub fn versioned_health_with_extra_file_api() -> ManagedApiConfig {
         },
         api_description:
             versioned_health::versioned_health_api_mod::stub_api_description,
-        extra_validation: Some(validate_with_extra_file),
-    }
+    })
+    .with_extra_validation(validate_with_extra_file)
 }
 
 pub fn versioned_health_with_validation_apis() -> Result<ManagedApis> {

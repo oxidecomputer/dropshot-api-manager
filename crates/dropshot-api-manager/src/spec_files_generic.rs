@@ -835,7 +835,6 @@ mod test {
                     ..ManagedApiMetadata::default()
                 },
                 api_description: unimplemented_fn,
-                extra_validation: None,
             },
             ManagedApiConfig {
                 ident: "versioned",
@@ -850,7 +849,6 @@ mod test {
                     ..ManagedApiMetadata::default()
                 },
                 api_description: unimplemented_fn,
-                extra_validation: None,
             },
         ];
 

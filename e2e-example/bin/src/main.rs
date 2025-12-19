@@ -54,7 +54,6 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
                 ..ManagedApiMetadata::default()
             },
             api_description: lockstep::lockstep_api_mod::stub_api_description,
-            extra_validation: None,
         },
         // This API is versioned.
         ManagedApiConfig {
@@ -74,7 +73,6 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
                 ..ManagedApiMetadata::default()
             },
             api_description: versioned::versioned_api_mod::stub_api_description,
-            extra_validation: None,
         },
     ];
 
