@@ -12,14 +12,13 @@ use crate::{
     spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
     spec_files_generic::ApiFiles,
     spec_files_local::{LocalApiSpecFile, LocalFiles},
-    validation::{CheckStale, CheckStatus, overwrite_file, validate},
+    validation::{
+        CheckStale, CheckStatus, DynValidationFn, overwrite_file, validate,
+    },
 };
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
-use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, ValidationContext,
-};
-use openapiv3::OpenAPI;
+use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::{Debug, Display},
@@ -651,7 +650,7 @@ fn resolve_orphaned_local_specs<'a>(
 fn resolve_api<'a>(
     env: &'a ResolvedEnv,
     api: &'a ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     api_blessed: Option<&'a ApiFiles<BlessedApiSpecFile>>,
     api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
     api_local: Option<&'a ApiFiles<Vec<LocalApiSpecFile>>>,
@@ -861,7 +860,7 @@ fn resolve_api<'a>(
 fn resolve_api_lockstep<'a>(
     env: &'a ResolvedEnv,
     api: &'a ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
     api_local: Option<&'a ApiFiles<Vec<LocalApiSpecFile>>>,
 ) -> BTreeMap<semver::Version, Resolution<'a>> {
@@ -934,7 +933,7 @@ struct ApiVersion<'a> {
 fn resolve_api_version<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
     blessed: Option<&'a BlessedApiSpecFile>,
     generated: &'a GeneratedApiSpecFile,
@@ -953,7 +952,7 @@ fn resolve_api_version<'a>(
 fn resolve_api_version_blessed<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
     blessed: &'a BlessedApiSpecFile,
     generated: &'a GeneratedApiSpecFile,
@@ -1052,7 +1051,7 @@ fn resolve_api_version_blessed<'a>(
 fn resolve_api_version_local<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
@@ -1093,7 +1092,7 @@ fn resolve_api_version_local<'a>(
 fn validate_generated(
     env: &ResolvedEnv,
     api: &ManagedApi,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
     generated: &GeneratedApiSpecFile,
     problems: &mut Vec<Problem<'_>>,

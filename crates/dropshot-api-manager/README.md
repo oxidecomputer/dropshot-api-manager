@@ -163,7 +163,7 @@ For extra validation on some documents, it's recommended that you put them on th
 
 1. In the API crate, add dependencies on `openapiv3` and `dropshot-api-manager-types`.
 2. Define a function with signature `fn validate_api(spec: &openapiv3::OpenAPI, mut cx: dropshot_api_manager_types::ValidationContext<'_>) which performs the extra validation steps.
-3. In the list of managed APIs, set the `extra_validation` field to this function.
+3. Convert the `ManagedApiConfig` to a `ManagedApi` and call the `with_extra_validation` builder method with this function.
 
 Currently, the validator can do two things:
 

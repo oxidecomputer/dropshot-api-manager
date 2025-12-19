@@ -14,12 +14,16 @@ use dropshot_api_manager_types::{
 use openapiv3::OpenAPI;
 use std::io::Write;
 
+/// A validation function that can be called on an OpenAPI document.
+pub(crate) type DynValidationFn =
+    dyn Fn(&OpenAPI, ValidationContext<'_>) + Send;
+
 pub fn validate(
     env: &ResolvedEnv,
     api: &ManagedApi,
     is_latest: bool,
     is_blessed: Option<bool>,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
     generated: &GeneratedApiSpecFile,
 ) -> anyhow::Result<Vec<(Utf8PathBuf, CheckStatus)>> {
     let openapi = generated.openapi();
@@ -49,7 +53,7 @@ fn validate_generated_openapi_document(
     file_name: &ApiSpecFileName,
     is_latest: bool,
     is_blessed: Option<bool>,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<&DynValidationFn>,
 ) -> anyhow::Result<ValidationResult> {
     let mut validation_context = ValidationContextImpl {
         ident: api.ident().clone(),

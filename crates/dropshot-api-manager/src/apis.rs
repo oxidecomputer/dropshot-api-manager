@@ -1,5 +1,6 @@
 // Copyright 2025 Oxide Computer Company
 
+use crate::validation::DynValidationFn;
 use anyhow::{Context, bail};
 use dropshot::{ApiDescription, ApiDescriptionBuildErrors, StubContext};
 use dropshot_api_manager_types::{
@@ -7,7 +8,10 @@ use dropshot_api_manager_types::{
     ValidationContext, Versions,
 };
 use openapiv3::OpenAPI;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 /// Describes an API managed by the Dropshot API manager.
 ///
@@ -36,14 +40,6 @@ pub struct ManagedApiConfig {
     /// server implementation.
     pub api_description:
         fn() -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors>,
-
-    /// Extra validation to perform on the OpenAPI document, if any.
-    ///
-    /// For versioned APIs, extra validation is performed on *all* versions,
-    /// including blessed ones. You may want to skip performing validation on
-    /// blessed versions, though, because they're immutable. To do so, use
-    /// [`ValidationContext::is_blessed`].
-    pub extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
 }
 
 /// Describes an API managed by the Dropshot API manager.
@@ -51,7 +47,6 @@ pub struct ManagedApiConfig {
 /// This type is typically created from a [`ManagedApiConfig`] and can be
 /// further configured using builder methods before being passed to
 /// [`ManagedApis::new`].
-#[derive(Debug)]
 pub struct ManagedApi {
     /// The API-specific part of the filename that's used for API descriptions
     ///
@@ -76,7 +71,12 @@ pub struct ManagedApi {
         fn() -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors>,
 
     /// Extra validation to perform on the OpenAPI document, if any.
-    extra_validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    ///
+    /// For versioned APIs, extra validation is performed on *all* versions,
+    /// including blessed ones. You may want to skip performing validation on
+    /// blessed versions, though, because they're immutable. To do so, use
+    /// [`ValidationContext::is_blessed`].
+    extra_validation: Option<Box<DynValidationFn>>,
 
     /// If true, allow trivial changes (doc updates, type renames) for the
     /// latest blessed version without requiring version bumps.
@@ -85,15 +85,52 @@ pub struct ManagedApi {
     allow_trivial_changes_for_latest: bool,
 }
 
+impl fmt::Debug for ManagedApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            ident,
+            versions,
+            title,
+            metadata,
+            api_description: _,
+            extra_validation,
+            allow_trivial_changes_for_latest,
+        } = self;
+
+        f.debug_struct("ManagedApi")
+            .field("ident", ident)
+            .field("versions", versions)
+            .field("title", title)
+            .field("metadata", metadata)
+            .field("api_description", &"...")
+            .field(
+                "extra_validation",
+                &extra_validation.as_ref().map(|_| "..."),
+            )
+            .field(
+                "allow_trivial_changes_for_latest",
+                allow_trivial_changes_for_latest,
+            )
+            .finish()
+    }
+}
+
 impl From<ManagedApiConfig> for ManagedApi {
     fn from(value: ManagedApiConfig) -> Self {
+        let ManagedApiConfig {
+            ident,
+            versions,
+            title,
+            metadata,
+            api_description,
+        } = value;
         ManagedApi {
-            ident: ApiIdent::from(value.ident.to_owned()),
-            versions: value.versions,
-            title: value.title,
-            metadata: value.metadata,
-            api_description: value.api_description,
-            extra_validation: value.extra_validation,
+            ident: ApiIdent::from(ident.to_owned()),
+            versions,
+            title,
+            metadata,
+            api_description,
+            extra_validation: None,
             allow_trivial_changes_for_latest: false,
         }
     }
@@ -145,6 +182,20 @@ impl ManagedApi {
     /// Returns true if trivial changes are allowed for the latest version.
     pub fn allows_trivial_changes_for_latest(&self) -> bool {
         self.allow_trivial_changes_for_latest
+    }
+
+    /// Sets extra validation to perform on the OpenAPI document.
+    ///
+    /// For versioned APIs, extra validation is performed on *all* versions,
+    /// including blessed ones. You may want to skip performing validation on
+    /// blessed versions, though, because they're immutable. To do so, use
+    /// [`ValidationContext::is_blessed`].
+    pub fn with_extra_validation<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&OpenAPI, ValidationContext<'_>) + Send + 'static,
+    {
+        self.extra_validation = Some(Box::new(f));
+        self
     }
 
     pub(crate) fn iter_versioned_versions(
@@ -204,7 +255,7 @@ impl ManagedApi {
         openapi: &OpenAPI,
         validation_context: ValidationContext<'_>,
     ) {
-        if let Some(extra_validation) = self.extra_validation {
+        if let Some(extra_validation) = &self.extra_validation {
             extra_validation(openapi, validation_context);
         }
     }
@@ -214,11 +265,22 @@ impl ManagedApi {
 /// tool.
 ///
 /// This is repo-specific state that's passed into the OpenAPI manager.
-#[derive(Debug)]
 pub struct ManagedApis {
     apis: BTreeMap<ApiIdent, ManagedApi>,
     unknown_apis: BTreeSet<ApiIdent>,
-    validation: Option<fn(&OpenAPI, ValidationContext<'_>)>,
+    validation: Option<Box<DynValidationFn>>,
+}
+
+impl fmt::Debug for ManagedApis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { apis, unknown_apis, validation } = self;
+
+        f.debug_struct("ManagedApis")
+            .field("apis", apis)
+            .field("unknown_apis", unknown_apis)
+            .field("validation", &validation.as_ref().map(|_| "..."))
+            .finish()
+    }
 }
 
 impl ManagedApis {
@@ -268,17 +330,17 @@ impl ManagedApis {
     /// This function will be called for each API document. The
     /// [`ValidationContext`] can be used to report errors, as well as extra
     /// files for which the contents need to be compared with those on disk.
-    pub fn with_validation(
-        mut self,
-        validation: fn(&OpenAPI, ValidationContext<'_>),
-    ) -> Self {
-        self.validation = Some(validation);
+    pub fn with_validation<F>(mut self, validation: F) -> Self
+    where
+        F: Fn(&OpenAPI, ValidationContext<'_>) + Send + 'static,
+    {
+        self.validation = Some(Box::new(validation));
         self
     }
 
     /// Returns the validation function for all APIs.
-    pub fn validation(&self) -> Option<fn(&OpenAPI, ValidationContext<'_>)> {
-        self.validation
+    pub(crate) fn validation(&self) -> Option<&DynValidationFn> {
+        self.validation.as_deref()
     }
 
     /// Returns the number of APIs managed by this instance.
