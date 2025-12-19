@@ -1,5 +1,6 @@
 // Copyright 2025 Oxide Computer Company
 
+use crate::validation::DynValidationFn;
 use anyhow::{Context, bail};
 use dropshot::{ApiDescription, ApiDescriptionBuildErrors, StubContext};
 use dropshot_api_manager_types::{
@@ -11,8 +12,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
 };
-
-use crate::validation::DynValidationFn;
 
 /// Describes an API managed by the Dropshot API manager.
 ///
