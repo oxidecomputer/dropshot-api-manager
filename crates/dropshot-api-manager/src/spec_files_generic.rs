@@ -100,6 +100,42 @@ fn parse_versioned_file_name(
 }
 
 /// Attempts to parse the given file basename as an ApiSpecFileName of kind
+/// `VersionedGitRef`.
+///
+/// These look like: `ident-SEMVER-HASH.json.gitref`.
+fn parse_versioned_git_ref_file_name(
+    apis: &ManagedApis,
+    ident: &str,
+    basename: &str,
+) -> Result<ApiSpecFileName, BadVersionedFileName> {
+    // The file name must end with .json.gitref.
+    let json_basename = basename.strip_suffix(".gitref").ok_or_else(|| {
+        BadVersionedFileName::UnexpectedName {
+            ident: ApiIdent::from(ident.to_string()),
+            source: anyhow!("expected .json.gitref suffix"),
+        }
+    })?;
+
+    // Parse the underlying versioned name to get version and hash.
+    let versioned = parse_versioned_file_name(apis, ident, json_basename)?;
+
+    match versioned.kind() {
+        ApiSpecFileNameKind::Versioned { version, hash } => {
+            Ok(ApiSpecFileName::new(
+                versioned.ident().clone(),
+                ApiSpecFileNameKind::VersionedGitRef {
+                    version: version.clone(),
+                    hash: hash.clone(),
+                },
+            ))
+        }
+        other => unreachable!(
+            "parse_versioned_file_name always returns Versioned, found {other:?}"
+        ),
+    }
+}
+
+/// Attempts to parse the given file basename as an ApiSpecFileName of kind
 /// `Lockstep`
 fn parse_lockstep_file_name(
     apis: &ManagedApis,
@@ -195,28 +231,42 @@ impl ApiSpecFile {
                 )
             })?;
 
-        if let ApiSpecFileNameKind::Versioned { version, hash } =
-            spec_file_name.kind()
-        {
-            if *version != parsed_version {
-                bail!(
-                    "file {:?}: version in the file ({}) differs from \
-                     the one in the filename",
-                    spec_file_name.path(),
-                    parsed_version
-                );
-            }
+        match spec_file_name.kind() {
+            ApiSpecFileNameKind::Versioned { version, hash } => {
+                if *version != parsed_version {
+                    bail!(
+                        "file {:?}: version in the file ({}) differs from \
+                         the one in the filename",
+                        spec_file_name.path(),
+                        parsed_version
+                    );
+                }
 
-            let expected_hash = hash_contents(&contents_buf);
-            if expected_hash != *hash {
-                bail!(
-                    "file {:?}: computed hash {:?}, but file name has \
-                     different hash {:?}",
-                    spec_file_name.path(),
-                    expected_hash,
-                    hash
-                );
+                let expected_hash = hash_contents(&contents_buf);
+                if expected_hash != *hash {
+                    bail!(
+                        "file {:?}: computed hash {:?}, but file name has \
+                         different hash {:?}",
+                        spec_file_name.path(),
+                        expected_hash,
+                        hash
+                    );
+                }
             }
+            ApiSpecFileNameKind::VersionedGitRef { version, .. } => {
+                // Git ref files: validate that the version matches, but skip
+                // hash check. The content came from git, so the git ref itself
+                // is the source of truth.
+                if *version != parsed_version {
+                    bail!(
+                        "file {:?}: version in the file ({}) differs from \
+                         the one in the filename",
+                        spec_file_name.path(),
+                        parsed_version
+                    );
+                }
+            }
+            ApiSpecFileNameKind::Lockstep => {}
         }
 
         Ok(ApiSpecFile {
@@ -471,6 +521,46 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
             Err(error) => {
                 self.load_error(
                     anyhow!(error).context(format!("file {}", basename)),
+                );
+                None
+            }
+        }
+    }
+
+    /// Returns an `ApiSpecFileName` for the given versioned git ref file.
+    ///
+    /// On success, this does not load anything into `self`. Callers generally
+    /// invoke `load_contents()` with the returned value after reading the
+    /// git ref contents from git. On failure, warnings or errors will be
+    /// recorded.
+    pub fn versioned_git_ref_file_name(
+        &mut self,
+        ident: &ApiIdent,
+        basename: &str,
+    ) -> Option<ApiSpecFileName> {
+        match parse_versioned_git_ref_file_name(self.apis, ident, basename) {
+            Ok(file_name) => Some(file_name),
+            Err(
+                warning @ (BadVersionedFileName::NoSuchApi
+                | BadVersionedFileName::NotVersioned),
+            ) if T::MISCONFIGURATIONS_ALLOWED => {
+                self.load_warning(
+                    anyhow!(warning)
+                        .context(format!("skipping git ref file {}", basename)),
+                );
+                None
+            }
+            Err(warning @ BadVersionedFileName::UnexpectedName { .. }) => {
+                self.load_warning(
+                    anyhow!(warning)
+                        .context(format!("skipping git ref file {}", basename)),
+                );
+                None
+            }
+            Err(error) => {
+                self.load_error(
+                    anyhow!(error)
+                        .context(format!("git ref file {}", basename)),
                 );
                 None
             }
@@ -817,6 +907,68 @@ mod test {
             &apis,
             "versioned",
             "versioned-bogus-hash",
+        )
+        .unwrap_err();
+        assert_matches!(error, BadVersionedFileName::UnexpectedName { .. });
+    }
+
+    #[test]
+    fn test_parse_name_versioned_git_ref_valid() {
+        let apis = all_apis().unwrap();
+        let name = parse_versioned_git_ref_file_name(
+            &apis,
+            "versioned",
+            "versioned-1.2.3-feedface.json.gitref",
+        )
+        .unwrap();
+        assert_eq!(
+            name,
+            ApiSpecFileName::new(
+                ApiIdent::from("versioned".to_owned()),
+                ApiSpecFileNameKind::VersionedGitRef {
+                    version: Version::new(1, 2, 3),
+                    hash: "feedface".to_owned(),
+                },
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_name_versioned_git_ref_invalid() {
+        let apis = all_apis().unwrap();
+
+        // Wrong suffix - missing .gitref.
+        let error = parse_versioned_git_ref_file_name(
+            &apis,
+            "versioned",
+            "versioned-1.2.3-feedface.json",
+        )
+        .unwrap_err();
+        assert_matches!(error, BadVersionedFileName::UnexpectedName { .. });
+
+        // Unknown API.
+        let error = parse_versioned_git_ref_file_name(
+            &apis,
+            "unknown",
+            "unknown-1.2.3-feedface.json.gitref",
+        )
+        .unwrap_err();
+        assert_matches!(error, BadVersionedFileName::NoSuchApi);
+
+        // Lockstep API (not versioned).
+        let error = parse_versioned_git_ref_file_name(
+            &apis,
+            "lockstep",
+            "lockstep-1.2.3-feedface.json.gitref",
+        )
+        .unwrap_err();
+        assert_matches!(error, BadVersionedFileName::NotVersioned);
+
+        // Bad version in the name.
+        let error = parse_versioned_git_ref_file_name(
+            &apis,
+            "versioned",
+            "versioned-badversion-feedface.json.gitref",
         )
         .unwrap_err();
         assert_matches!(error, BadVersionedFileName::UnexpectedName { .. });

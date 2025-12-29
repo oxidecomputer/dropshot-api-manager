@@ -1075,3 +1075,110 @@ pub fn versioned_health_with_extra_file_apis() -> Result<ManagedApis> {
         "failed to create versioned health with conditional files ManagedApis",
     )
 }
+
+/// Create a versioned health API with git ref storage enabled.
+///
+/// When git ref storage is enabled, older (non-latest) blessed API versions are
+/// stored as `.gitref` files containing a git reference instead of full JSON
+/// files.
+pub fn versioned_health_git_ref_api() -> ManagedApi {
+    ManagedApi::from(versioned_health_api()).use_git_ref_storage()
+}
+
+/// Create versioned health APIs with git ref storage enabled.
+pub fn versioned_health_git_ref_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_git_ref_api()])
+        .context("failed to create versioned health git ref ManagedApis")
+}
+
+/// Create a versioned health API with v4 and git ref storage enabled.
+pub fn versioned_health_with_v4_git_ref_api() -> ManagedApi {
+    ManagedApi::from(ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_with_v4::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_with_v4::api_mod::stub_api_description,
+    })
+    .use_git_ref_storage()
+}
+
+/// Create versioned health APIs with v4 and git ref storage enabled.
+pub fn versioned_health_with_v4_git_ref_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_v4_git_ref_api()]).context(
+        "failed to create versioned health with v4 git ref ManagedApis",
+    )
+}
+
+/// Create a versioned health API with v4 but without git ref storage.
+///
+/// This is used to test conversion from git ref files back to JSON files when
+/// git ref storage is disabled.
+pub fn versioned_health_with_v4_api() -> ManagedApi {
+    ManagedApi::from(ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_with_v4::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_with_v4::api_mod::stub_api_description,
+    })
+}
+
+/// Create versioned health APIs with v4 but without git ref storage.
+///
+/// This is used to test conversion from git ref files back to JSON files when
+/// git ref storage is disabled.
+pub fn versioned_health_with_v4_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_v4_api()])
+        .context("failed to create versioned health with v4 ManagedApis")
+}
+
+/// Create lockstep APIs (for testing that lockstep never uses git ref storage).
+pub fn lockstep_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![lockstep_health_api()])
+        .context("failed to create lockstep ManagedApis")
+}
+
+/// Create a versioned health API with reduced versions (v1, v2 only) and git
+/// ref storage enabled.
+pub fn versioned_health_reduced_git_ref_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            // Use a subset of versions (only 1.0.0 and 2.0.0, not 3.0.0).
+            supported_versions: versioned_health_reduced::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            // Use the same description as the original to ensure bytewise
+            // equality for unchanged versions.
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_reduced::api_mod::stub_api_description,
+    };
+
+    ManagedApis::new(vec![ManagedApi::from(config).use_git_ref_storage()])
+        .context(
+            "failed to create reduced versioned health git ref ManagedApis",
+        )
+}

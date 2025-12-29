@@ -6,13 +6,16 @@
 use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
-    git::{GitRevision, git_ls_tree, git_merge_base_head, git_show_file},
+    git::{
+        CommitHash, GitRef, GitRevision, git_first_commit_for_file,
+        git_ls_tree, git_merge_base_head, git_show_file,
+    },
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
     },
 };
 use anyhow::{anyhow, bail};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::ApiIdent;
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -62,7 +65,33 @@ impl AsRawFiles for BlessedApiSpecFile {
     }
 }
 
-/// Container for OpenAPI documents from the "blessed" source (usually Git)
+/// Git reference information for a blessed file.
+///
+/// This tracks where a blessed file came from in git, so we can create git ref
+/// files that point back to the original content.
+#[derive(Clone, Debug)]
+pub struct BlessedGitRef {
+    /// The git commit hash where this file was blessed.
+    pub commit: CommitHash,
+    /// The path within the repository (relative to repo root).
+    pub path: Utf8PathBuf,
+}
+
+impl BlessedGitRef {
+    /// Convert to a `GitRef` for reading content.
+    pub fn to_git_ref(&self) -> GitRef {
+        GitRef { commit: self.commit.clone(), path: self.path.clone() }
+    }
+}
+
+/// Key for looking up git refs by API and version.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+struct GitRefKey {
+    ident: ApiIdent,
+    version: semver::Version,
+}
+
+/// Container for OpenAPI documents from the "blessed" source (usually Git).
 ///
 /// **Be sure to check for load errors and warnings before using this
 /// structure.**
@@ -70,12 +99,34 @@ impl AsRawFiles for BlessedApiSpecFile {
 /// For more on what's been validated at this point, see
 /// [`ApiSpecFilesBuilder`].
 #[derive(Debug)]
-pub struct BlessedFiles(BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>);
+pub struct BlessedFiles {
+    /// The loaded blessed files.
+    files: BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>,
+    /// Git refs for each blessed file, keyed by (ident, version).
+    git_refs: BTreeMap<GitRefKey, BlessedGitRef>,
+}
 
-NewtypeDeref! {
-    () pub struct BlessedFiles(
-        BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>
-    );
+impl Deref for BlessedFiles {
+    type Target = BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.files
+    }
+}
+
+impl BlessedFiles {
+    /// Returns the git ref for the given API and version, if available.
+    ///
+    /// This is used to create git ref files that point back to the original
+    /// blessed content in git.
+    pub fn git_ref(
+        &self,
+        ident: &ApiIdent,
+        version: &semver::Version,
+    ) -> Option<&BlessedGitRef> {
+        self.git_refs
+            .get(&GitRefKey { ident: ident.clone(), version: version.clone() })
+    }
 }
 
 impl BlessedFiles {
@@ -121,6 +172,8 @@ impl BlessedFiles {
     ) -> anyhow::Result<BlessedFiles> {
         let mut api_files: ApiSpecFilesBuilder<BlessedApiSpecFile> =
             ApiSpecFilesBuilder::new(apis, error_accumulator);
+        let mut git_refs: BTreeMap<GitRefKey, BlessedGitRef> = BTreeMap::new();
+
         let files_found = git_ls_tree(repo_root, commit, directory)?;
         for f in files_found {
             // We should be looking at either a single-component path
@@ -136,38 +189,138 @@ impl BlessedFiles {
             }
 
             // Read the contents. Use "/" rather than "\" on Windows.
-            let file_name = format!("{directory}/{f}");
-            let contents =
-                git_show_file(repo_root, commit, file_name.as_ref())?;
+            let git_path = format!("{directory}/{f}");
+            let contents = git_show_file(repo_root, commit, git_path.as_ref())?;
+
             if parts.len() == 1 {
-                if let Some(file_name) = api_files.lockstep_file_name(parts[0])
+                if let Some(spec_file_name) =
+                    api_files.lockstep_file_name(parts[0])
                 {
-                    api_files.load_contents(file_name, contents);
+                    api_files.load_contents(spec_file_name, contents);
+                    // Lockstep files don't need git refs since they're always
+                    // regenerated.
                 }
             } else if parts.len() == 2 {
                 if let Some(ident) = api_files.versioned_directory(parts[0]) {
                     if ident.versioned_api_is_latest_symlink(parts[1]) {
-                        // This is the "latest" symlink.  We could dereference
+                        // This is the "latest" symlink. We could dereference
                         // it and report it here, but it's not relevant for
                         // anything this tool does, so we don't bother.
                         continue;
                     }
 
-                    if let Some(file_name) =
+                    // Handle .gitref files: read the git ref content, parse
+                    // it, and load the actual JSON content from the referenced
+                    // commit.
+                    if parts[1].ends_with(".json.gitref") {
+                        if let Some(spec_file_name) = api_files
+                            .versioned_git_ref_file_name(&ident, parts[1])
+                        {
+                            // Parse the git ref content to get the referenced
+                            // commit and path.
+                            let git_ref_str =
+                                String::from_utf8_lossy(&contents).to_string();
+                            let git_ref: GitRef = match git_ref_str.parse() {
+                                Ok(g) => g,
+                                Err(err) => {
+                                    api_files.load_error(anyhow!(err).context(
+                                        format!(
+                                            "parsing git ref file {:?}",
+                                            git_path
+                                        ),
+                                    ));
+                                    continue;
+                                }
+                            };
+
+                            // Load the actual JSON content from the git ref.
+                            let json_contents = match git_ref
+                                .read_contents(repo_root)
+                            {
+                                Ok(c) => c,
+                                Err(err) => {
+                                    api_files.load_error(err.context(format!(
+                                        "reading content for git ref {:?}",
+                                        git_path
+                                    )));
+                                    continue;
+                                }
+                            };
+
+                            // Track the git ref for this versioned file. The
+                            // git ref already contains the first commit, so we
+                            // use it directly.
+                            if let Some(version) = spec_file_name.version() {
+                                git_refs.insert(
+                                    GitRefKey {
+                                        ident: ident.clone(),
+                                        version: version.clone(),
+                                    },
+                                    BlessedGitRef {
+                                        commit: git_ref.commit.clone(),
+                                        path: git_ref.path.clone(),
+                                    },
+                                );
+                            }
+
+                            api_files
+                                .load_contents(spec_file_name, json_contents);
+                        }
+                        continue;
+                    }
+
+                    if let Some(spec_file_name) =
                         api_files.versioned_file_name(&ident, parts[1])
                     {
-                        api_files.load_contents(file_name, contents);
+                        // Track the git ref for this versioned file. Use the
+                        // first commit where the file was introduced for a
+                        // stable, canonical reference.
+                        if let Some(version) = spec_file_name.version() {
+                            match git_first_commit_for_file(
+                                repo_root,
+                                commit,
+                                git_path.as_ref(),
+                            ) {
+                                Ok(commit) => {
+                                    git_refs.insert(
+                                        GitRefKey {
+                                            ident: ident.clone(),
+                                            version: version.clone(),
+                                        },
+                                        BlessedGitRef {
+                                            commit,
+                                            path: Utf8PathBuf::from(&git_path),
+                                        },
+                                    );
+                                }
+                                Err(err) => {
+                                    // Log warning but continue - the file
+                                    // exists so we can still load it, we just
+                                    // won't be able to create a git ref.
+                                    api_files.load_warning(err.context(
+                                        format!(
+                                            "finding first commit for {:?}",
+                                            git_path
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+
+                        api_files.load_contents(spec_file_name, contents);
                     }
                 }
             }
         }
 
-        Ok(BlessedFiles::from(api_files))
+        Ok(BlessedFiles { files: api_files.into_map(), git_refs })
     }
 }
 
 impl<'a> From<ApiSpecFilesBuilder<'a, BlessedApiSpecFile>> for BlessedFiles {
     fn from(api_files: ApiSpecFilesBuilder<'a, BlessedApiSpecFile>) -> Self {
-        BlessedFiles(api_files.into_map())
+        // When loading from a directory (e.g., for testing), we don't have
+        // git refs.
+        BlessedFiles { files: api_files.into_map(), git_refs: BTreeMap::new() }
     }
 }

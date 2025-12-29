@@ -172,7 +172,8 @@ impl TestEnvironment {
     }
 
     /// Find the path of a versioned API document for a specific version,
-    /// relative to the workspace root.
+    /// relative to the workspace root. Only matches full JSON files, not git
+    /// ref files.
     pub fn find_versioned_document_path(
         &self,
         api_ident: &str,
@@ -187,7 +188,11 @@ impl TestEnvironment {
 
         let path = files.iter().find_map(|f| {
             let rel_path = rel_path_forward_slashes(f.as_ref());
-            rel_path.starts_with(&pattern).then(|| Utf8PathBuf::from(rel_path))
+            // Only match .json files, not .json.gitref files.
+            (rel_path.starts_with(&pattern)
+                && rel_path.ends_with(".json")
+                && !rel_path.ends_with(".json.gitref"))
+            .then(|| Utf8PathBuf::from(rel_path))
         });
         Ok(path)
     }
@@ -260,6 +265,90 @@ impl TestEnvironment {
         self.read_file(&file_name)
     }
 
+    /// Check if a git ref file exists for a versioned API at a specific
+    /// version.
+    pub fn versioned_git_ref_exists(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Result<bool> {
+        let path = self.find_versioned_git_ref_path(api_ident, version)?;
+        Ok(path.is_some())
+    }
+
+    /// Find the path of a git ref file for a versioned API at a specific
+    /// version, relative to the workspace root.
+    pub fn find_versioned_git_ref_path(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Result<Option<Utf8PathBuf>> {
+        let files = self.list_document_files()?;
+
+        // Git ref files are stored like:
+        // documents/api/api-version-hash.json.gitref.
+        let pattern =
+            format!("documents/{}/{}-{}-", api_ident, api_ident, version);
+
+        let path = files.iter().find_map(|f| {
+            let rel_path = rel_path_forward_slashes(f.as_ref());
+            (rel_path.starts_with(&pattern)
+                && rel_path.ends_with(".json.gitref"))
+            .then(|| Utf8PathBuf::from(rel_path))
+        });
+        Ok(path)
+    }
+
+    /// Read the content of a git ref file for a versioned API.
+    pub fn read_versioned_git_ref(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Result<String> {
+        let path = self
+            .find_versioned_git_ref_path(api_ident, version)?
+            .with_context(|| {
+                format!(
+                    "did not find git ref file for {} v{}",
+                    api_ident, version
+                )
+            })?;
+        self.read_file(&path)
+    }
+
+    /// Check if a git ref file exists for a lockstep API.
+    /// (This should never happen - lockstep APIs don't use git refs.)
+    pub fn lockstep_git_ref_exists(&self, api_ident: &str) -> bool {
+        self.file_exists(format!("documents/{}.json.gitref", api_ident))
+    }
+
+    /// Read the actual content referenced by a git ref file.
+    ///
+    /// This reads the git ref file, parses it to get the commit and path, then
+    /// uses git to retrieve the referenced content.
+    pub fn read_git_ref_content(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Result<String> {
+        let git_ref_content =
+            self.read_versioned_git_ref(api_ident, version)?;
+        let git_ref: dropshot_api_manager::git::GitRef =
+            git_ref_content.parse().with_context(|| {
+                format!(
+                    "failed to parse git ref for {} v{}",
+                    api_ident, version
+                )
+            })?;
+        let content = git_ref.read_contents(&self.workspace_root)?;
+        String::from_utf8(content).with_context(|| {
+            format!(
+                "git ref content for {} v{} is not valid UTF-8",
+                api_ident, version
+            )
+        })
+    }
+
     /// Add files to git staging area.
     pub fn git_add(&self, paths: &[&Utf8Path]) -> Result<()> {
         let mut args = vec!["add"];
@@ -318,6 +407,46 @@ impl TestEnvironment {
             &["rev-parse", "--short", "HEAD"],
         )?;
         Ok(output.trim().to_string())
+    }
+
+    /// Get the current git commit hash (full form).
+    pub fn get_current_commit_hash_full(&self) -> Result<String> {
+        let output = Self::run_git_command(
+            &self.workspace_root,
+            &["rev-parse", "HEAD"],
+        )?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Check if any file matching the given prefix pattern is committed in the
+    /// documents directory.
+    pub fn is_file_committed(&self, prefix: &str) -> Result<bool> {
+        let rel_docs_dir = self
+            .documents_dir
+            .strip_prefix(&self.workspace_root)
+            .context("documents_dir should be under workspace_root")?;
+        let pattern =
+            rel_path_forward_slashes(&format!("{}/{}", rel_docs_dir, prefix));
+        let output = Self::run_git_command(
+            &self.workspace_root,
+            &["ls-tree", "-r", "--name-only", "HEAD"],
+        )?;
+        Ok(output.lines().any(|line| line.starts_with(&pattern)))
+    }
+
+    /// Make an unrelated commit (useful for advancing HEAD without changing
+    /// API documents).
+    pub fn make_unrelated_commit(&self, message: &str) -> Result<()> {
+        // Create or update a dummy file.
+        let dummy_path = self.workspace_root.join("dummy.txt");
+        let content = format!("{}\n{}\n", message, chrono::Utc::now());
+        fs::write(&dummy_path, content)?;
+        Self::run_git_command(&self.workspace_root, &["add", "dummy.txt"])?;
+        Self::run_git_command(
+            &self.workspace_root,
+            &["commit", "-m", message],
+        )?;
+        Ok(())
     }
 
     /// Helper to run git commands in the workspace root.

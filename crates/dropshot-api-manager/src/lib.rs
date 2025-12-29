@@ -12,7 +12,8 @@ mod apis;
 mod cmd;
 mod compatibility;
 mod environment;
-mod git;
+/// Git utilities for accessing files and contents from git history.
+pub mod git;
 mod iter_only;
 mod output;
 mod resolved;

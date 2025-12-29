@@ -6,9 +6,10 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
+    git::GitRef,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
-    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
+    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
     spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
     spec_files_generic::ApiFiles,
     spec_files_local::{LocalApiSpecFile, LocalFiles},
@@ -272,6 +273,27 @@ pub enum Problem<'a> {
         found: &'a ApiSpecFileName,
         link: &'a ApiSpecFileName,
     },
+
+    #[error(
+        "Blessed non-latest version is stored as a full JSON file. This can \
+         be converted to a git ref to save space. Run `generate` to convert it."
+    )]
+    BlessedVersionShouldBeGitRef {
+        local_file: &'a LocalApiSpecFile,
+        git_ref: GitRef,
+    },
+
+    #[error(
+        "Blessed version is stored as a git ref file, but git ref storage is \
+         disabled. Run `generate` to convert it back to a full JSON file."
+    )]
+    GitRefShouldBeJson { local_file: &'a LocalApiSpecFile },
+
+    #[error(
+        "Duplicate local file found: both JSON and git ref versions exist for \
+         this API version. Run `generate` to remove the redundant file."
+    )]
+    DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
 }
 
 impl<'a> Problem<'a> {
@@ -324,6 +346,19 @@ impl<'a> Problem<'a> {
             | Problem::LatestLinkMissing { api_ident, link } => {
                 Some(Fix::UpdateSymlink { api_ident, link })
             }
+            Problem::BlessedVersionShouldBeGitRef { local_file, git_ref } => {
+                Some(Fix::ConvertToGitRef { local_file, git_ref })
+            }
+            Problem::GitRefShouldBeJson { local_file } => {
+                Some(Fix::ConvertToJson { local_file })
+            }
+            Problem::DuplicateLocalFile { local_file } => {
+                Some(Fix::DeleteFiles {
+                    files: DisplayableVec(vec![
+                        local_file.spec_file_name().clone(),
+                    ]),
+                })
+            }
         }
     }
 }
@@ -346,6 +381,15 @@ pub enum Fix<'a> {
     UpdateSymlink {
         api_ident: &'a ApiIdent,
         link: &'a ApiSpecFileName,
+    },
+    /// Convert a full JSON file to a git ref file.
+    ConvertToGitRef {
+        local_file: &'a LocalApiSpecFile,
+        git_ref: &'a GitRef,
+    },
+    /// Convert a git ref file back to a full JSON file.
+    ConvertToJson {
+        local_file: &'a LocalApiSpecFile,
     },
 }
 
@@ -389,6 +433,20 @@ impl Display for Fix<'_> {
             }
             Fix::UpdateSymlink { link, .. } => {
                 writeln!(f, "update symlink to point to {}", link.basename())?;
+            }
+            Fix::ConvertToGitRef { local_file, .. } => {
+                writeln!(
+                    f,
+                    "convert {} to git ref",
+                    local_file.spec_file_name().path()
+                )?;
+            }
+            Fix::ConvertToJson { local_file } => {
+                writeln!(
+                    f,
+                    "convert {} from git ref to JSON",
+                    local_file.spec_file_name().path()
+                )?;
             }
         };
         Ok(())
@@ -463,6 +521,67 @@ impl Fix<'_> {
                 };
                 symlink_file(&target, &path)?;
                 Ok(vec![format!("wrote link {} -> {}", path, target)])
+            }
+            Fix::ConvertToGitRef { local_file, git_ref } => {
+                let json_path = root.join(local_file.spec_file_name().path());
+
+                // Compute the git ref file path by adding .gitref suffix.
+                let git_ref_basename = format!(
+                    "{}.gitref",
+                    local_file.spec_file_name().basename()
+                );
+                let git_ref_path = json_path
+                    .parent()
+                    .ok_or_else(|| anyhow!("cannot get parent directory"))?
+                    .join(&git_ref_basename);
+
+                // Write the git ref file.
+                fs_err::write(&git_ref_path, git_ref.to_string())?;
+
+                // Remove the original JSON file.
+                fs_err::remove_file(&json_path)?;
+
+                Ok(vec![
+                    format!("converted {} to git ref", json_path),
+                    format!("created {}", git_ref_path),
+                ])
+            }
+            Fix::ConvertToJson { local_file } => {
+                let git_ref_path =
+                    root.join(local_file.spec_file_name().path());
+
+                // The local_file already has the contents loaded from git
+                // (that's how git ref files work - they're resolved to their
+                // content when loaded). We just need to write those contents
+                // to a new JSON file.
+                let contents = local_file.contents();
+
+                // Compute the JSON file path by removing the .gitref suffix.
+                let git_ref_basename = local_file.spec_file_name().basename();
+                let json_basename = git_ref_basename
+                    .strip_suffix(".gitref")
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "expected git ref file to end with .gitref: {}",
+                            git_ref_basename
+                        )
+                    })?;
+
+                let json_path = git_ref_path
+                    .parent()
+                    .ok_or_else(|| anyhow!("cannot get parent directory"))?
+                    .join(json_basename);
+
+                // Write the JSON file.
+                fs_err::write(&json_path, contents)?;
+
+                // Remove the git ref file.
+                fs_err::remove_file(&git_ref_path)?;
+
+                Ok(vec![
+                    format!("converted {} from git ref to JSON", git_ref_path),
+                    format!("created {}", json_path),
+                ])
             }
         }
     }
@@ -551,6 +670,8 @@ impl<'a> Resolved<'a> {
                         env,
                         api,
                         apis.validation(),
+                        apis.uses_git_ref_storage(api),
+                        blessed,
                         api_blessed,
                         api_generated,
                         api_local,
@@ -647,10 +768,13 @@ fn resolve_orphaned_local_specs<'a>(
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_api<'a>(
     env: &'a ResolvedEnv,
     api: &'a ManagedApi,
     validation: Option<&DynValidationFn>,
+    use_git_ref_storage: bool,
+    all_blessed: &'a BlessedFiles,
     api_blessed: Option<&'a ApiFiles<BlessedApiSpecFile>>,
     api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
     api_local: Option<&'a ApiFiles<Vec<LocalApiSpecFile>>>,
@@ -685,12 +809,17 @@ fn resolve_api<'a>(
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
 
+                // Look up the git ref for this version.
+                let git_ref = all_blessed.git_ref(api.ident(), &version);
+
                 let resolution = resolve_api_version(
                     env,
                     api,
                     validation,
+                    use_git_ref_storage,
                     ApiVersion { version: &version, is_latest, is_blessed },
                     blessed,
+                    git_ref,
                     generated,
                     local,
                 );
@@ -930,18 +1059,29 @@ struct ApiVersion<'a> {
     is_blessed: Option<bool>,
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_api_version<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
+    use_git_ref_storage: bool,
     version: ApiVersion<'_>,
     blessed: Option<&'a BlessedApiSpecFile>,
+    git_ref: Option<&'a BlessedGitRef>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
     match blessed {
         Some(blessed) => resolve_api_version_blessed(
-            env, api, validation, version, blessed, generated, local,
+            env,
+            api,
+            validation,
+            use_git_ref_storage,
+            version,
+            blessed,
+            git_ref,
+            generated,
+            local,
         ),
         None => resolve_api_version_local(
             env, api, validation, version, generated, local,
@@ -949,12 +1089,15 @@ fn resolve_api_version<'a>(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_api_version_blessed<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
+    use_git_ref_storage: bool,
     version: ApiVersion<'_>,
     blessed: &'a BlessedApiSpecFile,
+    git_ref: Option<&'a BlessedGitRef>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
 ) -> Resolution<'a> {
@@ -1029,12 +1172,22 @@ fn resolve_api_version_blessed<'a>(
         problems.push(Problem::BlessedVersionMissingLocal {
             spec_file_name: blessed.spec_file_name().clone(),
         })
-    } else {
-        // The specs are identified by, among other things, their hash.  Thus,
-        // to have two matching specs (i.e., having the same contents), we'd
-        // have to have a hash collision.  This is conceivable but unlikely
-        // enough that this is more likely a logic bug.
-        assert_eq!(matching.len(), 1);
+    } else if matching.len() > 1 {
+        // With git ref files, we might have both api.json and api.json.gitref
+        // for the same version (same hash). This can happen from interrupted
+        // conversions, manual file manipulation, or switching git ref storage
+        // settings. Mark the redundant file for deletion.
+        for local_file in &matching {
+            let is_git_ref = local_file.spec_file_name().is_git_ref();
+            let prefer_git_ref = use_git_ref_storage && !is_latest;
+            // If we prefer git ref: JSON files are redundant.
+            // If we prefer JSON: git ref files are redundant.
+            let is_redundant =
+                if prefer_git_ref { !is_git_ref } else { is_git_ref };
+            if is_redundant {
+                problems.push(Problem::DuplicateLocalFile { local_file });
+            }
+        }
     }
 
     // There shouldn't be any local specs that match the same version but don't
@@ -1044,6 +1197,35 @@ fn resolve_api_version_blessed<'a>(
             spec_file_name: s.spec_file_name().clone(),
         }
     }));
+
+    // For non-latest blessed versions, check if the local file format matches
+    // the expected format (git ref vs JSON). Skip this if there are duplicates
+    // (both JSON and git ref exist), because the duplicate detection already
+    // handles that case.
+    if matching.len() == 1 {
+        let local_file = matching[0];
+
+        // For non-latest blessed versions with a git ref available, check if
+        // the local file should be converted to a git ref to save space.
+        if use_git_ref_storage && !is_latest {
+            if let Some(git_ref) = git_ref {
+                // If this is a full JSON file (not already a git ref), suggest
+                // conversion.
+                if !local_file.spec_file_name().is_git_ref() {
+                    problems.push(Problem::BlessedVersionShouldBeGitRef {
+                        local_file,
+                        git_ref: git_ref.to_git_ref(),
+                    });
+                }
+            }
+        }
+
+        // Check if git ref files should be converted back to JSON. This
+        // happens when git ref storage is disabled but we have git ref files.
+        if !use_git_ref_storage && local_file.spec_file_name().is_git_ref() {
+            problems.push(Problem::GitRefShouldBeJson { local_file });
+        }
+    }
 
     Resolution::new_blessed(problems)
 }

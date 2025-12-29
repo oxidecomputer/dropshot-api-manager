@@ -24,10 +24,12 @@ pub(crate) fn check_impl(
 
     eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
 
-    let (generated, errors) = generated_source.load(apis, &styles)?;
+    let (generated, errors) =
+        generated_source.load(apis, &styles, &env.repo_root)?;
     display_load_problems(&errors, &styles)?;
 
-    let (local_files, errors) = env.local_source.load(apis, &styles)?;
+    let (local_files, errors) =
+        env.local_source.load(apis, &styles, &env.repo_root)?;
     display_load_problems(&errors, &styles)?;
 
     let (blessed, errors) =

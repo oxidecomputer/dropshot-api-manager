@@ -83,6 +83,13 @@ pub struct ManagedApi {
     ///
     /// Default: false (bytewise check is performed for latest version).
     allow_trivial_changes_for_latest: bool,
+
+    /// Per-API override for git ref storage.
+    ///
+    /// - `None`: use the global setting from `ManagedApis`.
+    /// - `Some(true)`: enable git ref storage for this API.
+    /// - `Some(false)`: disable git ref storage for this API.
+    use_git_ref_storage: Option<bool>,
 }
 
 impl fmt::Debug for ManagedApi {
@@ -95,6 +102,7 @@ impl fmt::Debug for ManagedApi {
             api_description: _,
             extra_validation,
             allow_trivial_changes_for_latest,
+            use_git_ref_storage,
         } = self;
 
         f.debug_struct("ManagedApi")
@@ -111,6 +119,7 @@ impl fmt::Debug for ManagedApi {
                 "allow_trivial_changes_for_latest",
                 allow_trivial_changes_for_latest,
             )
+            .field("use_git_ref_storage", use_git_ref_storage)
             .finish()
     }
 }
@@ -132,6 +141,7 @@ impl From<ManagedApiConfig> for ManagedApi {
             api_description,
             extra_validation: None,
             allow_trivial_changes_for_latest: false,
+            use_git_ref_storage: None,
         }
     }
 }
@@ -182,6 +192,30 @@ impl ManagedApi {
     /// Returns true if trivial changes are allowed for the latest version.
     pub fn allows_trivial_changes_for_latest(&self) -> bool {
         self.allow_trivial_changes_for_latest
+    }
+
+    /// Enables git ref storage for this API, overriding the global setting.
+    ///
+    /// When enabled, older (non-latest) blessed API versions are stored as
+    /// `.gitref` files containing a git reference instead of full JSON files.
+    pub fn use_git_ref_storage(mut self) -> Self {
+        self.use_git_ref_storage = Some(true);
+        self
+    }
+
+    /// Disables git ref storage for this API, overriding the global setting.
+    pub fn disable_git_ref_storage(mut self) -> Self {
+        self.use_git_ref_storage = Some(false);
+        self
+    }
+
+    /// Returns the git ref storage setting for this API.
+    ///
+    /// - `None`: use the global setting.
+    /// - `Some(true)`: git ref storage is enabled for this API.
+    /// - `Some(false)`: git ref storage is disabled for this API.
+    pub fn uses_git_ref_storage(&self) -> Option<bool> {
+        self.use_git_ref_storage
     }
 
     /// Sets extra validation to perform on the OpenAPI document.
@@ -269,16 +303,24 @@ pub struct ManagedApis {
     apis: BTreeMap<ApiIdent, ManagedApi>,
     unknown_apis: BTreeSet<ApiIdent>,
     validation: Option<Box<DynValidationFn>>,
+
+    /// If true, store older blessed API versions as git ref files instead of
+    /// full JSON files. This saves disk space but requires git access to read
+    /// the contents.
+    ///
+    /// The default is false.
+    use_git_ref_storage: bool,
 }
 
 impl fmt::Debug for ManagedApis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { apis, unknown_apis, validation } = self;
+        let Self { apis, unknown_apis, validation, use_git_ref_storage } = self;
 
         f.debug_struct("ManagedApis")
             .field("apis", apis)
             .field("unknown_apis", unknown_apis)
             .field("validation", &validation.as_ref().map(|_| "..."))
+            .field("use_git_ref_storage", use_git_ref_storage)
             .finish()
     }
 }
@@ -307,6 +349,7 @@ impl ManagedApis {
             apis,
             unknown_apis: BTreeSet::new(),
             validation: None,
+            use_git_ref_storage: false,
         })
     }
 
@@ -341,6 +384,28 @@ impl ManagedApis {
     /// Returns the validation function for all APIs.
     pub(crate) fn validation(&self) -> Option<&DynValidationFn> {
         self.validation.as_deref()
+    }
+
+    /// Enables git ref storage for older blessed API versions.
+    ///
+    /// When enabled, older (non-latest) blessed API versions are stored as
+    /// `.gitref` files containing a git reference instead of full JSON files.
+    /// This saves disk space but requires git access to read the contents.
+    ///
+    /// Individual APIs can override this setting using
+    /// [`ManagedApi::use_git_ref_storage`] or
+    /// [`ManagedApi::disable_git_ref_storage`].
+    pub fn with_git_ref_storage(mut self) -> Self {
+        self.use_git_ref_storage = true;
+        self
+    }
+
+    /// Returns true if git ref storage is enabled for the given API.
+    ///
+    /// This checks the per-API setting first, falling back to the global
+    /// setting if not specified.
+    pub(crate) fn uses_git_ref_storage(&self, api: &ManagedApi) -> bool {
+        api.uses_git_ref_storage().unwrap_or(self.use_git_ref_storage)
     }
 
     /// Returns the number of APIs managed by this instance.
