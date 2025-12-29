@@ -276,7 +276,8 @@ pub enum Problem<'a> {
 
     #[error(
         "Blessed non-latest version is stored as a full JSON file. This can \
-         be converted to a git ref to save space. Run `generate` to convert it."
+         be converted to a git ref to save space. This tool can perform the \
+         conversion for you."
     )]
     BlessedVersionShouldBeGitRef {
         local_file: &'a LocalApiSpecFile,
@@ -285,13 +286,13 @@ pub enum Problem<'a> {
 
     #[error(
         "Blessed version is stored as a git ref file, but git ref storage is \
-         disabled. Run `generate` to convert it back to a full JSON file."
+         disabled. This tool can perform the conversion for you."
     )]
     GitRefShouldBeJson { local_file: &'a LocalApiSpecFile },
 
     #[error(
         "Duplicate local file found: both JSON and git ref versions exist for \
-         this API version. Run `generate` to remove the redundant file."
+         this API version. This tool can remove the redundant file for you."
     )]
     DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
 }
