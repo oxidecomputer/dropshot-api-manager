@@ -69,18 +69,44 @@ impl AsRawFiles for BlessedApiSpecFile {
 ///
 /// This tracks where a blessed file came from in git, so we can create git ref
 /// files that point back to the original content.
+///
+/// For `.gitref` files, the commit is already known from parsing the file. For
+/// JSON files, the commit is computed lazily to avoid slow `git log` calls when
+/// git ref storage is disabled.
 #[derive(Clone, Debug)]
-pub struct BlessedGitRef {
-    /// The git commit hash where this file was blessed.
-    pub commit: CommitHash,
-    /// The path within the repository (relative to repo root).
-    pub path: Utf8PathBuf,
+pub enum BlessedGitRef {
+    /// Already known (from parsing a `.gitref` file).
+    Known {
+        /// The git commit hash where this file was blessed.
+        commit: CommitHash,
+        /// The path within the repository (relative to repo root).
+        path: Utf8PathBuf,
+    },
+    /// Needs computation (for JSON files that might need conversion).
+    Lazy {
+        /// The git revision to search within (typically the merge-base).
+        revision: GitRevision,
+        /// The path within the repository (relative to repo root).
+        path: Utf8PathBuf,
+    },
 }
 
 impl BlessedGitRef {
     /// Convert to a `GitRef` for reading content.
-    pub fn to_git_ref(&self) -> GitRef {
-        GitRef { commit: self.commit.clone(), path: self.path.clone() }
+    ///
+    /// For `Known` variants, this is a simple conversion. For `Lazy` variants,
+    /// this calls `git log` to find the first commit that introduced the file.
+    pub fn to_git_ref(&self, repo_root: &Utf8Path) -> anyhow::Result<GitRef> {
+        match self {
+            BlessedGitRef::Known { commit, path } => {
+                Ok(GitRef { commit: commit.clone(), path: path.clone() })
+            }
+            BlessedGitRef::Lazy { revision, path } => {
+                let commit =
+                    git_first_commit_for_file(repo_root, revision, path)?;
+                Ok(GitRef { commit, path: path.clone() })
+            }
+        }
     }
 }
 
@@ -256,7 +282,7 @@ impl BlessedFiles {
                                         ident: ident.clone(),
                                         version: version.clone(),
                                     },
-                                    BlessedGitRef {
+                                    BlessedGitRef::Known {
                                         commit: git_ref.commit.clone(),
                                         path: git_ref.path.clone(),
                                     },
@@ -272,39 +298,20 @@ impl BlessedFiles {
                     if let Some(spec_file_name) =
                         api_files.versioned_file_name(&ident, parts[1])
                     {
-                        // Track the git ref for this versioned file. Use the
-                        // first commit where the file was introduced for a
-                        // stable, canonical reference.
+                        // Track the git ref for this versioned file. Use Lazy
+                        // so the first commit is only computed when needed
+                        // (i.e., when git ref storage is enabled).
                         if let Some(version) = spec_file_name.version() {
-                            match git_first_commit_for_file(
-                                repo_root,
-                                commit,
-                                git_path.as_ref(),
-                            ) {
-                                Ok(commit) => {
-                                    git_refs.insert(
-                                        GitRefKey {
-                                            ident: ident.clone(),
-                                            version: version.clone(),
-                                        },
-                                        BlessedGitRef {
-                                            commit,
-                                            path: Utf8PathBuf::from(&git_path),
-                                        },
-                                    );
-                                }
-                                Err(err) => {
-                                    // Log warning but continue - the file
-                                    // exists so we can still load it, we just
-                                    // won't be able to create a git ref.
-                                    api_files.load_warning(err.context(
-                                        format!(
-                                            "finding first commit for {:?}",
-                                            git_path
-                                        ),
-                                    ));
-                                }
-                            }
+                            git_refs.insert(
+                                GitRefKey {
+                                    ident: ident.clone(),
+                                    version: version.clone(),
+                                },
+                                BlessedGitRef::Lazy {
+                                    revision: commit.clone(),
+                                    path: Utf8PathBuf::from(&git_path),
+                                },
+                            );
                         }
 
                         api_files.load_contents(spec_file_name, contents);

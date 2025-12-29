@@ -1209,14 +1209,20 @@ fn resolve_api_version_blessed<'a>(
         // For non-latest blessed versions with a git ref available, check if
         // the local file should be converted to a git ref to save space.
         if use_git_ref_storage && !is_latest {
-            if let Some(git_ref) = git_ref {
+            if let Some(blessed_git_ref) = git_ref {
                 // If this is a full JSON file (not already a git ref), suggest
                 // conversion.
                 if !local_file.spec_file_name().is_git_ref() {
-                    problems.push(Problem::BlessedVersionShouldBeGitRef {
-                        local_file,
-                        git_ref: git_ref.to_git_ref(),
-                    });
+                    // Computing the git ref may fail (e.g., if the file was
+                    // never committed). In that case, skip the suggestion.
+                    if let Ok(git_ref) =
+                        blessed_git_ref.to_git_ref(&env.repo_root)
+                    {
+                        problems.push(Problem::BlessedVersionShouldBeGitRef {
+                            local_file,
+                            git_ref,
+                        });
+                    }
                 }
             }
         }
