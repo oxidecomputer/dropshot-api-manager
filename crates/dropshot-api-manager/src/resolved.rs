@@ -800,8 +800,6 @@ fn resolve_api<'a>(
             .next_back()
             .expect("versioned API has at least one version");
 
-        // Compute the birth commit status of the latest version. This is used
-        // to decide whether to suggest git ref conversion for older versions.
         let latest_first_commit = {
             let latest_is_blessed = api_blessed
                 .is_some_and(|b| b.versions().contains_key(latest_version));
