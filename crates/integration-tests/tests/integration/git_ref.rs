@@ -7,7 +7,10 @@
 //! of full JSON files. The content is retrieved via `git show` at runtime.
 
 use anyhow::Result;
-use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
+use dropshot_api_manager::{
+    git::GitRef,
+    test_util::{CheckResult, check_apis_up_to_date},
+};
 use integration_tests::*;
 
 /// Test that git ref conversion happens when adding a new version.
@@ -173,14 +176,9 @@ fn test_git_ref_read_contents_matches_original() -> Result<()> {
         "gitref should contain a colon separator"
     );
 
-    // Parse the git ref to verify its format.
-    let git_ref: dropshot_api_manager::git::GitRef =
-        git_ref_content.parse().expect("gitref should parse correctly");
-
-    // Commit is a validated CommitHash, so it's guaranteed to be 40 or 64
-    // lowercase hex chars. Just check that it's not empty.
-    assert!(!git_ref.commit.as_str().is_empty(), "commit should not be empty");
-    // Path should reference the versioned-health directory.
+    let git_ref = git_ref_content
+        .parse::<GitRef>()
+        .expect("gitref should parse correctly");
     assert!(
         git_ref.path.as_str().contains("versioned-health"),
         "path should reference versioned-health"
@@ -190,7 +188,6 @@ fn test_git_ref_read_contents_matches_original() -> Result<()> {
         "path should contain version 1.0.0"
     );
 
-    // Read the content via the git interface and verify it matches.
     let git_ref_v1_content =
         env.read_git_ref_content("versioned-health", "1.0.0")?;
     assert_eq!(
@@ -202,12 +199,15 @@ fn test_git_ref_read_contents_matches_original() -> Result<()> {
 }
 
 /// Test that the latest version is never converted to a git ref.
+///
+/// Also tests that non-latest versions sharing the same birth commit as
+/// the latest are NOT converted (no deduplication benefit).
 #[test]
 fn test_latest_version_not_converted() -> Result<()> {
     let env = TestEnvironment::new()?;
     let apis = versioned_health_git_ref_apis()?;
 
-    // Generate and commit.
+    // Generate and commit v1, v2, v3 in a single commit.
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
@@ -224,14 +224,23 @@ fn test_latest_version_not_converted() -> Result<()> {
         "v3 should not be a git ref"
     );
 
-    // v1 and v2 are non-latest blessed versions, they should be converted.
+    // v1 and v2 share the same birth commit as v3, so they should NOT
+    // be converted to git refs (no deduplication benefit).
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_local_document_exists("versioned-health", "1.0.0")?,
+        "v1 should remain as JSON (same birth commit as latest)"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
+        env.versioned_local_document_exists("versioned-health", "2.0.0")?,
+        "v2 should remain as JSON (same birth commit as latest)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should not be a git ref"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should not be a git ref"
     );
 
     Ok(())
@@ -265,30 +274,149 @@ fn test_lockstep_never_converted_to_git_ref() -> Result<()> {
     Ok(())
 }
 
-/// Test that check reports fixable problems when files can be converted.
+/// Test that check does NOT report convertible files when all versions
+/// share the same birth commit.
+///
+/// This is a regression test for the bug where check would fail immediately
+/// after multiple versions were added in a single commit.
 #[test]
-fn test_check_reports_convertible_files() -> Result<()> {
+fn test_check_passes_when_same_birth_commit() -> Result<()> {
     let env = TestEnvironment::new()?;
     let apis = versioned_health_git_ref_apis()?;
 
-    // Generate and commit.
+    // Generate and commit v1, v2, v3 in a single commit.
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
-    // Check should pass initially (v3 is latest, so v1/v2 will be converted but
-    // since we generated with git refs enabled, they're already converted). Let
-    // me re-generate and commit to reset the state...
-
-    // Actually, since git ref conversion happens during generate, check should
-    // return Success after a full generate+commit cycle.
+    // Check should pass - no conversion should be suggested because all
+    // versions share the same birth commit as the latest (v3).
     let result = check_apis_up_to_date(env.environment(), &apis)?;
-    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        result,
+        CheckResult::Success,
+        "check should pass when all versions share the same birth commit"
+    );
 
-    // Run generate to convert the files.
+    Ok(())
+}
+
+/// Test that git ref conversion IS suggested when a new version is added.
+///
+/// When the latest supported version is not blessed (being added locally),
+/// all existing blessed versions should be converted to git refs, regardless
+/// of whether they share birth commits with each other.
+#[test]
+fn test_conversion_when_adding_new_version() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Generate and commit v1, v2, v3 in a single commit.
+    let apis = versioned_health_git_ref_apis()?;
     env.generate_documents(&apis)?;
+    env.commit_documents()?;
+    let first_commit = env.get_current_commit_hash_full()?;
 
-    // Now check should pass.
+    // Check should pass (all same birth commit).
     let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Now add v4. This makes v1, v2, v3 all candidates for conversion.
+    let extended_apis = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&extended_apis)?;
+
+    // v1, v2, v3 should all be converted to git refs.
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be converted to git ref when adding v4"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should be converted to git ref when adding v4"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should be converted to git ref when adding v4"
+    );
+
+    // All git refs should point to the same commit (first_commit).
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        let git_ref_content =
+            env.read_versioned_git_ref("versioned-health", version)?;
+        let commit = git_ref_content.trim().split(':').next().unwrap();
+        assert_eq!(
+            commit, first_commit,
+            "v{} git ref should point to the original commit",
+            version
+        );
+    }
+
+    // v4 should be JSON (it's the new latest).
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
+        "v4 should be JSON"
+    );
+
+    Ok(())
+}
+
+/// Test that only versions with different birth commits are converted.
+///
+/// When the latest is blessed, only versions from earlier commits should
+/// be converted. Versions sharing the same birth commit as latest should
+/// remain as JSON.
+#[test]
+fn test_mixed_birth_commits_selective_conversion() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Use APIs WITHOUT git ref storage initially, so we can commit v1, v2, v3
+    // as JSON files from different commits.
+
+    // First commit: v1, v2 (no git ref storage).
+    let v1_v2_no_git_ref = versioned_health_reduced_apis()?;
+    env.generate_documents(&v1_v2_no_git_ref)?;
+    env.commit_documents()?;
+    let first_commit = env.get_current_commit_hash_full()?;
+
+    // Second commit: add v3 (still no git ref storage).
+    let v1_v2_v3_no_git_ref = versioned_health_apis()?;
+    env.generate_documents(&v1_v2_v3_no_git_ref)?;
+    env.commit_documents()?;
+    let second_commit = env.get_current_commit_hash_full()?;
+
+    assert_ne!(first_commit, second_commit);
+
+    // All versions should be JSON files at this point.
+    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
+
+    // Now check WITH git ref storage enabled. v3 is latest (blessed, from
+    // second_commit). v1, v2 are from first_commit (different from v3).
+    // v1 and v2 should be suggested for conversion.
+    let v1_v2_v3_git_ref = versioned_health_git_ref_apis()?;
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_ref)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should suggest converting v1, v2 (different birth commit)"
+    );
+
+    // Run generate to perform the conversion.
+    env.generate_documents(&v1_v2_v3_git_ref)?;
+
+    // v1, v2 should now be git refs pointing to first_commit.
+    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
+
+    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_ref.trim().split(':').next().unwrap();
+    assert_eq!(v1_commit, first_commit);
+
+    // v3 should remain as JSON (it's the latest).
+    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
+    assert!(!env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+
+    // Check should now pass.
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_ref)?;
     assert_eq!(result, CheckResult::Success);
 
     Ok(())

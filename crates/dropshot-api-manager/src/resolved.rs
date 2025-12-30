@@ -6,7 +6,7 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::GitRef,
+    git::{CommitHash, GitRef},
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
@@ -276,8 +276,8 @@ pub enum Problem<'a> {
 
     #[error(
         "Blessed non-latest version is stored as a full JSON file. This can \
-         be converted to a git ref to save space. This tool can perform the \
-         conversion for you."
+         be converted to a git ref. This tool can perform the conversion for \
+         you."
     )]
     BlessedVersionShouldBeGitRef {
         local_file: &'a LocalApiSpecFile,
@@ -792,6 +792,36 @@ fn resolve_api<'a>(
             None,
         )
     } else {
+        // Find the latest supported version (highest semver).
+        let latest_version = api
+            .iter_versions_semver()
+            .next_back()
+            .expect("versioned API has at least one version");
+
+        // Compute the birth commit status of the latest version. This is used
+        // to decide whether to suggest git ref conversion for older versions.
+        let latest_first_commit = {
+            let latest_is_blessed = api_blessed
+                .is_some_and(|b| b.versions().contains_key(latest_version));
+
+            if !latest_is_blessed {
+                LatestFirstCommit::NotBlessed
+            } else {
+                // The latest version is blessed. Try to find its first commit.
+                match all_blessed
+                    .git_ref(api.ident(), latest_version)
+                    .and_then(|gr| {
+                        // TODO: report errors while fetching the git ref.
+                        gr.to_git_ref(&env.repo_root).ok()
+                    })
+                    .map(|r| r.commit)
+                {
+                    Some(commit) => LatestFirstCommit::Blessed(commit),
+                    None => LatestFirstCommit::BlessedError,
+                }
+            }
+        };
+
         let by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
             // Reverse the order of versions: they are stored in sorted order,
@@ -823,6 +853,7 @@ fn resolve_api<'a>(
                     git_ref,
                     generated,
                     local,
+                    latest_first_commit,
                 );
 
                 (version, resolution)
@@ -1071,6 +1102,7 @@ fn resolve_api_version<'a>(
     git_ref: Option<&'a BlessedGitRef>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
+    latest_first_commit: LatestFirstCommit,
 ) -> Resolution<'a> {
     match blessed {
         Some(blessed) => resolve_api_version_blessed(
@@ -1083,6 +1115,7 @@ fn resolve_api_version<'a>(
             git_ref,
             generated,
             local,
+            latest_first_commit,
         ),
         None => resolve_api_version_local(
             env, api, validation, version, generated, local,
@@ -1101,6 +1134,7 @@ fn resolve_api_version_blessed<'a>(
     git_ref: Option<&'a BlessedGitRef>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
+    latest_first_commit: LatestFirstCommit,
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
     let is_latest = version.is_latest;
@@ -1207,21 +1241,28 @@ fn resolve_api_version_blessed<'a>(
         let local_file = matching[0];
 
         // For non-latest blessed versions with a git ref available, check if
-        // the local file should be converted to a git ref to save space.
+        // the local file should be converted to a git ref.
         if use_git_ref_storage && !is_latest {
             if let Some(blessed_git_ref) = git_ref {
-                // If this is a full JSON file (not already a git ref), suggest
-                // conversion.
                 if !local_file.spec_file_name().is_git_ref() {
-                    // Computing the git ref may fail (e.g., if the file was
-                    // never committed). In that case, skip the suggestion.
-                    if let Ok(git_ref) =
+                    // Computing the git ref might fail (e.g., in a shallow
+                    // clone). In that case, skip the suggestion.
+                    if let Ok(current_git_ref) =
                         blessed_git_ref.to_git_ref(&env.repo_root)
                     {
-                        problems.push(Problem::BlessedVersionShouldBeGitRef {
-                            local_file,
-                            git_ref,
-                        });
+                        let should_suggest = should_suggest_git_ref_conversion(
+                            latest_first_commit,
+                            current_git_ref.commit,
+                        );
+
+                        if should_suggest {
+                            problems.push(
+                                Problem::BlessedVersionShouldBeGitRef {
+                                    local_file,
+                                    git_ref: current_git_ref,
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -1318,9 +1359,65 @@ fn validate_generated(
     }
 }
 
+/// Describes the first commit for the latest version.
+///
+/// Used to decide whether to suggest git ref conversion for older versions.
+/// The decision table is:
+///
+/// | status              | suggest conversion? |
+/// |---------------------|---------------------|
+/// | NotBlessed          | yes (always)        |
+/// | Blessed(same)       | no                  |
+/// | Blessed(different)  | yes                 |
+/// | BlessedError        | no (safe fallback)  |
+#[derive(Clone, Copy, Debug)]
+enum LatestFirstCommit {
+    /// The latest version is not blessed (i.e. a new version is being added).
+    /// All existing blessed versions should be converted to git refs.
+    NotBlessed,
+
+    /// The latest version is blessed and was first added in this commit.
+    /// Only convert versions with a different first commit.
+    Blessed(CommitHash),
+
+    /// The latest version is blessed, but we couldn't determine its first
+    /// commit (e.g., `git log` failed in a shallow clone). The only option is
+    /// to not suggest conversions.
+    BlessedError,
+}
+
+/// Returns true if we should suggest converting a blessed version to a git ref,
+/// assuming that git ref storage is enabled.
+fn should_suggest_git_ref_conversion(
+    latest: LatestFirstCommit,
+    first_commit: CommitHash,
+) -> bool {
+    match latest {
+        LatestFirstCommit::NotBlessed => {
+            // The latest version is not blessed. This means that a new version
+            // is being added, so we should always convert blessed versions to
+            // git refs.
+            true
+        }
+
+        LatestFirstCommit::Blessed(latest_first_commit) => {
+            // The latest version is blessed. Only suggest conversions if the
+            // version's first commit is different from the latest version's
+            // first commit.
+            first_commit != latest_first_commit
+        }
+
+        LatestFirstCommit::BlessedError => {
+            // The latest version is blessed, but an error occurred while
+            // determining its first commit.
+            false
+        }
+    }
+}
+
 #[cfg(test)]
-mod test {
-    use super::DisplayableVec;
+mod tests {
+    use super::*;
 
     #[test]
     fn test_displayable_vec() {
@@ -1332,5 +1429,46 @@ mod test {
 
         let v = DisplayableVec(vec![8, 12, 14]);
         assert_eq!(v.to_string(), "8, 12, 14");
+    }
+
+    #[test]
+    fn test_should_suggest_git_ref_conversion() {
+        let current = commit(COMMIT_A);
+
+        assert!(
+            should_suggest_git_ref_conversion(
+                LatestFirstCommit::NotBlessed,
+                current
+            ),
+            "latest NotBlessed => always suggest conversion"
+        );
+
+        let latest = LatestFirstCommit::Blessed(commit(COMMIT_A));
+        assert!(
+            !should_suggest_git_ref_conversion(latest, current),
+            "latest Blessed with same commit => do not suggest conversion"
+        );
+
+        let latest = LatestFirstCommit::Blessed(commit(COMMIT_B));
+        assert!(
+            should_suggest_git_ref_conversion(latest, current),
+            "latest Blessed with different commit => suggest conversion"
+        );
+
+        assert!(
+            !should_suggest_git_ref_conversion(
+                LatestFirstCommit::BlessedError,
+                current
+            ),
+            "latest BlessedUnknown => do not suggest conversion"
+        );
+    }
+
+    // Test commit hashes.
+    const COMMIT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const COMMIT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn commit(s: &str) -> CommitHash {
+        s.parse().unwrap()
     }
 }

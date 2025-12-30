@@ -28,14 +28,12 @@ NewtypeFrom! { () pub struct GitRevision(String); }
 ///
 /// Use this type when you need to ensure a git reference is a specific commit,
 /// and not a branch name, tag, or other symbolic reference.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CommitHash(String);
-
-impl CommitHash {
-    /// Returns the commit hash as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CommitHash {
+    /// A SHA-1 hash: the one traditionally used in Git.
+    Sha1([u8; 20]),
+    /// A SHA-256 hash, supported by newer versions of Git.
+    Sha256([u8; 32]),
 }
 
 impl FromStr for CommitHash {
@@ -43,37 +41,41 @@ impl FromStr for CommitHash {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let len = s.len();
-        if len != 40 && len != 64 {
-            return Err(CommitHashParseError::InvalidLength(len));
-        }
-
-        for (position, c) in s.chars().enumerate() {
-            if !matches!(c, '0'..='9' | 'a'..='f') {
-                return Err(CommitHashParseError::InvalidCharacter {
-                    position,
-                    character: c,
-                });
+        match len {
+            40 => {
+                let mut bytes = [0; 20];
+                hex::decode_to_slice(s, &mut bytes)
+                    .map_err(CommitHashParseError::InvalidHex)?;
+                Ok(CommitHash::Sha1(bytes))
             }
+            64 => {
+                let mut bytes = [0; 32];
+                hex::decode_to_slice(s, &mut bytes)
+                    .map_err(CommitHashParseError::InvalidHex)?;
+                Ok(CommitHash::Sha256(bytes))
+            }
+            _ => Err(CommitHashParseError::InvalidLength(len)),
         }
-
-        Ok(CommitHash(s.to_owned()))
     }
 }
 
 impl fmt::Display for CommitHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            CommitHash::Sha1(bytes) => hex::encode(bytes).fmt(f),
+            CommitHash::Sha256(bytes) => hex::encode(bytes).fmt(f),
+        }
     }
 }
 
 impl From<CommitHash> for GitRevision {
     fn from(hash: CommitHash) -> Self {
-        GitRevision::from(hash.0)
+        GitRevision::from(hash.to_string())
     }
 }
 
 /// An error that occurs while parsing a commit hash.
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error, PartialEq)]
 #[non_exhaustive]
 pub enum CommitHashParseError {
     /// The commit hash has an invalid length.
@@ -83,17 +85,9 @@ pub enum CommitHashParseError {
     )]
     InvalidLength(usize),
 
-    /// The commit hash contains an invalid character.
-    #[error(
-        "invalid character at position {position}: expected lowercase hex \
-         digit, got {character:?}"
-    )]
-    InvalidCharacter {
-        /// The position of the invalid character (0-indexed).
-        position: usize,
-        /// The invalid character.
-        character: char,
-    },
+    /// The commit hash is not valid hexadecimal.
+    #[error("invalid hexadecimal")]
+    InvalidHex(hex::FromHexError),
 }
 
 /// Given a revision, return its merge base with HEAD
@@ -323,27 +317,18 @@ pub enum GitRefParseError {
 mod tests {
     use super::*;
 
-    // A valid SHA-1 hash for testing (40 lowercase hex chars).
     const VALID_SHA1: &str = "0123456789abcdef0123456789abcdef01234567";
-    // A valid SHA-256 hash for testing (64 lowercase hex chars).
     const VALID_SHA256: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[test]
     fn test_commit_hash_valid() {
-        // SHA-1 (40 chars).
-        let hash: CommitHash = VALID_SHA1.parse().unwrap();
-        assert_eq!(hash.as_str(), VALID_SHA1);
-
-        // SHA-256 (64 chars).
-        let hash: CommitHash = VALID_SHA256.parse().unwrap();
-        assert_eq!(hash.as_str(), VALID_SHA256);
-
-        // Display trait.
         let hash: CommitHash = VALID_SHA1.parse().unwrap();
         assert_eq!(hash.to_string(), VALID_SHA1);
 
-        // Conversion to GitRevision.
+        let hash: CommitHash = VALID_SHA256.parse().unwrap();
+        assert_eq!(hash.to_string(), VALID_SHA256);
+
         let hash: CommitHash = VALID_SHA1.parse().unwrap();
         let revision: GitRevision = hash.into();
         assert_eq!(revision.as_str(), VALID_SHA1);
@@ -351,62 +336,47 @@ mod tests {
 
     #[test]
     fn test_commit_hash_invalid() {
-        // Too short.
-        assert!(matches!(
+        assert_eq!(
             "abc123".parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidLength(6))
-        ));
+            Err(CommitHashParseError::InvalidLength(6)),
+            "too short"
+        );
 
-        // 39 chars (one short of SHA-1).
-        assert!(matches!(
+        assert_eq!(
             VALID_SHA1[..39].parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidLength(39))
-        ));
+            Err(CommitHashParseError::InvalidLength(39)),
+            "39 chars (one short of SHA-1)"
+        );
 
-        // 41 chars (one over SHA-1).
         let input = format!("{}0", VALID_SHA1);
-        assert!(matches!(
+        assert_eq!(
             input.parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidLength(41))
-        ));
+            Err(CommitHashParseError::InvalidLength(41)),
+            "41 chars (one over SHA-1)"
+        );
 
-        // Empty string.
-        assert!(matches!(
-            "".parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidLength(0))
-        ));
+        assert!(
+            matches!(
+                "0123456789abcdefg123456789abcdef01234567"
+                    .parse::<CommitHash>(),
+                Err(CommitHashParseError::InvalidHex(_))
+            ),
+            "non-hex character 'g'"
+        );
 
-        // Uppercase hex (valid length, invalid chars).
-        assert!(matches!(
-            "0123456789ABCDEF0123456789abcdef01234567".parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidCharacter {
-                position: 10,
-                character: 'A'
-            })
-        ));
-
-        // Non-hex character 'g'.
-        assert!(matches!(
-            "0123456789abcdefg123456789abcdef01234567".parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidCharacter {
-                position: 16,
-                character: 'g'
-            })
-        ));
-
-        // Leading whitespace (not trimmed).
         let input = format!(" {}", VALID_SHA1);
-        assert!(matches!(
+        assert_eq!(
             input.parse::<CommitHash>(),
-            Err(CommitHashParseError::InvalidLength(41))
-        ));
+            Err(CommitHashParseError::InvalidLength(41)),
+            "leading whitespace (the CommitHash parser doesn't do trimming)"
+        );
     }
 
     #[test]
     fn test_git_ref_parse() {
         let input = format!("{}:openapi/api/api-1.0.0-def456.json", VALID_SHA1);
         let git_ref = input.parse::<GitRef>().unwrap();
-        assert_eq!(git_ref.commit.as_str(), VALID_SHA1);
+        assert_eq!(git_ref.commit.to_string(), VALID_SHA1);
         assert_eq!(git_ref.path.as_str(), "openapi/api/api-1.0.0-def456.json");
     }
 
@@ -414,7 +384,7 @@ mod tests {
     fn test_git_ref_parse_with_whitespace() {
         let input = format!("  {}:path/file.json\n", VALID_SHA1);
         let git_ref = input.parse::<GitRef>().unwrap();
-        assert_eq!(git_ref.commit.as_str(), VALID_SHA1);
+        assert_eq!(git_ref.commit.to_string(), VALID_SHA1);
         assert_eq!(git_ref.path.as_str(), "path/file.json");
     }
 
