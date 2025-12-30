@@ -99,7 +99,7 @@ impl BlessedGitRef {
     pub fn to_git_ref(&self, repo_root: &Utf8Path) -> anyhow::Result<GitRef> {
         match self {
             BlessedGitRef::Known { commit, path } => {
-                Ok(GitRef { commit: commit.clone(), path: path.clone() })
+                Ok(GitRef { commit: *commit, path: path.clone() })
             }
             BlessedGitRef::Lazy { revision, path } => {
                 let commit =
@@ -283,7 +283,7 @@ impl BlessedFiles {
                                         version: version.clone(),
                                     },
                                     BlessedGitRef::Known {
-                                        commit: git_ref.commit.clone(),
+                                        commit: git_ref.commit,
                                         path: git_ref.path.clone(),
                                     },
                                 );

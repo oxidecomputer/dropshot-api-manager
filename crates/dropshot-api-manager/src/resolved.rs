@@ -536,8 +536,10 @@ impl Fix<'_> {
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(&git_ref_basename);
 
-                // Write the git ref file.
-                fs_err::write(&git_ref_path, git_ref.to_string())?;
+                // Write the git ref file. Add a trailing newline so diffs don't
+                // have the "\ No newline at end of file" message. Otherwise,
+                // the extra newline has no impact on usability or correctness.
+                fs_err::write(&git_ref_path, format!("{}\n", git_ref))?;
 
                 // Remove the original JSON file.
                 fs_err::remove_file(&json_path)?;
@@ -1209,35 +1211,34 @@ fn resolve_api_version_blessed<'a>(
         })
     } else if matching.len() > 1 {
         // With git ref files, we might have both api.json and api.json.gitref
-        // for the same version (same hash). This can happen from interrupted
-        // conversions, manual file manipulation, or switching git ref storage
-        // settings. Mark the redundant file for deletion.
+        // for the same version. This can happen from interrupted conversions,
+        // manual file manipulation, or switching git ref storage settings. Mark
+        // the redundant file for deletion.
         for local_file in &matching {
             let is_git_ref = local_file.spec_file_name().is_git_ref();
             let prefer_git_ref = use_git_ref_storage && !is_latest;
-            // If we prefer git ref: JSON files are redundant.
-            // If we prefer JSON: git ref files are redundant.
-            let is_redundant =
-                if prefer_git_ref { !is_git_ref } else { is_git_ref };
-            if is_redundant {
-                problems.push(Problem::DuplicateLocalFile { local_file });
+
+            match (prefer_git_ref, is_git_ref) {
+                (true, false) => {
+                    // Prefer git ref but found JSON: JSON is redundant.
+                    problems.push(Problem::DuplicateLocalFile { local_file });
+                }
+                (false, true) => {
+                    // Prefer JSON but found git ref: git ref is redundant.
+                    problems.push(Problem::DuplicateLocalFile { local_file });
+                }
+                (true, true) | (false, false) => {
+                    // Format matches preference: not redundant.
+                }
             }
         }
-    }
+    } else {
+        assert_eq!(matching.len(), 1);
 
-    // There shouldn't be any local specs that match the same version but don't
-    // match the same contents.
-    problems.extend(non_matching.into_iter().map(|s| {
-        Problem::BlessedVersionExtraLocalSpec {
-            spec_file_name: s.spec_file_name().clone(),
-        }
-    }));
-
-    // For non-latest blessed versions, check if the local file format matches
-    // the expected format (git ref vs JSON). Skip this if there are duplicates
-    // (both JSON and git ref exist), because the duplicate detection already
-    // handles that case.
-    if matching.len() == 1 {
+        // For non-latest blessed versions, check if the local file format
+        // matches the expected format (git ref vs JSON). Skip this if there are
+        // duplicates (both JSON and git ref exist), because the duplicate
+        // detection already handles that case.
         let local_file = matching[0];
 
         // For non-latest blessed versions with a git ref available, check if
@@ -1250,12 +1251,10 @@ fn resolve_api_version_blessed<'a>(
                     if let Ok(current_git_ref) =
                         blessed_git_ref.to_git_ref(&env.repo_root)
                     {
-                        let should_suggest = should_suggest_git_ref_conversion(
+                        if should_convert_to_git_ref(
                             latest_first_commit,
                             current_git_ref.commit,
-                        );
-
-                        if should_suggest {
+                        ) {
                             problems.push(
                                 Problem::BlessedVersionShouldBeGitRef {
                                     local_file,
@@ -1273,6 +1272,14 @@ fn resolve_api_version_blessed<'a>(
         if !use_git_ref_storage && local_file.spec_file_name().is_git_ref() {
             problems.push(Problem::GitRefShouldBeJson { local_file });
         }
+
+        // There shouldn't be any local specs that match the same version but don't
+        // match the same contents.
+        problems.extend(non_matching.into_iter().map(|s| {
+            Problem::BlessedVersionExtraLocalSpec {
+                spec_file_name: s.spec_file_name().clone(),
+            }
+        }));
     }
 
     Resolution::new_blessed(problems)
@@ -1372,23 +1379,14 @@ fn validate_generated(
 /// | BlessedError        | no (safe fallback)  |
 #[derive(Clone, Copy, Debug)]
 enum LatestFirstCommit {
-    /// The latest version is not blessed (i.e. a new version is being added).
-    /// All existing blessed versions should be converted to git refs.
     NotBlessed,
-
-    /// The latest version is blessed and was first added in this commit.
-    /// Only convert versions with a different first commit.
     Blessed(CommitHash),
-
-    /// The latest version is blessed, but we couldn't determine its first
-    /// commit (e.g., `git log` failed in a shallow clone). The only option is
-    /// to not suggest conversions.
     BlessedError,
 }
 
 /// Returns true if we should suggest converting a blessed version to a git ref,
 /// assuming that git ref storage is enabled.
-fn should_suggest_git_ref_conversion(
+fn should_convert_to_git_ref(
     latest: LatestFirstCommit,
     first_commit: CommitHash,
 ) -> bool {
@@ -1436,27 +1434,24 @@ mod tests {
         let current = commit(COMMIT_A);
 
         assert!(
-            should_suggest_git_ref_conversion(
-                LatestFirstCommit::NotBlessed,
-                current
-            ),
+            should_convert_to_git_ref(LatestFirstCommit::NotBlessed, current),
             "latest NotBlessed => always suggest conversion"
         );
 
         let latest = LatestFirstCommit::Blessed(commit(COMMIT_A));
         assert!(
-            !should_suggest_git_ref_conversion(latest, current),
+            !should_convert_to_git_ref(latest, current),
             "latest Blessed with same commit => do not suggest conversion"
         );
 
         let latest = LatestFirstCommit::Blessed(commit(COMMIT_B));
         assert!(
-            should_suggest_git_ref_conversion(latest, current),
+            should_convert_to_git_ref(latest, current),
             "latest Blessed with different commit => suggest conversion"
         );
 
         assert!(
-            !should_suggest_git_ref_conversion(
+            !should_convert_to_git_ref(
                 LatestFirstCommit::BlessedError,
                 current
             ),

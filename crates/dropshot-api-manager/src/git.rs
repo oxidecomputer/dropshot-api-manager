@@ -186,18 +186,21 @@ pub fn git_first_commit_for_file(
         .arg(path);
     let stdout = do_run(&mut cmd)?;
     let commit = stdout.trim();
-    if commit.is_empty() {
-        bail!(
-            "no commit found that added file {:?} (searched up to {})",
-            path,
-            revision
-        );
-    }
-    // If there are multiple lines (shouldn't happen for --diff-filter=A in
-    // normal use), take the last one (the earliest commit in which the file was
-    // newly added).
-    let first_commit = commit.lines().last().unwrap_or(commit);
-    // Git's --format=%H always returns full SHA-1/SHA-256 hashes.
+
+    // If a file was removed and re-added, git log will show multiple commits
+    // with --diff-filter=A. Take the first line (i.e. the most recent commit)
+    // since that's the commit where the current version of the file was
+    // introduced. The choice here is somewhat arbitrary, but it is consistent
+    // across clones (which is important to minimize merge conflicts).
+    let first_commit = commit.lines().next().with_context(|| {
+        format!(
+            "no commit found that added file {:?} \
+             (searched backwards from {})",
+            path, revision,
+        )
+    })?;
+
+    // Git's --format=%H always returns full SHA-1 or SHA-256 hashes.
     first_commit.parse().with_context(|| {
         format!(
             "git returned invalid commit hash {:?} for {:?}",
@@ -273,11 +276,7 @@ impl GitRef {
         &self,
         repo_root: &Utf8Path,
     ) -> anyhow::Result<Vec<u8>> {
-        git_show_file(
-            repo_root,
-            &GitRevision::from(self.commit.clone()),
-            &self.path,
-        )
+        git_show_file(repo_root, &GitRevision::from(self.commit), &self.path)
     }
 }
 

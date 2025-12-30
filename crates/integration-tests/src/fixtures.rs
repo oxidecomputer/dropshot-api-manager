@@ -172,7 +172,7 @@ pub mod versioned_health {
 
     api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod"}]
     pub trait VersionedHealthApi {
         type Context;
 
@@ -255,7 +255,7 @@ pub mod versioned_user {
         (1, INITIAL),
     ]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedUserApi {
         type Context;
 
@@ -497,6 +497,21 @@ pub mod versioned_health_reduced {
     };
 }
 
+/// Versioned health API fixture without v1 (only v2 and v3).
+///
+/// Used to simulate removal of the first version.
+pub mod versioned_health_no_v1 {
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS)]);
+
+    // Reuse the same API and response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
+        VersionedHealthApi, api_mod,
+    };
+}
+
 /// Versioned health API fixture that skips the middle version (2.0.0).
 /// This has versions 3.0.0 and 1.0.0 only, simulating retirement of an older
 /// blessed version.
@@ -696,8 +711,7 @@ pub fn versioned_health_api() -> ManagedApiConfig {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     }
 }
 
@@ -714,8 +728,7 @@ pub fn versioned_user_api() -> ManagedApiConfig {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_user::versioned_user_api_mod::stub_api_description,
+        api_description: versioned_user::api_mod::stub_api_description,
     }
 }
 
@@ -846,8 +859,7 @@ pub fn versioned_health_trivial_change_allowed_apis() -> Result<ManagedApis> {
             description: Some("A versioned health API with trivial changes"),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     };
 
     ManagedApis::new(vec![
@@ -936,6 +948,29 @@ pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
 
     ManagedApis::new(vec![config])
         .context("failed to create skip middle versioned health ManagedApis")
+}
+
+/// Create versioned health API without v1 (only v2 and v3).
+///
+/// Used to simulate removal of the first version.
+pub fn versioned_health_no_v1_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_no_v1::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description: versioned_health_no_v1::api_mod::stub_api_description,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create no-v1 versioned health ManagedApis")
 }
 
 /// Create a versioned health API with incompatible changes that break backward
@@ -1039,8 +1074,7 @@ pub fn versioned_health_with_validation_api() -> ManagedApi {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     })
     .with_extra_validation(validate)
 }
@@ -1058,8 +1092,7 @@ pub fn versioned_health_with_extra_file_api() -> ManagedApi {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     })
     .with_extra_validation(validate_with_extra_file)
 }

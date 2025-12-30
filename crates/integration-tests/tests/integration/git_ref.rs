@@ -884,3 +884,104 @@ fn test_check_reports_duplicate_files() -> Result<()> {
 
     Ok(())
 }
+
+/// Test that git ref points to the most recent addition when a version is
+/// removed and re-added.
+///
+/// Consider the situation where:
+///
+/// - commit 1 adds API v1
+/// - commit 2 removes API v1 (by dropping it from the list of supported versions)
+/// - commit 3 re-adds API v1
+///
+/// When git ref storage is enabled and v1 is converted to a git ref, the ref
+/// should point to commit 3 (the most recent addition), not commit 1 (the
+/// original addition). This ensures the git ref points to the current version
+/// of the file.
+#[test]
+fn test_git_ref_points_to_most_recent_addition_after_remove_readd() -> Result<()>
+{
+    let env = TestEnvironment::new()?;
+
+    // Commit 1: add v1, v2, v3.
+    let v1_v2_v3 = versioned_health_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+    env.commit_documents()?;
+    let commit_1 = env.get_current_commit_hash_full()?;
+
+    // Get the path to v1 before it's removed.
+    let v1_path_before = env
+        .find_versioned_document_path("versioned-health", "1.0.0")?
+        .expect("v1 should exist after commit 1");
+
+    // Commit 2: remove v1 (only keep v2, v3).
+    let v2_v3_only = versioned_health_no_v1_apis()?;
+    env.generate_documents(&v2_v3_only)?;
+    env.commit_documents()?;
+    let commit_2 = env.get_current_commit_hash_full()?;
+
+    // v1 should no longer exist in the working copy.
+    assert!(
+        !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
+        "v1 should be removed after commit 2"
+    );
+
+    // Commit 3: re-add v1 (v1, v2, v3 again).
+    let v1_v2_v3_again = versioned_health_apis()?;
+    env.generate_documents(&v1_v2_v3_again)?;
+    env.commit_documents()?;
+    let commit_3 = env.get_current_commit_hash_full()?;
+
+    // v1 should exist again. The path should be the same (same content hash).
+    let v1_path_after = env
+        .find_versioned_document_path("versioned-health", "1.0.0")?
+        .expect("v1 should exist after commit 3");
+    assert_eq!(
+        v1_path_before, v1_path_after,
+        "v1 path should be the same (same content hash)"
+    );
+
+    // All three commits should be different.
+    assert_ne!(commit_1, commit_2, "commits 1 and 2 should differ");
+    assert_ne!(commit_2, commit_3, "commits 2 and 3 should differ");
+    assert_ne!(commit_1, commit_3, "commits 1 and 3 should differ");
+
+    // Now add v4 with git ref storage to convert v1-v3 to git refs.
+    let v4_with_git_ref = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v4_with_git_ref)?;
+
+    // v1 should now be a git ref.
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be converted to a git ref"
+    );
+
+    // The git ref for v1 should point to commit 3 (the re-addition), not
+    // commit 1 (the original addition).
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+
+    assert_eq!(
+        v1_commit, commit_3,
+        "v1 git ref should point to the re-addition commit (commit 3: {}), \
+         not the original addition (commit 1: {})",
+        commit_3, commit_1
+    );
+
+    // v2 and v3 should point to commit 1 (they were never removed).
+    let v2_git_ref = env.read_versioned_git_ref("versioned-health", "2.0.0")?;
+    let v2_commit = v2_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v2_commit, commit_1,
+        "v2 git ref should point to commit 1 (never removed)"
+    );
+
+    let v3_git_ref = env.read_versioned_git_ref("versioned-health", "3.0.0")?;
+    let v3_commit = v3_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v3_commit, commit_1,
+        "v3 git ref should point to commit 1 (never removed)"
+    );
+
+    Ok(())
+}
