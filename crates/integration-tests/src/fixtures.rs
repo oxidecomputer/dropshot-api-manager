@@ -172,7 +172,7 @@ pub mod versioned_health {
 
     api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
-    #[dropshot::api_description { module = "api_mod"}]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedHealthApi {
         type Context;
 
@@ -1110,12 +1110,8 @@ pub fn versioned_health_with_extra_file_apis() -> Result<ManagedApis> {
 }
 
 /// Create a versioned health API with git ref storage enabled.
-///
-/// When git ref storage is enabled, older (non-latest) blessed API versions are
-/// stored as `.gitref` files containing a git reference instead of full JSON
-/// files.
 pub fn versioned_health_git_ref_api() -> ManagedApi {
-    ManagedApi::from(versioned_health_api()).use_git_ref_storage()
+    ManagedApi::from(versioned_health_api()).with_git_ref_storage()
 }
 
 /// Create versioned health APIs with git ref storage enabled.
@@ -1141,7 +1137,7 @@ pub fn versioned_health_with_v4_git_ref_api() -> ManagedApi {
         api_description:
             versioned_health_with_v4::api_mod::stub_api_description,
     })
-    .use_git_ref_storage()
+    .with_git_ref_storage()
 }
 
 /// Create versioned health APIs with v4 and git ref storage enabled.
@@ -1210,7 +1206,7 @@ pub fn versioned_health_reduced_git_ref_apis() -> Result<ManagedApis> {
             versioned_health_reduced::api_mod::stub_api_description,
     };
 
-    ManagedApis::new(vec![ManagedApi::from(config).use_git_ref_storage()])
+    ManagedApis::new(vec![ManagedApi::from(config).with_git_ref_storage()])
         .context(
             "failed to create reduced versioned health git ref ManagedApis",
         )

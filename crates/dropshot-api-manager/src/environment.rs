@@ -260,9 +260,6 @@ pub enum GeneratedSource {
 
 impl GeneratedSource {
     /// Load the generated OpenAPI documents (i.e., generating them as needed).
-    ///
-    /// The `repo_root` parameter is only used when loading from a directory
-    /// (for testing/debugging) to resolve `.gitref` files.
     pub fn load(
         &self,
         apis: &ManagedApis,

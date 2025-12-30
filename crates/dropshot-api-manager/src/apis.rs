@@ -196,9 +196,9 @@ impl ManagedApi {
 
     /// Enables git ref storage for this API, overriding the global setting.
     ///
-    /// When enabled, older (non-latest) blessed API versions are stored as
-    /// `.gitref` files containing a git reference instead of full JSON files.
-    pub fn use_git_ref_storage(mut self) -> Self {
+    /// When enabled, non-latest blessed API versions are stored as `.gitref`
+    /// files containing a git reference instead of full JSON files.
+    pub fn with_git_ref_storage(mut self) -> Self {
         self.use_git_ref_storage = Some(true);
         self
     }
@@ -304,9 +304,9 @@ pub struct ManagedApis {
     unknown_apis: BTreeSet<ApiIdent>,
     validation: Option<Box<DynValidationFn>>,
 
-    /// If true, store older blessed API versions as git ref files instead of
-    /// full JSON files. This saves disk space but requires git access to read
-    /// the contents.
+    /// If true, store non-latest blessed API versions as git ref files instead
+    /// of full JSON files. This saves disk space but requires git access to
+    /// read the contents.
     ///
     /// The default is false.
     use_git_ref_storage: bool,
@@ -388,9 +388,11 @@ impl ManagedApis {
 
     /// Enables git ref storage for older blessed API versions.
     ///
-    /// When enabled, older (non-latest) blessed API versions are stored as
-    /// `.gitref` files containing a git reference instead of full JSON files.
-    /// This saves disk space but requires git access to read the contents.
+    /// When enabled, non-latest blessed API versions are stored as `.gitref`
+    /// files containing a Git reference instead of full JSON files. This allows
+    /// for Git (including the GitHub web UI) to detect changed OpenAPI
+    /// documents as renames, but Git history is required to be present to read
+    /// older versions.
     ///
     /// Individual APIs can override this setting using
     /// [`ManagedApi::use_git_ref_storage`] or

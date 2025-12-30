@@ -77,7 +77,8 @@ impl LocalFiles {
     /// [`LocalFiles`].
     ///
     /// The `repo_root` parameter is needed to resolve `.gitref` files, which
-    /// store git references to content rather than the content itself.
+    /// store a reference to an OpenAPI document rather than the document
+    /// itself.
     pub fn load_from_directory(
         dir: &Utf8Path,
         apis: &ManagedApis,
@@ -116,8 +117,8 @@ impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
 /// wicketd.json                                     # file for lockstep API
 /// dns-server/                                      # directory for versioned API
 /// dns-server/dns-server-1.0.0-eb2aeeb.json         # file for versioned API
-/// dns-server/dns-server-1.0.0-eb2aeeb.json.gitref  # git ref for versioned API
-/// dns-server/dns-server-2.0.0-298ea47.json         # file for versioned API
+/// dns-server/dns-server-2.0.0-fba287a.json.gitref  # git ref for versioned API
+/// dns-server/dns-server-3.0.0-298ea47.json         # file for versioned API
 /// dns-server/dns-server-latest.json                # symlink
 /// ```
 // This function is always used for the "local" files. It can sometimes be

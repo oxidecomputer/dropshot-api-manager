@@ -6,7 +6,7 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::{CommitHash, GitRef},
+    git::{GitCommitHash, GitRef},
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
@@ -526,7 +526,6 @@ impl Fix<'_> {
             Fix::ConvertToGitRef { local_file, git_ref } => {
                 let json_path = root.join(local_file.spec_file_name().path());
 
-                // Compute the git ref file path by adding .gitref suffix.
                 let git_ref_basename = format!(
                     "{}.gitref",
                     local_file.spec_file_name().basename()
@@ -553,10 +552,9 @@ impl Fix<'_> {
                 let git_ref_path =
                     root.join(local_file.spec_file_name().path());
 
-                // The local_file already has the contents loaded from git
-                // (that's how git ref files work - they're resolved to their
-                // content when loaded). We just need to write those contents
-                // to a new JSON file.
+                // The local_file already has the contents loaded from git (git
+                // ref files are dereferenced when loaded). We just need to
+                // write those contents to a new JSON file.
                 let contents = local_file.contents();
 
                 // Compute the JSON file path by removing the .gitref suffix.
@@ -575,10 +573,8 @@ impl Fix<'_> {
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(json_basename);
 
-                // Write the JSON file.
                 fs_err::write(&json_path, contents)?;
 
-                // Remove the git ref file.
                 fs_err::remove_file(&git_ref_path)?;
 
                 Ok(vec![
@@ -794,13 +790,12 @@ fn resolve_api<'a>(
             None,
         )
     } else {
-        // Find the latest supported version (highest semver).
-        let latest_version = api
-            .iter_versions_semver()
-            .next_back()
-            .expect("versioned API has at least one version");
-
         let latest_first_commit = {
+            let latest_version = api
+                .iter_versions_semver()
+                .next_back()
+                .expect("versioned API has at least one version");
+
             let latest_is_blessed = api_blessed
                 .is_some_and(|b| b.versions().contains_key(latest_version));
 
@@ -1209,9 +1204,9 @@ fn resolve_api_version_blessed<'a>(
         })
     } else if matching.len() > 1 {
         // With git ref files, we might have both api.json and api.json.gitref
-        // for the same version. This can happen from interrupted conversions,
-        // manual file manipulation, or switching git ref storage settings. Mark
-        // the redundant file for deletion.
+        // for the same version. This can happen in a few different
+        // circumstances, such as manual file manipulation or switching git ref
+        // storage settings. Mark the redundant file for deletion.
         for local_file in &matching {
             let is_git_ref = local_file.spec_file_name().is_git_ref();
             let prefer_git_ref = use_git_ref_storage && !is_latest;
@@ -1233,40 +1228,36 @@ fn resolve_api_version_blessed<'a>(
     } else {
         assert_eq!(matching.len(), 1);
 
-        // For non-latest blessed versions, check if the local file format
-        // matches the expected format (git ref vs JSON). Skip this if there are
-        // duplicates (both JSON and git ref exist), because the duplicate
-        // detection already handles that case.
+        // For non-latest blessed versions, check if the local file format (git
+        // ref vs JSON) matches the expected format. We already took care of
+        // duplicates above.
         let local_file = matching[0];
 
-        // For non-latest blessed versions with a git ref available, check if
-        // the local file should be converted to a git ref.
-        if use_git_ref_storage && !is_latest {
+        // Should the local file be converted into a git ref?
+        if use_git_ref_storage
+            && !is_latest
+            && !local_file.spec_file_name().is_git_ref()
+        {
             if let Some(blessed_git_ref) = git_ref {
-                if !local_file.spec_file_name().is_git_ref() {
-                    // Computing the git ref might fail (e.g., in a shallow
-                    // clone). In that case, skip the suggestion.
-                    if let Ok(current_git_ref) =
-                        blessed_git_ref.to_git_ref(&env.repo_root)
-                    {
-                        if should_convert_to_git_ref(
-                            latest_first_commit,
-                            current_git_ref.commit,
-                        ) {
-                            problems.push(
-                                Problem::BlessedVersionShouldBeGitRef {
-                                    local_file,
-                                    git_ref: current_git_ref,
-                                },
-                            );
-                        }
+                // Computing the git ref might fail (e.g., in a shallow clone).
+                // In that case, skip the suggestion.
+                if let Ok(current_git_ref) =
+                    blessed_git_ref.to_git_ref(&env.repo_root)
+                {
+                    if should_convert_to_git_ref(
+                        latest_first_commit,
+                        current_git_ref.commit,
+                    ) {
+                        problems.push(Problem::BlessedVersionShouldBeGitRef {
+                            local_file,
+                            git_ref: current_git_ref,
+                        });
                     }
                 }
             }
         }
 
-        // Check if git ref files should be converted back to JSON. This
-        // happens when git ref storage is disabled but we have git ref files.
+        // Should git ref files be converted to JSON?
         if !use_git_ref_storage && local_file.spec_file_name().is_git_ref() {
             problems.push(Problem::GitRefShouldBeJson { local_file });
         }
@@ -1367,27 +1358,27 @@ fn validate_generated(
 /// Describes the first commit for the latest version.
 ///
 /// Used to decide whether to suggest git ref conversion for older versions.
-/// The decision table is:
-///
-/// | status              | suggest conversion? |
-/// |---------------------|---------------------|
-/// | NotBlessed          | yes (always)        |
-/// | Blessed(same)       | no                  |
-/// | Blessed(different)  | yes                 |
-/// | BlessedError        | no (safe fallback)  |
 #[derive(Clone, Copy, Debug)]
 enum LatestFirstCommit {
     NotBlessed,
-    Blessed(CommitHash),
+    Blessed(GitCommitHash),
     BlessedError,
 }
 
-/// Returns true if we should suggest converting a blessed version to a git ref,
+/// Returns true if this tool should convert a blessed version to a git ref,
 /// assuming that git ref storage is enabled.
 fn should_convert_to_git_ref(
     latest: LatestFirstCommit,
-    first_commit: CommitHash,
+    first_commit: GitCommitHash,
 ) -> bool {
+    // This match statement captures the decision table:
+    //
+    //      status         |  suggest conversion?
+    //                     |
+    //    NotBlessed       |    yes (always)
+    //   Blessed(same)     |        no
+    // Blessed(different)  |       yes
+    //    BlessedError     |        no
     match latest {
         LatestFirstCommit::NotBlessed => {
             // The latest version is not blessed. This means that a new version
@@ -1461,7 +1452,7 @@ mod tests {
     const COMMIT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const COMMIT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    fn commit(s: &str) -> CommitHash {
+    fn commit(s: &str) -> GitCommitHash {
         s.parse().unwrap()
     }
 }

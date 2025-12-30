@@ -116,7 +116,7 @@ fn parse_versioned_git_ref_file_name(
         }
     })?;
 
-    // Parse the underlying versioned name to get version and hash.
+    // Parse the underlying versioned name to get the version and hash.
     let versioned = parse_versioned_file_name(apis, ident, json_basename)?;
 
     match versioned.kind() {
@@ -530,9 +530,8 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// Returns an `ApiSpecFileName` for the given versioned git ref file.
     ///
     /// On success, this does not load anything into `self`. Callers generally
-    /// invoke `load_contents()` with the returned value after reading the
-    /// git ref contents from git. On failure, warnings or errors will be
-    /// recorded.
+    /// invoke `load_contents()` with the returned value after dereferencing the
+    /// git ref. On failure, warnings or errors will be recorded.
     pub fn versioned_git_ref_file_name(
         &mut self,
         ident: &ApiIdent,

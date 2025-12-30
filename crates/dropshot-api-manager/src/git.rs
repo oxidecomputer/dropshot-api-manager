@@ -26,17 +26,17 @@ NewtypeFrom! { () pub struct GitRevision(String); }
 /// - 40 lowercase hex digits (SHA-1)
 /// - 64 lowercase hex digits (SHA-256)
 ///
-/// Use this type when you need to ensure a git reference is a specific commit,
-/// and not a branch name, tag, or other symbolic reference.
+/// See [`GitRevision`] for a more general type that can represent a commit
+/// hash; or a branch name, tag, or other symbolic reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CommitHash {
+pub enum GitCommitHash {
     /// A SHA-1 hash: the one traditionally used in Git.
     Sha1([u8; 20]),
     /// A SHA-256 hash, supported by newer versions of Git.
     Sha256([u8; 32]),
 }
 
-impl FromStr for CommitHash {
+impl FromStr for GitCommitHash {
     type Err = CommitHashParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -46,35 +46,35 @@ impl FromStr for CommitHash {
                 let mut bytes = [0; 20];
                 hex::decode_to_slice(s, &mut bytes)
                     .map_err(CommitHashParseError::InvalidHex)?;
-                Ok(CommitHash::Sha1(bytes))
+                Ok(GitCommitHash::Sha1(bytes))
             }
             64 => {
                 let mut bytes = [0; 32];
                 hex::decode_to_slice(s, &mut bytes)
                     .map_err(CommitHashParseError::InvalidHex)?;
-                Ok(CommitHash::Sha256(bytes))
+                Ok(GitCommitHash::Sha256(bytes))
             }
             _ => Err(CommitHashParseError::InvalidLength(len)),
         }
     }
 }
 
-impl fmt::Display for CommitHash {
+impl fmt::Display for GitCommitHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CommitHash::Sha1(bytes) => hex::encode(bytes).fmt(f),
-            CommitHash::Sha256(bytes) => hex::encode(bytes).fmt(f),
+            GitCommitHash::Sha1(bytes) => hex::encode(bytes).fmt(f),
+            GitCommitHash::Sha256(bytes) => hex::encode(bytes).fmt(f),
         }
     }
 }
 
-impl From<CommitHash> for GitRevision {
-    fn from(hash: CommitHash) -> Self {
+impl From<GitCommitHash> for GitRevision {
+    fn from(hash: GitCommitHash) -> Self {
         GitRevision::from(hash.to_string())
     }
 }
 
-/// An error that occurs while parsing a commit hash.
+/// An error that occurs while parsing a [`GitCommitHash`].
 #[derive(Clone, Debug, Error, PartialEq)]
 #[non_exhaustive]
 pub enum CommitHashParseError {
@@ -163,20 +163,23 @@ pub fn git_show_file(
 /// including the given revision.
 ///
 /// This is used to find a stable, canonical commit for git ref storage. Using
-/// the first commit ensures the git ref remains valid even as the repository
-/// history evolves (e.g., when the merge-base changes).
+/// the first commit (as opposed to something more readily available like the
+/// merge base) ensures that if two different developers make changes to the
+/// same API starting from different merge bases, this tool will convert the
+/// previous blessed version into having the same contents for both developers.
+/// This avoids an unnecessary merge conflict in the contents of the `.gitref`
+/// file.
 pub fn git_first_commit_for_file(
     repo_root: &Utf8Path,
     revision: &GitRevision,
     path: &Utf8Path,
-) -> anyhow::Result<CommitHash> {
+) -> anyhow::Result<GitCommitHash> {
     // Use --diff-filter=A to find the commit that *added* the file, limiting
     // search to the given revision.
     //
-    // We intentionally don't use --follow because our API spec files have
-    // content hashes in their names (e.g., api-1.0.0-abc123.json). Git's rename
-    // detection can incorrectly match unrelated files with similar content,
-    // causing it to return the wrong commit.
+    // We intentionally don't use --follow because Git's rename detection can
+    // incorrectly match unrelated files with similar content, causing it to
+    // return the wrong commit.
     let mut cmd = git_start(repo_root);
     cmd.arg("log")
         .arg("--diff-filter=A")
@@ -265,7 +268,7 @@ fn cmd_label(cmd: &Command) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitRef {
     /// The commit hash (validated SHA-1 or SHA-256).
-    pub commit: CommitHash,
+    pub commit: GitCommitHash,
     /// The path within the repository.
     pub path: Utf8PathBuf,
 }
@@ -294,7 +297,7 @@ impl FromStr for GitRef {
         let (commit, path) = s
             .split_once(':')
             .ok_or_else(|| GitRefParseError::InvalidFormat(s.to_owned()))?;
-        let commit: CommitHash = commit.parse()?;
+        let commit: GitCommitHash = commit.parse()?;
         Ok(GitRef { commit, path: Utf8PathBuf::from(path) })
     }
 }
@@ -322,13 +325,13 @@ mod tests {
 
     #[test]
     fn test_commit_hash_valid() {
-        let hash: CommitHash = VALID_SHA1.parse().unwrap();
+        let hash: GitCommitHash = VALID_SHA1.parse().unwrap();
         assert_eq!(hash.to_string(), VALID_SHA1);
 
-        let hash: CommitHash = VALID_SHA256.parse().unwrap();
+        let hash: GitCommitHash = VALID_SHA256.parse().unwrap();
         assert_eq!(hash.to_string(), VALID_SHA256);
 
-        let hash: CommitHash = VALID_SHA1.parse().unwrap();
+        let hash: GitCommitHash = VALID_SHA1.parse().unwrap();
         let revision: GitRevision = hash.into();
         assert_eq!(revision.as_str(), VALID_SHA1);
     }
@@ -336,20 +339,20 @@ mod tests {
     #[test]
     fn test_commit_hash_invalid() {
         assert_eq!(
-            "abc123".parse::<CommitHash>(),
+            "abc123".parse::<GitCommitHash>(),
             Err(CommitHashParseError::InvalidLength(6)),
             "too short"
         );
 
         assert_eq!(
-            VALID_SHA1[..39].parse::<CommitHash>(),
+            VALID_SHA1[..39].parse::<GitCommitHash>(),
             Err(CommitHashParseError::InvalidLength(39)),
             "39 chars (one short of SHA-1)"
         );
 
         let input = format!("{}0", VALID_SHA1);
         assert_eq!(
-            input.parse::<CommitHash>(),
+            input.parse::<GitCommitHash>(),
             Err(CommitHashParseError::InvalidLength(41)),
             "41 chars (one over SHA-1)"
         );
@@ -357,7 +360,7 @@ mod tests {
         assert!(
             matches!(
                 "0123456789abcdefg123456789abcdef01234567"
-                    .parse::<CommitHash>(),
+                    .parse::<GitCommitHash>(),
                 Err(CommitHashParseError::InvalidHex(_))
             ),
             "non-hex character 'g'"
@@ -365,7 +368,7 @@ mod tests {
 
         let input = format!(" {}", VALID_SHA1);
         assert_eq!(
-            input.parse::<CommitHash>(),
+            input.parse::<GitCommitHash>(),
             Err(CommitHashParseError::InvalidLength(41)),
             "leading whitespace (the CommitHash parser doesn't do trimming)"
         );
