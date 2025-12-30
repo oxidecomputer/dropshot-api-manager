@@ -12,8 +12,7 @@ mod apis;
 mod cmd;
 mod compatibility;
 mod environment;
-/// Git utilities for accessing files and contents from git history.
-pub mod git;
+mod git;
 mod iter_only;
 mod output;
 mod resolved;
@@ -30,3 +29,4 @@ extern crate newtype_derive;
 pub use apis::*;
 pub use cmd::dispatch::{App, FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE};
 pub use environment::Environment;
+pub use git::{GitRef, GitRefParseError};

@@ -7,7 +7,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use camino_tempfile::Utf8TempDir;
 use camino_tempfile_ext::{fixture::ChildPath, prelude::*};
 use clap::Parser;
-use dropshot_api_manager::{Environment, ManagedApis};
+use dropshot_api_manager::{Environment, GitRef, ManagedApis};
 use std::{
     fs,
     process::{Command, ExitCode},
@@ -189,10 +189,8 @@ impl TestEnvironment {
         let path = files.iter().find_map(|f| {
             let rel_path = rel_path_forward_slashes(f.as_ref());
             // Only match .json files, not .json.gitref files.
-            (rel_path.starts_with(&pattern)
-                && rel_path.ends_with(".json")
-                && !rel_path.ends_with(".json.gitref"))
-            .then(|| Utf8PathBuf::from(rel_path))
+            (rel_path.starts_with(&pattern) && rel_path.ends_with(".json"))
+                .then(|| Utf8PathBuf::from(rel_path))
         });
         Ok(path)
     }
@@ -333,13 +331,9 @@ impl TestEnvironment {
     ) -> Result<String> {
         let git_ref_content =
             self.read_versioned_git_ref(api_ident, version)?;
-        let git_ref: dropshot_api_manager::git::GitRef =
-            git_ref_content.parse().with_context(|| {
-                format!(
-                    "failed to parse git ref for {} v{}",
-                    api_ident, version
-                )
-            })?;
+        let git_ref: GitRef = git_ref_content.parse().with_context(|| {
+            format!("failed to parse git ref for {} v{}", api_ident, version)
+        })?;
         let content = git_ref.read_contents(&self.workspace_root)?;
         String::from_utf8(content).with_context(|| {
             format!(

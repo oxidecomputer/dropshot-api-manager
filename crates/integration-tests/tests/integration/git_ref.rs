@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use dropshot_api_manager::{
-    git::GitRef,
+    GitRef,
     test_util::{CheckResult, check_apis_up_to_date},
 };
 use integration_tests::*;
@@ -19,13 +19,7 @@ use integration_tests::*;
 /// When a new version is added to an API with git ref storage enabled, the
 /// older blessed versions should be converted from full JSON files to git ref
 /// files. The git refs should point to the first commit where each version was
-/// introduced, not the current HEAD.
-///
-/// This test combines coverage for:
-/// - Conversion from JSON to git ref on generate
-/// - Git refs pointing to correct commits
-/// - Content preservation after conversion
-/// - Check passes after conversion
+/// introduced.
 #[test]
 fn test_git_ref_conversion_and_content() -> Result<()> {
     let env = TestEnvironment::new()?;
@@ -68,13 +62,13 @@ fn test_git_ref_conversion_and_content() -> Result<()> {
         "v3 should not yet be a git ref"
     );
 
-    // Make unrelated commits to advance HEAD past the first commit.
+    // Make unrelated commits to advance past the first commit.
     env.make_unrelated_commit("unrelated change 1")?;
     env.make_unrelated_commit("unrelated change 2")?;
     let current_commit = env.get_current_commit_hash_full()?;
     assert_ne!(
         first_commit, current_commit,
-        "HEAD should have advanced past the first commit"
+        "current commit should have advanced past the first commit"
     );
 
     // Add a new version (v4) to make v1-v3 no longer latest. At this point v4
@@ -157,11 +151,11 @@ fn test_git_ref_conversion_and_content() -> Result<()> {
         env.read_versioned_git_ref("versioned-health", "1.0.0")?;
     assert!(
         git_ref_content.contains(':'),
-        "gitref should contain a colon separator"
+        "git ref should contain a colon separator"
     );
     let git_ref = git_ref_content
         .parse::<GitRef>()
-        .expect("gitref should parse correctly");
+        .expect("git ref should parse correctly");
     assert!(
         git_ref.path.as_str().contains("versioned-health"),
         "path should reference versioned-health"
@@ -176,7 +170,7 @@ fn test_git_ref_conversion_and_content() -> Result<()> {
         env.read_git_ref_content("versioned-health", "1.0.0")?;
     assert_eq!(
         original_v1, git_ref_v1_content,
-        "gitref content should match original"
+        "git ref content should match original"
     );
 
     // Check should pass with the extended APIs (git refs are read correctly).
@@ -189,10 +183,10 @@ fn test_git_ref_conversion_and_content() -> Result<()> {
 /// Test that the latest version and versions sharing its first commit are not
 /// converted to git refs.
 ///
-/// When all versions share the same first commit as the latest, no conversion
-/// should happen (no deduplication benefit). This is also a regression test
-/// for the bug where check would fail immediately after multiple versions were
-/// added in a single commit.
+/// When multiple versions share the same first commit as the latest, no
+/// conversion should happen. We don't want check to fail immediately after
+/// multiple versions were added in a single commit -- that is a poor user
+/// experience.
 #[test]
 fn test_same_first_commit_no_conversion() -> Result<()> {
     let env = TestEnvironment::new()?;
@@ -276,8 +270,8 @@ fn test_lockstep_never_converted_to_git_ref() -> Result<()> {
 
 /// Test that only versions with different first commits are converted.
 ///
-/// When the latest is blessed, only versions from earlier commits should
-/// be converted. Versions sharing the same first commit as latest should
+/// When the latest version is blessed, only versions from earlier commits
+/// should be converted. Versions sharing the same first commit as latest should
 /// remain as JSON.
 #[test]
 fn test_mixed_first_commits_selective_conversion() -> Result<()> {
@@ -476,11 +470,6 @@ fn test_no_conversion_without_git_ref_enabled() -> Result<()> {
 /// This is the reverse of `test_git_ref_conversion_and_content`. When a user
 /// disables git ref storage (by removing `use_git_ref_storage()` from their API
 /// config), existing git ref files should be converted back to full JSON files.
-///
-/// This test combines coverage for:
-/// - Check reports NeedsUpdate when git refs exist but storage is disabled
-/// - Generate converts git refs back to JSON
-/// - Content is preserved during the conversion
 #[test]
 fn test_git_ref_to_json_when_disabled() -> Result<()> {
     let env = TestEnvironment::new()?;
@@ -521,7 +510,7 @@ fn test_git_ref_to_json_when_disabled() -> Result<()> {
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should report needs update when gitrefs exist but gitref \
+        "check should report needs update when git refs exist but git ref \
          storage is disabled"
     );
 
@@ -580,6 +569,7 @@ fn test_git_ref_to_json_when_disabled() -> Result<()> {
 /// Test that duplicate git ref and JSON files are handled correctly.
 ///
 /// When both git ref and JSON exist for the same version, the system should:
+///
 /// - With git ref enabled: delete the JSON (git ref preferred for non-latest)
 /// - With git ref disabled: delete the git ref (JSON preferred)
 ///
@@ -612,14 +602,14 @@ fn test_duplicate_git_ref_and_json_handling() -> Result<()> {
     let json_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
     let git_ref_path = env
         .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("gitref should exist");
+        .expect("git ref should exist");
     let json_path = git_ref_path.with_extension(""); // Removes .gitref
     env.create_file(&json_path, &json_content)?;
 
     // Both should exist now.
     assert!(
         env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "gitref should still exist"
+        "git ref should still exist"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -640,18 +630,18 @@ fn test_duplicate_git_ref_and_json_handling() -> Result<()> {
     // Only .gitref should remain.
     assert!(
         env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "gitref should still exist after generate"
+        "git ref should still exist after generate"
     );
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
         "duplicate JSON should be deleted"
     );
 
-    // Now test the opposite: create duplicate again and disable git refs.
+    // Now test the opposite: create a duplicate again and disable git refs.
     env.create_file(&json_path, &json_content)?;
     assert!(
         env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        ".gitref should exist"
+        "git ref should exist"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
