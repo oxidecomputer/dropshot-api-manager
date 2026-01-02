@@ -6,7 +6,7 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::{GitCommitHash, GitRef},
+    git::{GitCommitHash, GitRef, is_shallow_clone},
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
@@ -65,6 +65,18 @@ pub enum Note {
          possible mismerge."
     )]
     BlessedVersionRemoved { api_ident: ApiIdent, version: semver::Version },
+
+    /// The repository is a shallow clone.
+    ///
+    /// Shallow clones can cause git ref storage to produce incorrect results,
+    /// as Git may report the wrong commit when searching for the commit that
+    /// added a file.
+    #[error(
+        "This repository appears to be a shallow clone. Git ref storage for \
+         versioned APIs may produce incorrect results. Consider running \
+         `git fetch --unshallow` to fetch complete history."
+    )]
+    ShallowClone,
 }
 
 /// Describes the result of resolving the blessed spec(s), generated spec(s),
@@ -89,6 +101,11 @@ impl<'a> Resolution<'a> {
 
     pub fn has_problems(&self) -> bool {
         !self.problems.is_empty()
+    }
+
+    /// Add a problem to this resolution.
+    pub fn add_problem(&mut self, problem: Problem<'a>) {
+        self.problems.push(problem);
     }
 
     pub fn has_errors(&self) -> bool {
@@ -285,8 +302,8 @@ pub enum Problem<'a> {
     },
 
     #[error(
-        "Blessed version is stored as a git ref file, but git ref storage is \
-         disabled. This tool can perform the conversion for you."
+        "Blessed version is stored as a git ref file, but should be stored as \
+         JSON. This tool can perform the conversion for you."
     )]
     GitRefShouldBeJson { local_file: &'a LocalApiSpecFile },
 
@@ -295,6 +312,19 @@ pub enum Problem<'a> {
          this API version. This tool can remove the redundant file for you."
     )]
     DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
+
+    #[error(
+        "The first commit for this blessed version could not be determined. This \
+         may indicate a corrupted git repository or other git-related issue. Git \
+         ref storage requires complete git history access"
+         // Note: omitting a trailing period after "access" because we show ":
+         // <source>".
+    )]
+    GitRefFirstCommitUnknown {
+        spec_file_name: ApiSpecFileName,
+        #[source]
+        source: anyhow::Error,
+    },
 }
 
 impl<'a> Problem<'a> {
@@ -360,6 +390,7 @@ impl<'a> Problem<'a> {
                     ]),
                 })
             }
+            Problem::GitRefFirstCommitUnknown { .. } => None,
         }
     }
 }
@@ -433,7 +464,11 @@ impl Display for Fix<'_> {
                 writeln!(f, "{label} file {path} from generated")?;
             }
             Fix::UpdateSymlink { link, .. } => {
-                writeln!(f, "update symlink to point to {}", link.basename())?;
+                writeln!(
+                    f,
+                    "update symlink to point to {}",
+                    link.to_json_filename().basename()
+                )?;
             }
             Fix::ConvertToGitRef { local_file, .. } => {
                 writeln!(
@@ -511,8 +546,9 @@ impl Fix<'_> {
                     .join(api_ident.versioned_api_latest_symlink());
                 // We want the link to contain a relative path to a file in the
                 // same directory so that it's correct no matter where it's
-                // resolved from.
-                let target = link.basename();
+                // resolved from. If the link target is a gitref, convert it to
+                // the JSON filename (the symlink should always point to JSON).
+                let target = link.to_json_filename().basename();
                 match fs_err::remove_file(&path) {
                     Ok(_) => (),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -634,7 +670,7 @@ impl<'a> Resolved<'a> {
 
         // Get one easy case out of the way: if there are any blessed API
         // versions that aren't supported any more, note that.
-        let notes = resolve_removed_blessed_versions(
+        let mut notes: Vec<Note> = resolve_removed_blessed_versions(
             &supported_versions_by_api,
             blessed,
         )
@@ -643,6 +679,13 @@ impl<'a> Resolved<'a> {
             version: version.clone(),
         })
         .collect();
+
+        // Warn if this is a shallow clone and any APIs use git ref storage.
+        let any_uses_git_ref =
+            apis.iter_apis().any(|a| apis.uses_git_ref_storage(a));
+        if any_uses_git_ref && is_shallow_clone(&env.repo_root) {
+            notes.push(Note::ShallowClone);
+        }
 
         // Get the other easy case out of the way: if there are any local spec
         // files for APIs or API versions that aren't supported any more, that's
@@ -790,34 +833,44 @@ fn resolve_api<'a>(
             None,
         )
     } else {
-        let latest_first_commit = {
-            let latest_version = api
-                .iter_versions_semver()
-                .next_back()
-                .expect("versioned API has at least one version");
+        let latest_version = api
+            .iter_versions_semver()
+            .next_back()
+            .expect("versioned API has at least one version");
 
+        // Compute the first commit for the latest version, capturing any errors.
+        let (latest_first_commit, latest_first_commit_error) = {
             let latest_is_blessed = api_blessed
                 .is_some_and(|b| b.versions().contains_key(latest_version));
 
             if !latest_is_blessed {
-                LatestFirstCommit::NotBlessed
+                (LatestFirstCommit::NotBlessed, None)
             } else {
                 // The latest version is blessed. Try to find its first commit.
-                match all_blessed
-                    .git_ref(api.ident(), latest_version)
-                    .and_then(|gr| {
-                        // TODO: report errors while fetching the git ref.
-                        gr.to_git_ref(&env.repo_root).ok()
-                    })
-                    .map(|r| r.commit)
-                {
-                    Some(commit) => LatestFirstCommit::Blessed(commit),
-                    None => LatestFirstCommit::BlessedError,
+                match all_blessed.git_ref(api.ident(), latest_version) {
+                    Some(gr) => match gr.to_git_ref(&env.repo_root) {
+                        Ok(git_ref) => {
+                            (LatestFirstCommit::Blessed(git_ref.commit), None)
+                        }
+                        Err(error) => {
+                            // Capture the error to report it for the latest
+                            // version.
+                            let blessed_file = api_blessed
+                                .and_then(|b| b.versions().get(latest_version));
+                            let spec_file_name = blessed_file
+                                .map(|f| f.spec_file_name().clone());
+                            (
+                                LatestFirstCommit::BlessedError,
+                                Some((spec_file_name, error)),
+                            )
+                        }
+                    },
+                    None => (LatestFirstCommit::BlessedError, None),
                 }
             }
         };
 
-        let by_version: BTreeMap<_, _> = api
+        let mut by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
             // Reverse the order of versions: they are stored in sorted order,
             // so the last version (first one from the back) is the latest.
@@ -854,6 +907,19 @@ fn resolve_api<'a>(
                 (version, resolution)
             })
             .collect();
+
+        // If there was an error computing the first commit for the latest
+        // version, add the error to the latest version's resolution.
+        if let Some((spec_file_name, error)) = latest_first_commit_error {
+            if let Some(resolution) = by_version.get_mut(latest_version) {
+                if let Some(spec_file_name) = spec_file_name {
+                    resolution.add_problem(Problem::GitRefFirstCommitUnknown {
+                        spec_file_name,
+                        source: error,
+                    });
+                }
+            }
+        }
 
         // Check the "latest" symlink.
         let latest_generated = api_generated.latest_link().expect(
@@ -1198,72 +1264,100 @@ fn resolve_api_version_blessed<'a>(
             assert_eq!(hashes_match, contents_match);
             hashes_match
         });
+
     if matching.is_empty() {
         problems.push(Problem::BlessedVersionMissingLocal {
             spec_file_name: blessed.spec_file_name().clone(),
-        })
-    } else if matching.len() > 1 {
-        // With git ref files, we might have both api.json and api.json.gitref
-        // for the same version. This can happen in a few different
-        // circumstances, such as manual file manipulation or switching git ref
-        // storage settings. Mark the redundant file for deletion.
-        for local_file in &matching {
-            let is_git_ref = local_file.spec_file_name().is_git_ref();
-            let prefer_git_ref = use_git_ref_storage && !is_latest;
+        });
+    } else if !use_git_ref_storage || is_latest {
+        // Fast path: git ref storage disabled or this is the latest version.
+        // Computing first commits is slow, and we know we always want JSON in
+        // this case, so we can avoid computing them here.
 
-            match (prefer_git_ref, is_git_ref) {
-                (true, false) => {
-                    // Prefer git ref but found JSON: JSON is redundant.
+        if matching.len() > 1 {
+            // We might have both api.json and api.json.gitref for the same
+            // version. Mark the redundant file (always the gitref file in this
+            // case) for deletion.
+            for local_file in matching {
+                if local_file.spec_file_name().is_git_ref() {
                     problems.push(Problem::DuplicateLocalFile { local_file });
-                }
-                (false, true) => {
-                    // Prefer JSON but found git ref: git ref is redundant.
-                    problems.push(Problem::DuplicateLocalFile { local_file });
-                }
-                (true, true) | (false, false) => {
-                    // Format matches preference: not redundant.
                 }
             }
+        } else {
+            let local_file = matching[0];
+            if local_file.spec_file_name().is_git_ref() {
+                problems.push(Problem::GitRefShouldBeJson { local_file });
+            }
         }
+
+        problems.extend(non_matching.into_iter().map(|s| {
+            Problem::BlessedVersionExtraLocalSpec {
+                spec_file_name: s.spec_file_name().clone(),
+            }
+        }));
     } else {
-        assert_eq!(matching.len(), 1);
+        // Slow path: git ref storage enabled and not latest; need to check the
+        // respective first commits to determine if this version should be a git
+        // ref.
+        //
+        // A version should be stored as a git ref if it was introduced in a
+        // different commit from the latest (see RFD 634). If we can't determine
+        // the first commit, report an error.
+        let should_be_git_ref = match git_ref {
+            Some(r) => match r.to_git_ref(&env.repo_root) {
+                Ok(current) => should_convert_to_git_ref(
+                    latest_first_commit,
+                    current.commit,
+                )
+                .then_some(current),
+                Err(error) => {
+                    problems.push(Problem::GitRefFirstCommitUnknown {
+                        spec_file_name: blessed.spec_file_name().clone(),
+                        source: error,
+                    });
+                    None
+                }
+            },
+            None => None,
+        };
 
-        // For non-latest blessed versions, check if the local file format (git
-        // ref vs JSON) matches the expected format. We already took care of
-        // duplicates above.
-        let local_file = matching[0];
+        if matching.len() > 1 {
+            // We might have both api.json and api.json.gitref for the same
+            // version. Mark the redundant file for deletion.
+            for local_file in matching {
+                let redundant = match (
+                    should_be_git_ref.is_some(),
+                    local_file.spec_file_name().is_git_ref(),
+                ) {
+                    (true, false) | (false, true) => true,
+                    (true, true) | (false, false) => false,
+                };
+                if redundant {
+                    problems.push(Problem::DuplicateLocalFile { local_file });
+                }
+            }
+        } else {
+            let local_file = matching[0];
 
-        // Should the local file be converted into a git ref?
-        if use_git_ref_storage
-            && !is_latest
-            && !local_file.spec_file_name().is_git_ref()
-        {
-            if let Some(blessed_git_ref) = git_ref {
-                // Computing the git ref might fail (e.g., in a shallow clone).
-                // In that case, skip the suggestion.
-                if let Ok(current_git_ref) =
-                    blessed_git_ref.to_git_ref(&env.repo_root)
-                {
-                    if should_convert_to_git_ref(
-                        latest_first_commit,
-                        current_git_ref.commit,
-                    ) {
-                        problems.push(Problem::BlessedVersionShouldBeGitRef {
-                            local_file,
-                            git_ref: current_git_ref,
-                        });
-                    }
+            match (should_be_git_ref, local_file.spec_file_name().is_git_ref())
+            {
+                (Some(git_ref), false) => {
+                    // Should be git ref but is JSON: convert to git ref.
+                    problems.push(Problem::BlessedVersionShouldBeGitRef {
+                        local_file,
+                        git_ref: git_ref.clone(),
+                    });
+                }
+                (None, true) => {
+                    // Should be JSON but is git ref: convert to JSON.
+                    problems.push(Problem::GitRefShouldBeJson { local_file });
+                }
+                (Some(_), true) | (None, false) => {
+                    // Format matches preference: no conversion needed.
                 }
             }
         }
 
-        // Should git ref files be converted to JSON?
-        if !use_git_ref_storage && local_file.spec_file_name().is_git_ref() {
-            problems.push(Problem::GitRefShouldBeJson { local_file });
-        }
-
-        // There shouldn't be any local specs that match the same version but don't
-        // match the same contents.
         problems.extend(non_matching.into_iter().map(|s| {
             Problem::BlessedVersionExtraLocalSpec {
                 spec_file_name: s.spec_file_name().clone(),

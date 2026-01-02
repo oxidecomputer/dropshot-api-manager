@@ -65,10 +65,8 @@ fn test_conversion() -> Result<()> {
         "current commit should have advanced past the first commit"
     );
 
-    // Add v4 to make v1-v3 no longer latest. v3 (the previous latest) should be
-    // converted to a git ref in the same operation that creates v4. This means
-    // Git will see v3.json deleted, v3.json.gitref created, and v4.json
-    // created.
+    // v3 (the previous latest) should be converted to a git ref in the same
+    // operation that creates v4.
     let extended_apis = versioned_health_with_v4_git_ref_apis()?;
     env.generate_documents(&extended_apis)?;
 
@@ -241,8 +239,6 @@ fn test_lockstep_never_converted_to_git_ref() -> Result<()> {
 fn test_mixed_first_commits_selective_conversion() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    // Use APIs without git ref storage initially so we can commit v1, v2, v3
-    // as JSON files from different commits.
     let v1_v2_no_git_ref = versioned_health_reduced_apis()?;
     env.generate_documents(&v1_v2_no_git_ref)?;
     env.commit_documents()?;
@@ -258,8 +254,7 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
     assert!(env.versioned_local_document_exists("versioned-health", "2.0.0")?);
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
 
-    // Now check with git ref storage enabled. v3 is latest (from second_commit)
-    // while v1, v2 are from first_commit, so they should be converted.
+    // v3 is latest (from second_commit) while v1, v2 are from first_commit.
     let v1_v2_v3_git_ref = versioned_health_git_ref_apis()?;
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_ref)?;
     assert_eq!(
@@ -521,7 +516,7 @@ fn test_duplicates() -> Result<()> {
         "v1 should not have a JSON file"
     );
 
-    // Manually create a duplicate JSON file for v1 (simulating an edge case).
+    // Manually create a duplicate JSON file for v1.
     let json_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
     let git_ref_path = env
         .find_versioned_git_ref_path("versioned-health", "1.0.0")?
@@ -556,7 +551,7 @@ fn test_duplicates() -> Result<()> {
         "duplicate JSON should be deleted"
     );
 
-    // Test the opposite: create a duplicate again and disable git refs.
+    // Now test with git refs disabled.
     env.create_file(&json_path, &json_content)?;
     assert!(
         env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
@@ -667,6 +662,254 @@ fn test_remove_readd() -> Result<()> {
     assert_eq!(
         v3_commit, commit_1,
         "v3 git ref should point to commit 1 (never removed)"
+    );
+
+    Ok(())
+}
+
+/// Test that when the latest version is removed, the previous-latest version
+/// is converted from a git ref back to a JSON file.
+#[test]
+fn test_latest_removed() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2 = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash_full()?;
+
+    env.make_unrelated_commit("between v2 and v3")?;
+
+    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+
+    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
+
+    env.commit_documents()?;
+    let v3_commit = env.get_current_commit_hash_full()?;
+    assert_ne!(v1_v2_commit, v3_commit);
+
+    env.make_unrelated_commit("between v3 and v4")?;
+
+    let v1_v2_v3_v4 = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4)?;
+
+    assert!(env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
+
+    env.commit_documents()?;
+
+    // Remove v4 by going back to v1-v3.
+    env.generate_documents(&v1_v2_v3)?;
+
+    // v3 should be converted back to JSON because it's now the latest.
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should be JSON (new latest after v4 removal)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a git ref anymore"
+    );
+
+    // v1, v2 should remain as git refs (different first commit from v3).
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should remain as a git ref"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should remain as a git ref"
+    );
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit_from_ref = v1_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(v1_commit_from_ref, v1_v2_commit);
+
+    let v2_git_ref = env.read_versioned_git_ref("versioned-health", "2.0.0")?;
+    let v2_commit_from_ref = v2_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(v2_commit_from_ref, v1_v2_commit);
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that when the latest version is removed, versions that share the same
+/// first commit as the new latest are also converted from git refs to JSON.
+#[test]
+fn test_latest_removed_same_commit() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_only = versioned_health_v1_only_apis()?;
+    env.generate_documents(&v1_only)?;
+    env.commit_documents()?;
+    let v1_commit = env.get_current_commit_hash_full()?;
+
+    env.make_unrelated_commit("between v1 and v2/v3")?;
+
+    // Add v2, v3 in the same generate call (they share the same first commit).
+    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+
+    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
+
+    env.commit_documents()?;
+    let v2_v3_commit = env.get_current_commit_hash_full()?;
+    assert_ne!(v1_commit, v2_v3_commit);
+
+    env.make_unrelated_commit("between v3 and v4")?;
+
+    let v1_v2_v3_v4 = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4)?;
+
+    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
+
+    env.commit_documents()?;
+
+    // Remove v4 by going back to v1-v3.
+    env.generate_documents(&v1_v2_v3)?;
+
+    // v3 should be converted back to JSON because it's now the latest.
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should be JSON (new latest after v4 removal)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a git ref anymore"
+    );
+
+    // v2 was introduced in the same commit as v3 (the new latest), so it should
+    // also be converted back to JSON.
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "2.0.0")?,
+        "v2 should be JSON (same first commit as new latest v3)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should not be a git ref anymore"
+    );
+
+    // v1 should remain as a git ref (different first commit from v3).
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should remain as a git ref"
+    );
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit_from_ref = v1_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(v1_commit_from_ref, v1_commit);
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that git errors during first commit lookup are reported as problems.
+///
+/// This test uses a fake git binary that fails on `--diff-filter=A` commands
+/// to simulate a git failure during first commit lookup.
+#[test]
+fn test_git_error_reports_problem() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    let fake_git = std::env::var("NEXTEST_BIN_EXE_fake_git")
+        .expect("NEXTEST_BIN_EXE_fake_git should be set by nextest");
+    let original_git = std::env::var("GIT").ok();
+
+    // SAFETY:
+    // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
+    unsafe {
+        std::env::set_var("GIT", &fake_git);
+        // Tell fake_git where the real git is.
+        std::env::set_var("REAL_GIT", original_git.as_deref().unwrap_or("git"));
+    }
+
+    let v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let result = check_apis_up_to_date(env.environment(), &v4_apis)?;
+
+    // Should report a failure due to the unfixable GitRefFirstCommitUnknown
+    // problem.
+    assert_eq!(result, CheckResult::Failures);
+
+    Ok(())
+}
+
+/// Test behavior when running in a shallow clone where the commit that added
+/// an API version is not accessible.
+///
+/// In a shallow clone (e.g., `git clone --depth 1`), the commit history is
+/// truncated. If a blessed API version was added in a commit before the
+/// shallow boundary, `git log --diff-filter=A` can't find the actual commit
+/// where the file was added.
+///
+/// Note that Git doesn't return an error in this case. Instead, it returns the
+/// wrong commit (the shallow boundary commit), because git treats boundary
+/// commits as having no parent, making any files present in the boundary appear
+/// to have been "added" there.
+///
+/// This test documents this behavior and verifies that the tool:
+///
+/// 1. Successfully creates git refs (no error).
+/// 2. But the git refs point to the shallow boundary, not the actual first
+///    commit.
+#[test]
+fn test_shallow_clone_creates_incorrect_git_refs() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2_v3 = versioned_health_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+    env.commit_documents()?;
+    let first_commit = env.get_current_commit_hash_full()?;
+
+    env.make_unrelated_commit("intermediate commit")?;
+    let second_commit = env.get_current_commit_hash_full()?;
+
+    assert_ne!(first_commit, second_commit);
+
+    // Simulate a shallow clone: first_commit is no longer accessible.
+    env.make_shallow(&second_commit)?;
+
+    let v4_git_ref = versioned_health_with_v4_git_ref_apis()?;
+    let result = check_apis_up_to_date(env.environment(), &v4_git_ref)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    env.generate_documents(&v4_git_ref)?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 git ref created"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 git ref created"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 git ref created"
+    );
+
+    // Git refs point to the wrong commit (the shallow boundary instead of
+    // the actual first commit).
+    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
+
+    assert_eq!(
+        v1_ref_commit, second_commit,
+        "In shallow clone, git ref points to shallow boundary"
     );
 
     Ok(())

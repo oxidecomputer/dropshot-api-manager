@@ -183,6 +183,24 @@ impl ApiSpecFileName {
     pub fn is_git_ref(&self) -> bool {
         matches!(self.kind, ApiSpecFileNameKind::VersionedGitRef { .. })
     }
+
+    /// Converts a `VersionedGitRef` to its `Versioned` equivalent.
+    ///
+    /// For non-git ref files, returns a clone of self.
+    pub fn to_json_filename(&self) -> ApiSpecFileName {
+        match &self.kind {
+            ApiSpecFileNameKind::VersionedGitRef { version, hash } => {
+                ApiSpecFileName::new(
+                    self.ident.clone(),
+                    ApiSpecFileNameKind::Versioned {
+                        version: version.clone(),
+                        hash: hash.clone(),
+                    },
+                )
+            }
+            _ => self.clone(),
+        }
+    }
 }
 
 /// Describes how a particular OpenAPI document is named.

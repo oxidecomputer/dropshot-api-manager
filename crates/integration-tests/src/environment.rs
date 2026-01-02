@@ -443,6 +443,34 @@ impl TestEnvironment {
         Ok(())
     }
 
+    /// Simulate a shallow clone by writing to `.git/shallow`.
+    ///
+    /// This makes Git behave as if the repository was cloned with `--depth 1`
+    /// starting from the given commit. History before the shallow boundary
+    /// commit will not be accessible via `git log`.
+    ///
+    /// The boundary commit itself is included in the shallow history, but its
+    /// parents are not.
+    pub fn make_shallow(&self, boundary_commit: &str) -> Result<()> {
+        let shallow_path = self.workspace_root.join(".git/shallow");
+        fs::write(&shallow_path, format!("{}\n", boundary_commit))
+            .with_context(|| {
+                format!("failed to write shallow file: {}", shallow_path)
+            })?;
+        Ok(())
+    }
+
+    /// Remove the shallow boundary, restoring full history access.
+    pub fn unshallow(&self) -> Result<()> {
+        let shallow_path = self.workspace_root.join(".git/shallow");
+        if shallow_path.exists() {
+            fs::remove_file(&shallow_path).with_context(|| {
+                format!("failed to remove shallow file: {}", shallow_path)
+            })?;
+        }
+        Ok(())
+    }
+
     /// Helper to run git commands in the workspace root.
     fn run_git_command(
         workspace_root: &Utf8Path,

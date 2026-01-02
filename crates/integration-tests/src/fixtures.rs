@@ -512,6 +512,21 @@ pub mod versioned_health_no_v1 {
     };
 }
 
+/// Versioned health API fixture with only v1.
+///
+/// Used to test git ref conversion when multiple versions share the same
+/// first commit as the new latest.
+pub mod versioned_health_v1_only {
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(1, INITIAL)]);
+
+    // Reuse the same API and response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        HealthStatusV1, VersionedHealthApi, api_mod,
+    };
+}
+
 /// Versioned health API fixture that skips the middle version (2.0.0).
 /// This has versions 3.0.0 and 1.0.0 only, simulating retirement of an older
 /// blessed version.
@@ -971,6 +986,31 @@ pub fn versioned_health_no_v1_apis() -> Result<ManagedApis> {
 
     ManagedApis::new(vec![config])
         .context("failed to create no-v1 versioned health ManagedApis")
+}
+
+/// Create versioned health API with only v1.
+///
+/// Used to test git ref conversion when multiple versions share the same
+/// first commit as the new latest.
+pub fn versioned_health_v1_only_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_v1_only::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v1_only::api_mod::stub_api_description,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create v1-only versioned health ManagedApis")
 }
 
 /// Create a versioned health API with incompatible changes that break backward

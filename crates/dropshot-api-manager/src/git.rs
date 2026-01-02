@@ -212,6 +212,22 @@ pub fn git_first_commit_for_file(
     })
 }
 
+/// Returns true if the repository is a shallow clone.
+///
+/// Shallow clones have truncated history, which can cause `git log` to return
+/// incorrect results when searching for the commit that added a file. In a
+/// shallow clone, files present at the shallow boundary appear to have been
+/// "added" in the boundary commit, even if they were actually added earlier.
+pub fn is_shallow_clone(repo_root: &Utf8Path) -> bool {
+    let mut cmd = git_start(repo_root);
+    cmd.arg("rev-parse").arg("--is-shallow-repository");
+    match do_run(&mut cmd) {
+        Ok(output) => output.trim() == "true",
+        // If this failed, don't print a warning.
+        Err(_) => false,
+    }
+}
+
 /// Begin assembling an invocation of git(1)
 fn git_start(repo_root: &Utf8Path) -> Command {
     let git = std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
