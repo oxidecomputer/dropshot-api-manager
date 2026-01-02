@@ -731,14 +731,11 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
 
                         match entry {
                             Entry::Vacant(vacant_entry) => {
-                                if let Some(unparseable_item) =
-                                    T::make_unparseable_item(
-                                        file_name.clone(),
-                                        contents,
-                                    )
-                                {
-                                    vacant_entry.insert(unparseable_item);
-                                }
+                                let unparseable_item = T::make_unparseable_item(
+                                    file_name.clone(),
+                                    contents,
+                                );
+                                vacant_entry.insert(unparseable_item);
                             }
                             Entry::Occupied(mut occupied_entry) => {
                                 occupied_entry
@@ -962,19 +959,20 @@ pub trait ApiLoad {
     /// couldn't be parsed. This allows the contents to still be accessed even
     /// though parsing failed.
     ///
-    /// Returns `Some` if this type supports tracking unparseable files (e.g.,
-    /// local files), or `None` if not (e.g., blessed files which should always
-    /// be valid).
-    fn make_unparseable_item(
-        name: ApiSpecFileName,
-        contents: Vec<u8>,
-    ) -> Option<Self>
+    /// # Panics
+    ///
+    /// Panics if `UNPARSEABLE_FILES_ALLOWED` is `false`. The caller must check
+    /// `UNPARSEABLE_FILES_ALLOWED` before calling this method.
+    fn make_unparseable_item(name: ApiSpecFileName, contents: Vec<u8>) -> Self
     where
         Self: Sized;
 
     /// Try to add an unparseable file to an existing entry.
     ///
-    /// For types that don't support unparseable files, this should do nothing.
+    /// # Panics
+    ///
+    /// Panics if `UNPARSEABLE_FILES_ALLOWED` is `false`. The caller must check
+    /// `UNPARSEABLE_FILES_ALLOWED` before calling this method.
     fn try_extend_unparseable(
         &mut self,
         name: ApiSpecFileName,

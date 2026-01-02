@@ -61,9 +61,11 @@ impl ApiLoad for BlessedApiSpecFile {
     fn make_unparseable_item(
         _name: ApiSpecFileName,
         _contents: Vec<u8>,
-    ) -> Option<Self> {
-        // Blessed files should always be valid.
-        None
+    ) -> Self {
+        panic!(
+            "make_unparseable_item called on BlessedApiSpecFile, but \
+             UNPARSEABLE_FILES_ALLOWED is false"
+        );
     }
 
     fn try_extend_unparseable(
@@ -71,7 +73,10 @@ impl ApiLoad for BlessedApiSpecFile {
         _name: ApiSpecFileName,
         _contents: Vec<u8>,
     ) {
-        // Blessed files should always be valid.
+        panic!(
+            "try_extend_unparseable called on BlessedApiSpecFile, but \
+             UNPARSEABLE_FILES_ALLOWED is false"
+        );
     }
 }
 

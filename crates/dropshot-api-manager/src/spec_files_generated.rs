@@ -54,9 +54,11 @@ impl ApiLoad for GeneratedApiSpecFile {
     fn make_unparseable_item(
         _name: ApiSpecFileName,
         _contents: Vec<u8>,
-    ) -> Option<Self> {
-        // Generated files should always be valid.
-        None
+    ) -> Self {
+        panic!(
+            "make_unparseable_item called on GeneratedApiSpecFile, but \
+             UNPARSEABLE_FILES_ALLOWED is false"
+        );
     }
 
     fn try_extend_unparseable(
@@ -64,7 +66,10 @@ impl ApiLoad for GeneratedApiSpecFile {
         _name: ApiSpecFileName,
         _contents: Vec<u8>,
     ) {
-        // Generated files should always be valid.
+        panic!(
+            "try_extend_unparseable called on GeneratedApiSpecFile, but \
+             UNPARSEABLE_FILES_ALLOWED is false"
+        );
     }
 }
 

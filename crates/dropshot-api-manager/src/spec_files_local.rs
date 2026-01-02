@@ -101,11 +101,8 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
         vec![LocalApiSpecFile::Valid(Box::new(raw))]
     }
 
-    fn make_unparseable_item(
-        name: ApiSpecFileName,
-        contents: Vec<u8>,
-    ) -> Option<Self> {
-        Some(vec![LocalApiSpecFile::Unparseable { name, contents }])
+    fn make_unparseable_item(name: ApiSpecFileName, contents: Vec<u8>) -> Self {
+        vec![LocalApiSpecFile::Unparseable { name, contents }]
     }
 
     fn try_extend_unparseable(
