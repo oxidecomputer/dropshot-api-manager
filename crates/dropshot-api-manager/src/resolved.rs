@@ -1479,26 +1479,26 @@ fn resolve_api_version_blessed<'a>(
         }
     }
 
-    // Local function to compute the git ref for this version. This is
+    // Local function to compute the storage format for this version. This is
     // expensive because it may need to resolve a git revision to a commit
     // hash.
-    let compute_should_be_git_ref =
-        |problems: &mut Vec<Problem<'a>>| match git_ref {
-            Some(r) => match r.to_git_ref(&env.repo_root) {
-                Ok(current) => should_convert_to_git_ref(
-                    latest_first_commit,
-                    current.commit,
-                )
-                .then_some(current),
-                Err(error) => {
-                    problems.push(Problem::GitRefFirstCommitUnknown {
-                        spec_file_name: blessed.spec_file_name().clone(),
-                        source: error,
-                    });
-                    None
-                }
-            },
-            None => None,
+    let compute_storage_format =
+        |problems: &mut Vec<Problem<'a>>| -> VersionStorageFormat {
+            match git_ref {
+                Some(r) => match r.to_git_ref(&env.repo_root) {
+                    Ok(current) => {
+                        storage_format_for_blessed(latest_first_commit, current)
+                    }
+                    Err(error) => {
+                        problems.push(Problem::GitRefFirstCommitUnknown {
+                            spec_file_name: blessed.spec_file_name().clone(),
+                            source: error,
+                        });
+                        VersionStorageFormat::Error
+                    }
+                },
+                None => VersionStorageFormat::Json,
+            }
         };
 
     if matching.is_empty() && corrupted.is_empty() {
@@ -1546,16 +1546,23 @@ fn resolve_api_version_blessed<'a>(
             }
         }));
     } else {
-        // Slow path: git ref storage enabled and not latest. Compute whether
-        // this version should be stored as a git ref.
-        let should_be_git_ref = compute_should_be_git_ref(&mut problems);
+        // Slow path: git ref storage enabled and not latest. Compute what
+        // storage format this version should use.
+        let storage_format = compute_storage_format(&mut problems);
 
-        // Report corrupted local files that need regeneration from blessed.
+        // Report corrupted local files that need regeneration from blessed
+        // versions.
         for local_file in &corrupted {
+            let git_ref = match &storage_format {
+                VersionStorageFormat::GitRef(g) => Some(g.clone()),
+                VersionStorageFormat::Json | VersionStorageFormat::Error => {
+                    None
+                }
+            };
             problems.push(Problem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
-                git_ref: should_be_git_ref.clone(),
+                git_ref,
             });
         }
 
@@ -1567,11 +1574,17 @@ fn resolve_api_version_blessed<'a>(
             // version. Mark the redundant file for deletion.
             for local_file in matching {
                 let redundant = match (
-                    should_be_git_ref.is_some(),
+                    &storage_format,
                     local_file.spec_file_name().is_git_ref(),
                 ) {
-                    (true, false) | (false, true) => true,
-                    (true, true) | (false, false) => false,
+                    // Should be git ref but have JSON, or should be JSON but
+                    // have git ref: this file is redundant.
+                    (VersionStorageFormat::GitRef(_), false)
+                    | (VersionStorageFormat::Json, true) => true,
+                    // Format matches, or we had an error: not redundant.
+                    (VersionStorageFormat::GitRef(_), true)
+                    | (VersionStorageFormat::Json, false)
+                    | (VersionStorageFormat::Error, _) => false,
                 };
                 if redundant {
                     problems.push(Problem::DuplicateLocalFile { local_file });
@@ -1580,24 +1593,27 @@ fn resolve_api_version_blessed<'a>(
         } else {
             let local_file = matching[0];
 
-            match (should_be_git_ref, local_file.spec_file_name().is_git_ref())
-            {
-                (Some(git_ref), false) => {
+            match (&storage_format, local_file.spec_file_name().is_git_ref()) {
+                (VersionStorageFormat::GitRef(git_ref), false) => {
                     // Should be git ref but is JSON: convert to git ref.
                     problems.push(Problem::BlessedVersionShouldBeGitRef {
                         local_file,
                         git_ref: git_ref.clone(),
                     });
                 }
-                (None, true) => {
+                (VersionStorageFormat::Json, true) => {
                     // Should be JSON but is git ref: convert to JSON.
                     problems.push(Problem::GitRefShouldBeJson {
                         local_file,
                         blessed,
                     });
                 }
-                (Some(_), true) | (None, false) => {
+                (VersionStorageFormat::GitRef(_), true)
+                | (VersionStorageFormat::Json, false) => {
                     // Format matches preference: no conversion needed.
+                }
+                (VersionStorageFormat::Error, _) => {
+                    // Error determining format: don't suggest any changes.
                 }
             }
         }
@@ -1703,39 +1719,55 @@ enum LatestFirstCommit {
     BlessedError,
 }
 
-/// Returns true if this tool should convert a blessed version to a git ref,
-/// assuming that git ref storage is enabled.
-fn should_convert_to_git_ref(
+/// Describes what storage format a blessed version should use.
+#[derive(Clone, Debug)]
+enum VersionStorageFormat {
+    /// The version should be stored as a git ref file.
+    GitRef(GitRef),
+    /// The version should be stored as a JSON file.
+    Json,
+    /// An error occurred while determining the storage format. The version
+    /// should not be modified.
+    Error,
+}
+
+/// Returns the storage format for a blessed version, assuming git ref storage
+/// is enabled and the current version's potential git ref is known.
+fn storage_format_for_blessed(
     latest: LatestFirstCommit,
-    first_commit: GitCommitHash,
-) -> bool {
+    current: GitRef,
+) -> VersionStorageFormat {
     // This match statement captures the decision table:
     //
-    //      status         |  suggest conversion?
+    //      status         |  storage format
     //                     |
-    //    NotBlessed       |    yes (always)
-    //   Blessed(same)     |        no
-    // Blessed(different)  |       yes
-    //    BlessedError     |        no
+    //    NotBlessed       |    GitRef (always)
+    //   Blessed(same)     |       Json
+    // Blessed(different)  |      GitRef
+    //    BlessedError     |      Error
     match latest {
         LatestFirstCommit::NotBlessed => {
             // The latest version is not blessed. This means that a new version
             // is being added, so we should always convert blessed versions to
             // git refs.
-            true
+            VersionStorageFormat::GitRef(current)
         }
 
         LatestFirstCommit::Blessed(latest_first_commit) => {
             // The latest version is blessed. Only suggest conversions if the
             // version's first commit is different from the latest version's
             // first commit.
-            first_commit != latest_first_commit
+            if current.commit != latest_first_commit {
+                VersionStorageFormat::GitRef(current)
+            } else {
+                VersionStorageFormat::Json
+            }
         }
 
         LatestFirstCommit::BlessedError => {
             // The latest version is blessed, but an error occurred while
-            // determining its first commit.
-            false
+            // determining its first commit. Don't suggest any changes.
+            VersionStorageFormat::Error
         }
     }
 }
@@ -1757,32 +1789,47 @@ mod tests {
     }
 
     #[test]
-    fn test_should_suggest_git_ref_conversion() {
-        let current = commit(COMMIT_A);
+    fn test_storage_format_for_blessed() {
+        let current = git_ref(COMMIT_A);
 
         assert!(
-            should_convert_to_git_ref(LatestFirstCommit::NotBlessed, current),
-            "latest NotBlessed => always suggest conversion"
+            matches!(
+                storage_format_for_blessed(
+                    LatestFirstCommit::NotBlessed,
+                    current.clone()
+                ),
+                VersionStorageFormat::GitRef(_)
+            ),
+            "latest NotBlessed => always GitRef"
         );
 
         let latest = LatestFirstCommit::Blessed(commit(COMMIT_A));
         assert!(
-            !should_convert_to_git_ref(latest, current),
-            "latest Blessed with same commit => do not suggest conversion"
+            matches!(
+                storage_format_for_blessed(latest, current.clone()),
+                VersionStorageFormat::Json
+            ),
+            "latest Blessed with same commit => Json"
         );
 
         let latest = LatestFirstCommit::Blessed(commit(COMMIT_B));
         assert!(
-            should_convert_to_git_ref(latest, current),
-            "latest Blessed with different commit => suggest conversion"
+            matches!(
+                storage_format_for_blessed(latest, current.clone()),
+                VersionStorageFormat::GitRef(_)
+            ),
+            "latest Blessed with different commit => GitRef"
         );
 
         assert!(
-            !should_convert_to_git_ref(
-                LatestFirstCommit::BlessedError,
-                current
+            matches!(
+                storage_format_for_blessed(
+                    LatestFirstCommit::BlessedError,
+                    current
+                ),
+                VersionStorageFormat::Error
             ),
-            "latest BlessedUnknown => do not suggest conversion"
+            "latest BlessedError => Error"
         );
     }
 
@@ -1792,5 +1839,10 @@ mod tests {
 
     fn commit(s: &str) -> GitCommitHash {
         s.parse().unwrap()
+    }
+
+    fn git_ref(s: &str) -> GitRef {
+        use camino::Utf8PathBuf;
+        GitRef { commit: commit(s), path: Utf8PathBuf::from("test/path.json") }
     }
 }

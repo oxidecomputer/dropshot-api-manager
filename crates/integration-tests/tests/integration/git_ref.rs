@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Tests for git ref storage of blessed API versions.
 //!
@@ -1533,6 +1533,48 @@ fn test_jj_symlink_conflict_blessed_rebase() -> Result<()> {
 
     rename_conflict_blessed_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt_apis)
 }
+
+/// Test merge with main as first parent (reverse direction).
+///
+/// This tests the same scenario as [`test_rename_conflict_blessed_versions`],
+/// but merges branch_b into main instead of main into branch_b. The user
+/// suspects git may have asymmetric behavior depending on which branch is the
+/// first parent.
+///
+/// See [`rename_conflict_blessed_setup`] for the test scenario.
+#[test]
+fn test_rename_conflict_blessed_versions_main_first() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let (v1_v2_commit, expected_conflicts) =
+        rename_conflict_blessed_setup(&env)?;
+
+    // Setup leaves us on branch_b. Switch to main and merge branch_b into it.
+    env.checkout_branch("main")?;
+    let merge_result = env.try_merge_branch("branch_b")?;
+    let MergeResult::Conflict(conflicted_files) = merge_result else {
+        panic!(
+            "merge should have conflicts due to different v3 contents; \
+             got clean merge"
+        );
+    };
+    assert_eq!(
+        conflicted_files,
+        all_conflict_paths(&expected_conflicts),
+        "conflicted files should match expected"
+    );
+
+    // Resolution: make branch's alternate v3 into v4, keep main's v3.
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4alt_apis)?;
+    env.complete_merge()?;
+
+    rename_conflict_blessed_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt_apis)
+}
+
+// Note: We cannot do a test like this for jj at the moment (where p1 is main
+// and p2 is the branch), because our code is not currently aware of jj and HEAD
+// isn't updated until the merge is committed. If and when the Dropshot API
+// manager gains jj awareness, we can test this scenario.
 
 /// Setup for [`test_rename_conflict_blessed_versions`] and
 /// [`test_rebase_rename_conflict_blessed_versions`].
