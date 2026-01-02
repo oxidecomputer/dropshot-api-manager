@@ -114,7 +114,7 @@ fn dump_structure<T: AsRawFiles>(
             println!("        version {}:", version);
             for api_spec in files.as_raw_files() {
                 let version_str = api_spec
-                    .parsed_version()
+                    .version()
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "unparseable".to_string());
                 println!(

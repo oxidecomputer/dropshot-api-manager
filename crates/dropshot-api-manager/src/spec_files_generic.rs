@@ -710,53 +710,50 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                 };
             }
             Err((error, contents)) => {
-                if T::UNPARSEABLE_FILES_ALLOWED {
-                    // For local files, track the unparseable file so it can
-                    // be cleaned up during generate. Record a warning so the
-                    // user knows about it.
-                    self.load_warning(
-                        error.context("skipping unparseable file"),
-                    );
-
-                    // Try to track the unparseable file per version if the type
-                    // supports it.
-                    if let Some(version) = file_name.version() {
-                        let ident = file_name.ident().clone();
-                        let entry = self
-                            .spec_files
-                            .entry(ident)
-                            .or_insert_with(ApiFiles::new)
-                            .spec_files
-                            .entry(version.clone());
-
-                        match entry {
-                            Entry::Vacant(vacant_entry) => {
-                                let unparseable_item = T::make_unparseable_item(
-                                    file_name.clone(),
-                                    contents,
-                                );
-                                vacant_entry.insert(unparseable_item);
-                            }
-                            Entry::Occupied(mut occupied_entry) => {
-                                occupied_entry
-                                    .get_mut()
-                                    .try_extend_unparseable(
-                                        file_name.clone(),
-                                        contents,
-                                    );
-                            }
-                        }
-                    } else {
-                        // No version info, fall back to old behavior.
-                        self.record_unparseable_file(
-                            file_name.ident().clone(),
-                            UnparseableFile {
-                                path: file_name.path().to_owned(),
-                            },
+                match T::make_unparseable(file_name.clone(), contents) {
+                    Some(unparseable) => {
+                        // For local files, track the unparseable file so it
+                        // can be cleaned up during generate. Record a warning
+                        // so the user knows about it.
+                        self.load_warning(
+                            error.context("skipping unparseable file"),
                         );
+
+                        // Can the file be associated with a version?
+                        if let Some(version) = file_name.version() {
+                            let ident = file_name.ident().clone();
+                            let entry = self
+                                .spec_files
+                                .entry(ident)
+                                .or_insert_with(ApiFiles::new)
+                                .spec_files
+                                .entry(version.clone());
+
+                            match entry {
+                                Entry::Vacant(vacant_entry) => {
+                                    vacant_entry.insert(
+                                        T::unparseable_into_self(unparseable),
+                                    );
+                                }
+                                Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry
+                                        .get_mut()
+                                        .extend_unparseable(unparseable);
+                                }
+                            }
+                        } else {
+                            // No version info, fall back to old behavior.
+                            self.record_unparseable_file(
+                                file_name.ident().clone(),
+                                UnparseableFile {
+                                    path: file_name.path().to_owned(),
+                                },
+                            );
+                        }
                     }
-                } else {
-                    self.load_error(error);
+                    None => {
+                        self.load_error(error);
+                    }
                 }
             }
         }
@@ -879,7 +876,7 @@ pub trait SpecFileInfo {
     /// For unparseable files, this returns `None`. Use
     /// `spec_file_name().version()` to get the version from the filename
     /// instead.
-    fn parsed_version(&self) -> Option<&semver::Version>;
+    fn version(&self) -> Option<&semver::Version>;
 }
 
 impl SpecFileInfo for ApiSpecFile {
@@ -887,7 +884,7 @@ impl SpecFileInfo for ApiSpecFile {
         &self.name
     }
 
-    fn parsed_version(&self) -> Option<&semver::Version> {
+    fn version(&self) -> Option<&semver::Version> {
         Some(&self.version)
     }
 }
@@ -933,15 +930,12 @@ pub trait ApiLoad {
     /// necessary in order to convert an API from lockstep to versioned.
     const MISCONFIGURATIONS_ALLOWED: bool;
 
-    /// Determines whether unparseable files are allowed in this context.
+    /// The type representing unparseable file data.
     ///
-    /// When `true`, files that cannot be parsed (e.g., due to merge conflict
-    /// markers) are recorded as warnings and tracked for cleanup during
-    /// generate. When `false`, such files are treated as errors.
-    ///
-    /// This is `true` for local files (allowing generate to clean them up)
-    /// and `false` for blessed files (which should always be valid).
-    const UNPARSEABLE_FILES_ALLOWED: bool;
+    /// For contexts in which unparseable files are allowed (local files), this
+    /// is a concrete type holding the filename and contents. Otherwise, this is
+    /// `std::convert::Infallible`, making it impossible to construct.
+    type Unparseable;
 
     /// Record having loaded a single OpenAPI document for an API.
     fn make_item(raw: ApiSpecFile) -> Self;
@@ -953,31 +947,25 @@ pub trait ApiLoad {
     /// some allow more than one.)
     fn try_extend(&mut self, raw: ApiSpecFile) -> anyhow::Result<()>;
 
-    /// Record an unparseable file for an API.
+    /// Try to create unparseable file data.
     ///
-    /// The `contents` parameter contains the raw bytes of the file that
-    /// couldn't be parsed. This allows the contents to still be accessed even
-    /// though parsing failed.
+    /// Returns `Some` with the unparseable data if unparseable files are
+    /// allowed in this context, `None` otherwise. When `Self::Unparseable` is
+    /// `Infallible`, this always returns `None`.
+    fn make_unparseable(
+        name: ApiSpecFileName,
+        contents: Vec<u8>,
+    ) -> Option<Self::Unparseable>;
+
+    /// Convert unparseable file data into a `Self` for insertion.
     ///
-    /// # Panics
-    ///
-    /// Panics if `UNPARSEABLE_FILES_ALLOWED` is `false`. The caller must check
-    /// `UNPARSEABLE_FILES_ALLOWED` before calling this method.
-    fn make_unparseable_item(name: ApiSpecFileName, contents: Vec<u8>) -> Self
+    /// This is used when inserting into a vacant entry.
+    fn unparseable_into_self(unparseable: Self::Unparseable) -> Self
     where
         Self: Sized;
 
-    /// Try to add an unparseable file to an existing entry.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `UNPARSEABLE_FILES_ALLOWED` is `false`. The caller must check
-    /// `UNPARSEABLE_FILES_ALLOWED` before calling this method.
-    fn try_extend_unparseable(
-        &mut self,
-        name: ApiSpecFileName,
-        contents: Vec<u8>,
-    );
+    /// Add unparseable file data to an existing entry.
+    fn extend_unparseable(&mut self, unparseable: Self::Unparseable);
 }
 
 /// Return the hash of an OpenAPI document file for the purposes of this tool

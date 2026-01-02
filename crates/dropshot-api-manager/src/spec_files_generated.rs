@@ -35,7 +35,7 @@ NewtypeFrom! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
 
 impl ApiLoad for GeneratedApiSpecFile {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
-    const UNPARSEABLE_FILES_ALLOWED: bool = false;
+    type Unparseable = std::convert::Infallible;
 
     fn make_item(raw: ApiSpecFile) -> Self {
         GeneratedApiSpecFile(raw)
@@ -51,25 +51,19 @@ impl ApiLoad for GeneratedApiSpecFile {
         );
     }
 
-    fn make_unparseable_item(
+    fn make_unparseable(
         _name: ApiSpecFileName,
         _contents: Vec<u8>,
-    ) -> Self {
-        panic!(
-            "make_unparseable_item called on GeneratedApiSpecFile, but \
-             UNPARSEABLE_FILES_ALLOWED is false"
-        );
+    ) -> Option<Self::Unparseable> {
+        None
     }
 
-    fn try_extend_unparseable(
-        &mut self,
-        _name: ApiSpecFileName,
-        _contents: Vec<u8>,
-    ) {
-        panic!(
-            "try_extend_unparseable called on GeneratedApiSpecFile, but \
-             UNPARSEABLE_FILES_ALLOWED is false"
-        );
+    fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
+        match unparseable {}
+    }
+
+    fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
+        match unparseable {}
     }
 }
 

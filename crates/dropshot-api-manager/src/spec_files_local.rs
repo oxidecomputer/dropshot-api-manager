@@ -17,6 +17,22 @@ use camino::Utf8Path;
 use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
 use std::collections::BTreeMap;
 
+/// A local file that exists but couldn't be parsed.
+///
+/// This happens when a file has merge conflict markers or is otherwise
+/// corrupted. The version is determined from the filename, allowing the
+/// generate command to regenerate the correct contents.
+///
+/// We still store the raw contents so they can be accessed if needed (e.g.,
+/// for diffing or debugging).
+#[derive(Debug)]
+pub struct LocalApiUnparseable {
+    /// The parsed filename (contains version and hash info).
+    pub name: ApiSpecFileName,
+    /// The raw file contents that couldn't be parsed.
+    pub contents: Vec<u8>,
+}
+
 /// Represents an OpenAPI document found in this working tree.
 ///
 /// This includes documents for lockstep APIs and versioned APIs, for both
@@ -30,27 +46,15 @@ pub enum LocalApiSpecFile {
     /// A valid, successfully parsed OpenAPI document.
     Valid(Box<ApiSpecFile>),
     /// A file that exists but couldn't be parsed.
-    ///
-    /// This happens when a file has merge conflict markers or is otherwise
-    /// corrupted. The version is known from the filename, allowing the
-    /// generate command to regenerate the correct content.
-    ///
-    /// We still store the raw contents so they can be accessed if needed
-    /// (e.g., for diffing or debugging).
-    Unparseable {
-        /// The parsed filename (contains version and hash info).
-        name: ApiSpecFileName,
-        /// The raw file contents that couldn't be parsed.
-        contents: Vec<u8>,
-    },
+    Unparseable(LocalApiUnparseable),
 }
 
 impl LocalApiSpecFile {
     /// Returns the spec file name.
     pub fn spec_file_name(&self) -> &ApiSpecFileName {
         match self {
-            LocalApiSpecFile::Valid(spec) => spec.spec_file_name(),
-            LocalApiSpecFile::Unparseable { name, .. } => name,
+            Self::Valid(spec) => spec.spec_file_name(),
+            Self::Unparseable(u) => &u.name,
         }
     }
 
@@ -59,14 +63,14 @@ impl LocalApiSpecFile {
     /// This works for both valid and unparseable files.
     pub fn contents(&self) -> &[u8] {
         match self {
-            LocalApiSpecFile::Valid(spec) => spec.contents(),
-            LocalApiSpecFile::Unparseable { contents, .. } => contents,
+            Self::Valid(spec) => spec.contents(),
+            Self::Unparseable(u) => &u.contents,
         }
     }
 
     /// Returns true if this file is unparseable.
     pub fn is_unparseable(&self) -> bool {
-        matches!(self, LocalApiSpecFile::Unparseable { .. })
+        matches!(self, Self::Unparseable(_))
     }
 }
 
@@ -75,10 +79,10 @@ impl SpecFileInfo for LocalApiSpecFile {
         self.spec_file_name()
     }
 
-    fn parsed_version(&self) -> Option<&semver::Version> {
+    fn version(&self) -> Option<&semver::Version> {
         match self {
-            LocalApiSpecFile::Valid(spec) => Some(spec.version()),
-            LocalApiSpecFile::Unparseable { .. } => None,
+            Self::Valid(spec) => Some(spec.version()),
+            Self::Unparseable(_) => None,
         }
     }
 }
@@ -90,7 +94,7 @@ impl SpecFileInfo for LocalApiSpecFile {
 
 impl ApiLoad for Vec<LocalApiSpecFile> {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
-    const UNPARSEABLE_FILES_ALLOWED: bool = true;
+    type Unparseable = LocalApiUnparseable;
 
     fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
         self.push(LocalApiSpecFile::Valid(Box::new(item)));
@@ -101,16 +105,19 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
         vec![LocalApiSpecFile::Valid(Box::new(raw))]
     }
 
-    fn make_unparseable_item(name: ApiSpecFileName, contents: Vec<u8>) -> Self {
-        vec![LocalApiSpecFile::Unparseable { name, contents }]
-    }
-
-    fn try_extend_unparseable(
-        &mut self,
+    fn make_unparseable(
         name: ApiSpecFileName,
         contents: Vec<u8>,
-    ) {
-        self.push(LocalApiSpecFile::Unparseable { name, contents });
+    ) -> Option<Self::Unparseable> {
+        Some(LocalApiUnparseable { name, contents })
+    }
+
+    fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
+        vec![LocalApiSpecFile::Unparseable(unparseable)]
+    }
+
+    fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
+        self.push(LocalApiSpecFile::Unparseable(unparseable));
     }
 }
 
