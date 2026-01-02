@@ -5,5 +5,8 @@
 mod environment;
 mod fixtures;
 
-pub use environment::{TestEnvironment, rel_path_forward_slashes};
+pub use environment::{
+    JjMergeResult, JjRebaseResult, MergeResult, RebaseResult, TestEnvironment,
+    check_jj_available, rel_path_forward_slashes,
+};
 pub use fixtures::*;

@@ -8,7 +8,7 @@ use crate::{
     environment::ErrorAccumulator,
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        hash_contents,
+        SpecFileInfo, hash_contents,
     },
 };
 use anyhow::{anyhow, bail};
@@ -35,6 +35,7 @@ NewtypeFrom! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
 
 impl ApiLoad for GeneratedApiSpecFile {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
+    const UNPARSEABLE_FILES_ALLOWED: bool = false;
 
     fn make_item(raw: ApiSpecFile) -> Self {
         GeneratedApiSpecFile(raw)
@@ -49,13 +50,29 @@ impl ApiLoad for GeneratedApiSpecFile {
             item.spec_file_name()
         );
     }
+
+    fn make_unparseable_item(
+        _name: ApiSpecFileName,
+        _contents: Vec<u8>,
+    ) -> Option<Self> {
+        // Generated files should always be valid.
+        None
+    }
+
+    fn try_extend_unparseable(
+        &mut self,
+        _name: ApiSpecFileName,
+        _contents: Vec<u8>,
+    ) {
+        // Generated files should always be valid.
+    }
 }
 
 impl AsRawFiles for GeneratedApiSpecFile {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a ApiSpecFile> + 'a> {
-        Box::new(std::iter::once(self.deref()))
+    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
+        Box::new(std::iter::once(self.deref() as &dyn SpecFileInfo))
     }
 }
 

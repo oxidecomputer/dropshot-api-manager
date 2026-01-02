@@ -6,11 +6,12 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
+    git::{GitCommitHash, GitRef, is_shallow_clone},
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
-    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
+    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
     spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
-    spec_files_generic::ApiFiles,
+    spec_files_generic::{ApiFiles, UnparseableFile},
     spec_files_local::{LocalApiSpecFile, LocalFiles},
     validation::{
         CheckStale, CheckStatus, DynValidationFn, overwrite_file, validate,
@@ -20,7 +21,7 @@ use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{Debug, Display},
 };
 use thiserror::Error;
@@ -64,6 +65,18 @@ pub enum Note {
          possible mismerge."
     )]
     BlessedVersionRemoved { api_ident: ApiIdent, version: semver::Version },
+
+    /// The repository is a shallow clone.
+    ///
+    /// Shallow clones can cause git ref storage to produce incorrect results,
+    /// as Git may report the wrong commit when searching for the commit that
+    /// added a file.
+    #[error(
+        "This repository appears to be a shallow clone. Git ref storage for \
+         versioned APIs may produce incorrect results. Consider running \
+         `git fetch --unshallow` to fetch complete history."
+    )]
+    ShallowClone,
 }
 
 /// Describes the result of resolving the blessed spec(s), generated spec(s),
@@ -88,6 +101,11 @@ impl<'a> Resolution<'a> {
 
     pub fn has_problems(&self) -> bool {
         !self.problems.is_empty()
+    }
+
+    /// Add a problem to this resolution.
+    pub fn add_problem(&mut self, problem: Problem<'a>) {
+        self.problems.push(problem);
     }
 
     pub fn has_errors(&self) -> bool {
@@ -125,11 +143,10 @@ impl Display for ResolutionKind {
 }
 
 /// Describes a problem resolving the blessed spec(s), generated spec(s), and
-/// local spec files for a particular API
+/// local spec files for a particular API.
 #[derive(Debug, Error)]
 pub enum Problem<'a> {
-    // This kind of problem is not associated with any *supported* version of an
-    // API.  (All the others are.)
+    // These problems are not associated with any *supported* version of an API.
     #[error(
         "A local OpenAPI document was found that does not correspond to a \
          supported version of this API: {spec_file_name}.  This is unusual, \
@@ -139,6 +156,15 @@ pub enum Problem<'a> {
          In either case, this tool can remove the unused file for you."
     )]
     LocalSpecFileOrphaned { spec_file_name: ApiSpecFileName },
+
+    #[error(
+        "A local OpenAPI document could not be parsed: {}. \
+         This may happen if the file has merge conflict markers or is \
+         otherwise corrupted. This tool can delete this file and regenerate \
+         the correct one for you.",
+         unparseable_file.path,
+    )]
+    UnparseableLocalFile { unparseable_file: UnparseableFile },
 
     // All other problems are associated with specific supported versions of an
     // API.
@@ -272,6 +298,56 @@ pub enum Problem<'a> {
         found: &'a ApiSpecFileName,
         link: &'a ApiSpecFileName,
     },
+
+    #[error(
+        "Blessed non-latest version is stored as a full JSON file. This can \
+         be converted to a git ref. This tool can perform the conversion for \
+         you."
+    )]
+    BlessedVersionShouldBeGitRef {
+        local_file: &'a LocalApiSpecFile,
+        git_ref: GitRef,
+    },
+
+    #[error(
+        "Blessed version is stored as a git ref file, but should be stored as \
+         JSON. This tool can perform the conversion for you."
+    )]
+    GitRefShouldBeJson {
+        local_file: &'a LocalApiSpecFile,
+        blessed: &'a BlessedApiSpecFile,
+    },
+
+    #[error(
+        "Local file for this blessed version is corrupted (possibly due to \
+         merge conflict markers). This tool can regenerate the file from the \
+         blessed version for you."
+    )]
+    BlessedVersionCorruptedLocal {
+        local_file: &'a LocalApiSpecFile,
+        blessed: &'a BlessedApiSpecFile,
+        /// If Some, regenerate as a git ref instead of JSON.
+        git_ref: Option<GitRef>,
+    },
+
+    #[error(
+        "Duplicate local file found: both JSON and git ref versions exist for \
+         this API version. This tool can remove the redundant file for you."
+    )]
+    DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
+
+    #[error(
+        "The first commit for this blessed version could not be determined. This \
+         may indicate a corrupted git repository or other git-related issue. Git \
+         ref storage requires complete git history access"
+         // Note: omitting a trailing period after "access" because we show ":
+         // <source>".
+    )]
+    GitRefFirstCommitUnknown {
+        spec_file_name: ApiSpecFileName,
+        #[source]
+        source: anyhow::Error,
+    },
 }
 
 impl<'a> Problem<'a> {
@@ -324,6 +400,34 @@ impl<'a> Problem<'a> {
             | Problem::LatestLinkMissing { api_ident, link } => {
                 Some(Fix::UpdateSymlink { api_ident, link })
             }
+            Problem::BlessedVersionShouldBeGitRef { local_file, git_ref } => {
+                Some(Fix::ConvertToGitRef { local_file, git_ref })
+            }
+            Problem::GitRefShouldBeJson { local_file, blessed } => {
+                Some(Fix::ConvertToJson { local_file, blessed })
+            }
+            Problem::BlessedVersionCorruptedLocal {
+                local_file,
+                blessed,
+                git_ref,
+            } => Some(Fix::RegenerateFromBlessed {
+                local_file,
+                blessed,
+                git_ref: git_ref.as_ref(),
+            }),
+            Problem::DuplicateLocalFile { local_file } => {
+                Some(Fix::DeleteFiles {
+                    files: DisplayableVec(vec![
+                        local_file.spec_file_name().clone(),
+                    ]),
+                })
+            }
+            Problem::GitRefFirstCommitUnknown { .. } => None,
+            Problem::UnparseableLocalFile { unparseable_file } => {
+                Some(Fix::DeleteUnparseableFile {
+                    path: unparseable_file.path.clone(),
+                })
+            }
         }
     }
 }
@@ -346,6 +450,27 @@ pub enum Fix<'a> {
     UpdateSymlink {
         api_ident: &'a ApiIdent,
         link: &'a ApiSpecFileName,
+    },
+    /// Convert a full JSON file to a git ref file.
+    ConvertToGitRef {
+        local_file: &'a LocalApiSpecFile,
+        git_ref: &'a GitRef,
+    },
+    /// Convert a git ref file back to a full JSON file.
+    ConvertToJson {
+        local_file: &'a LocalApiSpecFile,
+        blessed: &'a BlessedApiSpecFile,
+    },
+    /// Regenerate a corrupted local file from the blessed content.
+    RegenerateFromBlessed {
+        local_file: &'a LocalApiSpecFile,
+        blessed: &'a BlessedApiSpecFile,
+        /// If Some, regenerate as a git ref instead of JSON.
+        git_ref: Option<&'a GitRef>,
+    },
+    /// Delete an unparseable file (e.g., one with merge conflict markers).
+    DeleteUnparseableFile {
+        path: Utf8PathBuf,
     },
 }
 
@@ -388,7 +513,43 @@ impl Display for Fix<'_> {
                 writeln!(f, "{label} file {path} from generated")?;
             }
             Fix::UpdateSymlink { link, .. } => {
-                writeln!(f, "update symlink to point to {}", link.basename())?;
+                writeln!(
+                    f,
+                    "update symlink to point to {}",
+                    link.to_json_filename().basename()
+                )?;
+            }
+            Fix::ConvertToGitRef { local_file, .. } => {
+                writeln!(
+                    f,
+                    "convert {} to git ref",
+                    local_file.spec_file_name().path()
+                )?;
+            }
+            Fix::ConvertToJson { local_file, .. } => {
+                writeln!(
+                    f,
+                    "convert {} from git ref to JSON",
+                    local_file.spec_file_name().path()
+                )?;
+            }
+            Fix::RegenerateFromBlessed { local_file, git_ref, .. } => {
+                if git_ref.is_some() {
+                    writeln!(
+                        f,
+                        "regenerate {} from blessed content as git ref",
+                        local_file.spec_file_name().path()
+                    )?;
+                } else {
+                    writeln!(
+                        f,
+                        "regenerate {} from blessed content",
+                        local_file.spec_file_name().path()
+                    )?;
+                }
+            }
+            Fix::DeleteUnparseableFile { path } => {
+                writeln!(f, "delete unparseable file {path}")?;
             }
         };
         Ok(())
@@ -396,6 +557,56 @@ impl Display for Fix<'_> {
 }
 
 impl Fix<'_> {
+    /// Adds the paths (relative to the OpenAPI documents directory) that this
+    /// fix will write to. Used to determine if an unparseable file will be
+    /// overwritten.
+    pub fn add_paths_written(&self, paths: &mut HashSet<Utf8PathBuf>) {
+        match self {
+            Fix::DeleteFiles { .. } => {}
+            Fix::UpdateLockstepFile { generated } => {
+                paths.insert(generated.spec_file_name().path().to_owned());
+            }
+            Fix::UpdateVersionedFiles { generated, .. } => {
+                paths.insert(generated.spec_file_name().path().to_owned());
+            }
+            Fix::UpdateExtraFile { path, .. } => {
+                paths.insert((*path).to_owned());
+            }
+            Fix::UpdateSymlink { .. } => {}
+            Fix::ConvertToGitRef { local_file, .. } => {
+                // Writes to the .gitref path, not the JSON path.
+                let json_path = local_file.spec_file_name().path();
+                paths
+                    .insert(Utf8PathBuf::from(format!("{}.gitref", json_path)));
+            }
+            Fix::ConvertToJson { local_file, .. } => {
+                // Writes to the JSON path (removing .gitref suffix).
+                let git_ref_path = local_file.spec_file_name().path();
+                if let Some(json_path) =
+                    git_ref_path.as_str().strip_suffix(".gitref")
+                {
+                    paths.insert(Utf8PathBuf::from(json_path));
+                }
+            }
+            Fix::RegenerateFromBlessed { local_file, git_ref, .. } => {
+                if git_ref.is_some() {
+                    // When regenerating as git ref, writes to a .gitref file.
+                    let json_path = local_file.spec_file_name().path();
+                    paths.insert(Utf8PathBuf::from(format!(
+                        "{}.gitref",
+                        json_path
+                    )));
+                } else {
+                    // Overwrites the corrupted local file.
+                    paths.insert(local_file.spec_file_name().path().to_owned());
+                }
+            }
+            Fix::DeleteUnparseableFile { .. } => {}
+        }
+        // No wildcard match: adding a new Fix variant should cause a compile
+        // error here, forcing consideration of what paths it writes.
+    }
+
     pub fn execute(&self, env: &ResolvedEnv) -> anyhow::Result<Vec<String>> {
         let root = env.openapi_abs_dir();
         match self {
@@ -452,8 +663,9 @@ impl Fix<'_> {
                     .join(api_ident.versioned_api_latest_symlink());
                 // We want the link to contain a relative path to a file in the
                 // same directory so that it's correct no matter where it's
-                // resolved from.
-                let target = link.basename();
+                // resolved from. If the link target is a gitref, convert it to
+                // the JSON filename (the symlink should always point to JSON).
+                let target = link.to_json_filename().basename();
                 match fs_err::remove_file(&path) {
                     Ok(_) => (),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -463,6 +675,106 @@ impl Fix<'_> {
                 };
                 symlink_file(&target, &path)?;
                 Ok(vec![format!("wrote link {} -> {}", path, target)])
+            }
+            Fix::ConvertToGitRef { local_file, git_ref } => {
+                let json_path = root.join(local_file.spec_file_name().path());
+
+                let git_ref_basename = format!(
+                    "{}.gitref",
+                    local_file.spec_file_name().basename()
+                );
+                let git_ref_path = json_path
+                    .parent()
+                    .ok_or_else(|| anyhow!("cannot get parent directory"))?
+                    .join(&git_ref_basename);
+
+                // Write the git ref file. Add a trailing newline so diffs don't
+                // have the "\ No newline at end of file" message. Otherwise,
+                // the extra newline has no impact on usability or correctness.
+                fs_err::write(&git_ref_path, format!("{}\n", git_ref))?;
+
+                // Remove the original JSON file.
+                fs_err::remove_file(&json_path)?;
+
+                Ok(vec![
+                    format!("converted {} to git ref", json_path),
+                    format!("created {}", git_ref_path),
+                ])
+            }
+            Fix::ConvertToJson { local_file, blessed } => {
+                let git_ref_path =
+                    root.join(local_file.spec_file_name().path());
+
+                // Use the blessed file's contents since it's guaranteed to be
+                // valid.
+                let contents = blessed.contents();
+
+                // Compute the JSON file path by removing the .gitref suffix.
+                let git_ref_basename = local_file.spec_file_name().basename();
+                let json_basename = git_ref_basename
+                    .strip_suffix(".gitref")
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "expected git ref file to end with .gitref: {}",
+                            git_ref_basename
+                        )
+                    })?;
+
+                let json_path = git_ref_path
+                    .parent()
+                    .ok_or_else(|| anyhow!("cannot get parent directory"))?
+                    .join(json_basename);
+
+                fs_err::write(&json_path, contents)?;
+
+                fs_err::remove_file(&git_ref_path)?;
+
+                Ok(vec![
+                    format!("converted {} from git ref to JSON", git_ref_path),
+                    format!("created {}", json_path),
+                ])
+            }
+            Fix::RegenerateFromBlessed { local_file, blessed, git_ref } => {
+                let local_path = root.join(local_file.spec_file_name().path());
+
+                // Remove the corrupted file.
+                match fs_err::remove_file(&local_path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+
+                if let Some(git_ref) = git_ref {
+                    // Write as a git ref file.
+                    let git_ref_basename = format!(
+                        "{}.gitref",
+                        local_file.spec_file_name().basename()
+                    );
+                    let git_ref_path = local_path
+                        .parent()
+                        .ok_or_else(|| anyhow!("cannot get parent directory"))?
+                        .join(&git_ref_basename);
+
+                    // Add a trailing newline for clean diffs.
+                    fs_err::write(&git_ref_path, format!("{}\n", git_ref))?;
+
+                    Ok(vec![
+                        format!("removed corrupted file {}", local_path),
+                        format!("created git ref {}", git_ref_path),
+                    ])
+                } else {
+                    // Write the JSON content directly.
+                    fs_err::write(&local_path, blessed.contents())?;
+                    Ok(vec![format!(
+                        "regenerated {} from blessed content",
+                        local_path
+                    )])
+                }
+            }
+            Fix::DeleteUnparseableFile { path } => {
+                let full_path = root.join(path);
+                fs_err::remove_file(&full_path)?;
+                Ok(vec![format!("removed unparseable file {}", full_path)])
             }
         }
     }
@@ -516,7 +828,7 @@ impl<'a> Resolved<'a> {
 
         // Get one easy case out of the way: if there are any blessed API
         // versions that aren't supported any more, note that.
-        let notes = resolve_removed_blessed_versions(
+        let mut notes: Vec<Note> = resolve_removed_blessed_versions(
             &supported_versions_by_api,
             blessed,
         )
@@ -526,18 +838,26 @@ impl<'a> Resolved<'a> {
         })
         .collect();
 
+        // Warn if this is a shallow clone and any APIs use git ref storage.
+        let any_uses_git_ref =
+            apis.iter_apis().any(|a| apis.uses_git_ref_storage(a));
+        if any_uses_git_ref && is_shallow_clone(&env.repo_root) {
+            notes.push(Note::ShallowClone);
+        }
+
         // Get the other easy case out of the way: if there are any local spec
         // files for APIs or API versions that aren't supported any more, that's
         // a (fixable) problem.
-        let non_version_problems =
+        let mut non_version_problems: Vec<Problem<'_>> =
             resolve_orphaned_local_specs(&supported_versions_by_api, local)
                 .map(|spec_file_name| Problem::LocalSpecFileOrphaned {
                     spec_file_name: spec_file_name.clone(),
                 })
                 .collect();
 
-        // Now resolve each of the supported API versions.
-        let api_results = apis
+        // Resolve each of the supported API versions first, so we know what
+        // paths will be written.
+        let api_results: BTreeMap<ApiIdent, ApiResolved<'_>> = apis
             .iter_apis()
             .map(|api| {
                 let ident = api.ident().clone();
@@ -551,6 +871,8 @@ impl<'a> Resolved<'a> {
                         env,
                         api,
                         apis.validation(),
+                        apis.uses_git_ref_storage(api),
+                        blessed,
                         api_blessed,
                         api_generated,
                         api_local,
@@ -558,6 +880,34 @@ impl<'a> Resolved<'a> {
                 )
             })
             .collect();
+
+        // Now collect any unparseable files. These are local files that exist
+        // but couldn't be parsed (e.g., due to merge conflict markers).
+        //
+        // Only report unparseable files whose paths won't be overwritten by a
+        // fix. We check the actual fixes (not just generated paths) because
+        // some fixes write git refs instead of JSON files.
+        let mut paths_written: HashSet<Utf8PathBuf> = HashSet::new();
+        for api_resolved in api_results.values() {
+            for resolution in api_resolved.by_version.values() {
+                for problem in &resolution.problems {
+                    if let Some(fix) = problem.fix() {
+                        fix.add_paths_written(&mut paths_written);
+                    }
+                }
+            }
+        }
+
+        for (_ident, api_files) in local.iter() {
+            for unparseable in api_files.unparseable_files() {
+                // Only report if no fix will overwrite this path.
+                if !paths_written.contains(&unparseable.path) {
+                    non_version_problems.push(Problem::UnparseableLocalFile {
+                        unparseable_file: unparseable.clone(),
+                    });
+                }
+            }
+        }
 
         Resolved {
             notes,
@@ -647,10 +997,13 @@ fn resolve_orphaned_local_specs<'a>(
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_api<'a>(
     env: &'a ResolvedEnv,
     api: &'a ManagedApi,
     validation: Option<&DynValidationFn>,
+    use_git_ref_storage: bool,
+    all_blessed: &'a BlessedFiles,
     api_blessed: Option<&'a ApiFiles<BlessedApiSpecFile>>,
     api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
     api_local: Option<&'a ApiFiles<Vec<LocalApiSpecFile>>>,
@@ -667,7 +1020,44 @@ fn resolve_api<'a>(
             None,
         )
     } else {
-        let by_version: BTreeMap<_, _> = api
+        let latest_version = api
+            .iter_versions_semver()
+            .next_back()
+            .expect("versioned API has at least one version");
+
+        // Compute the first commit for the latest version, capturing any errors.
+        let (latest_first_commit, latest_first_commit_error) = {
+            let latest_is_blessed = api_blessed
+                .is_some_and(|b| b.versions().contains_key(latest_version));
+
+            if !latest_is_blessed {
+                (LatestFirstCommit::NotBlessed, None)
+            } else {
+                // The latest version is blessed. Try to find its first commit.
+                match all_blessed.git_ref(api.ident(), latest_version) {
+                    Some(gr) => match gr.to_git_ref(&env.repo_root) {
+                        Ok(git_ref) => {
+                            (LatestFirstCommit::Blessed(git_ref.commit), None)
+                        }
+                        Err(error) => {
+                            // Capture the error to report it for the latest
+                            // version.
+                            let blessed_file = api_blessed
+                                .and_then(|b| b.versions().get(latest_version));
+                            let spec_file_name = blessed_file
+                                .map(|f| f.spec_file_name().clone());
+                            (
+                                LatestFirstCommit::BlessedError,
+                                Some((spec_file_name, error)),
+                            )
+                        }
+                    },
+                    None => (LatestFirstCommit::BlessedError, None),
+                }
+            }
+        };
+
+        let mut by_version: BTreeMap<_, _> = api
             .iter_versions_semver()
             // Reverse the order of versions: they are stored in sorted order,
             // so the last version (first one from the back) is the latest.
@@ -685,19 +1075,38 @@ fn resolve_api<'a>(
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
 
+                // Look up the git ref for this version.
+                let git_ref = all_blessed.git_ref(api.ident(), &version);
+
                 let resolution = resolve_api_version(
                     env,
                     api,
                     validation,
+                    use_git_ref_storage,
                     ApiVersion { version: &version, is_latest, is_blessed },
                     blessed,
+                    git_ref,
                     generated,
                     local,
+                    latest_first_commit,
                 );
 
                 (version, resolution)
             })
             .collect();
+
+        // If there was an error computing the first commit for the latest
+        // version, add the error to the latest version's resolution.
+        if let Some((spec_file_name, error)) = latest_first_commit_error {
+            if let Some(resolution) = by_version.get_mut(latest_version) {
+                if let Some(spec_file_name) = spec_file_name {
+                    resolution.add_problem(Problem::GitRefFirstCommitUnknown {
+                        spec_file_name,
+                        source: error,
+                    });
+                }
+            }
+        }
 
         // Check the "latest" symlink.
         let latest_generated = api_generated.latest_link().expect(
@@ -930,18 +1339,31 @@ struct ApiVersion<'a> {
     is_blessed: Option<bool>,
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_api_version<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
+    use_git_ref_storage: bool,
     version: ApiVersion<'_>,
     blessed: Option<&'a BlessedApiSpecFile>,
+    git_ref: Option<&'a BlessedGitRef>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
+    latest_first_commit: LatestFirstCommit,
 ) -> Resolution<'a> {
     match blessed {
         Some(blessed) => resolve_api_version_blessed(
-            env, api, validation, version, blessed, generated, local,
+            env,
+            api,
+            validation,
+            use_git_ref_storage,
+            version,
+            blessed,
+            git_ref,
+            generated,
+            local,
+            latest_first_commit,
         ),
         None => resolve_api_version_local(
             env, api, validation, version, generated, local,
@@ -949,14 +1371,18 @@ fn resolve_api_version<'a>(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_api_version_blessed<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
+    use_git_ref_storage: bool,
     version: ApiVersion<'_>,
     blessed: &'a BlessedApiSpecFile,
+    git_ref: Option<&'a BlessedGitRef>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
+    latest_first_commit: LatestFirstCommit,
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
     let is_latest = version.is_latest;
@@ -1006,44 +1432,177 @@ fn resolve_api_version_blessed<'a>(
 
     // Now, there should be at least one local spec that exactly matches the
     // blessed one.
-    let (matching, non_matching): (Vec<_>, Vec<_>) =
-        local.iter().partition(|local| {
-            // It should be enough to compare the hashes, since we should have
-            // already validated that the hashes are correct for the contents.
-            // But while it's cheap enough to do, we may as well compare the
-            // contents, too, and make sure we haven't messed something up.
-            let contents_match = local.contents() == blessed.contents();
-            let local_hash = local.spec_file_name().hash().expect(
-                "this should be a versioned file so it should have a hash",
+    //
+    // We partition local files into three categories:
+    // 1. Valid files with matching hash/contents -> matching
+    // 2. Unparseable files with matching hash -> corrupted (need regeneration)
+    // 3. Everything else -> non-matching
+    let blessed_hash = blessed
+        .spec_file_name()
+        .hash()
+        .expect("this should be a versioned file so it should have a hash");
+
+    let mut matching = Vec::new();
+    let mut corrupted = Vec::new();
+    let mut non_matching = Vec::new();
+
+    for local_file in local {
+        let local_hash = local_file
+            .spec_file_name()
+            .hash()
+            .expect("this should be a versioned file so it should have a hash");
+        let hashes_match = local_hash == blessed_hash;
+
+        if local_file.is_unparseable() {
+            // Unparseable files can't have their contents compared, so we rely
+            // solely on the hash. If the hash matches, the file is corrupted
+            // and needs regeneration.
+            if hashes_match {
+                corrupted.push(local_file);
+            } else {
+                non_matching.push(local_file);
+            }
+        } else {
+            // For valid files, verify that hash matching implies content
+            // matching (and vice versa).
+            let contents_match = local_file.contents() == blessed.contents();
+            assert_eq!(
+                hashes_match, contents_match,
+                "hash and contents should match for valid files"
             );
-            let blessed_hash = blessed.spec_file_name().hash().expect(
-                "this should be a versioned file so it should have a hash",
-            );
-            let hashes_match = local_hash == blessed_hash;
-            // If the hashes are equal, the contents should be equal, and vice
-            // versa.
-            assert_eq!(hashes_match, contents_match);
-            hashes_match
-        });
-    if matching.is_empty() {
-        problems.push(Problem::BlessedVersionMissingLocal {
-            spec_file_name: blessed.spec_file_name().clone(),
-        })
-    } else {
-        // The specs are identified by, among other things, their hash.  Thus,
-        // to have two matching specs (i.e., having the same contents), we'd
-        // have to have a hash collision.  This is conceivable but unlikely
-        // enough that this is more likely a logic bug.
-        assert_eq!(matching.len(), 1);
+
+            if hashes_match {
+                matching.push(local_file);
+            } else {
+                non_matching.push(local_file);
+            }
+        }
     }
 
-    // There shouldn't be any local specs that match the same version but don't
-    // match the same contents.
-    problems.extend(non_matching.into_iter().map(|s| {
-        Problem::BlessedVersionExtraLocalSpec {
-            spec_file_name: s.spec_file_name().clone(),
+    // Determine if this version should be stored as a git ref (slow path).
+    // We need this info before handling corrupted files so we can regenerate
+    // them in the correct format.
+    let should_be_git_ref = if use_git_ref_storage && !is_latest {
+        match git_ref {
+            Some(r) => match r.to_git_ref(&env.repo_root) {
+                Ok(current) => should_convert_to_git_ref(
+                    latest_first_commit,
+                    current.commit,
+                )
+                .then_some(current),
+                Err(error) => {
+                    problems.push(Problem::GitRefFirstCommitUnknown {
+                        spec_file_name: blessed.spec_file_name().clone(),
+                        source: error,
+                    });
+                    None
+                }
+            },
+            None => None,
         }
-    }));
+    } else {
+        None
+    };
+
+    // Report corrupted local files that need regeneration from blessed.
+    for local_file in &corrupted {
+        problems.push(Problem::BlessedVersionCorruptedLocal {
+            local_file,
+            blessed,
+            git_ref: should_be_git_ref.clone(),
+        });
+    }
+
+    if matching.is_empty() && corrupted.is_empty() {
+        // No valid or corrupted local files match the blessed version.
+        problems.push(Problem::BlessedVersionMissingLocal {
+            spec_file_name: blessed.spec_file_name().clone(),
+        });
+    } else if matching.is_empty() {
+        // Only corrupted files match - they'll be regenerated. Still need to
+        // mark non-matching files as extra.
+        problems.extend(non_matching.into_iter().map(|s| {
+            Problem::BlessedVersionExtraLocalSpec {
+                spec_file_name: s.spec_file_name().clone(),
+            }
+        }));
+    } else if !use_git_ref_storage || is_latest {
+        // Fast path: git ref storage disabled or this is the latest version.
+        // Computing first commits is slow, and we know we always want JSON in
+        // this case, so we can avoid computing them here.
+
+        if matching.len() > 1 {
+            // We might have both api.json and api.json.gitref for the same
+            // version. Mark the redundant file (always the gitref file in this
+            // case) for deletion.
+            for local_file in matching {
+                if local_file.spec_file_name().is_git_ref() {
+                    problems.push(Problem::DuplicateLocalFile { local_file });
+                }
+            }
+        } else {
+            let local_file = matching[0];
+            if local_file.spec_file_name().is_git_ref() {
+                problems
+                    .push(Problem::GitRefShouldBeJson { local_file, blessed });
+            }
+        }
+
+        problems.extend(non_matching.into_iter().map(|s| {
+            Problem::BlessedVersionExtraLocalSpec {
+                spec_file_name: s.spec_file_name().clone(),
+            }
+        }));
+    } else {
+        // Slow path: git ref storage enabled and not latest.
+        // should_be_git_ref was computed earlier.
+
+        if matching.len() > 1 {
+            // We might have both api.json and api.json.gitref for the same
+            // version. Mark the redundant file for deletion.
+            for local_file in matching {
+                let redundant = match (
+                    should_be_git_ref.is_some(),
+                    local_file.spec_file_name().is_git_ref(),
+                ) {
+                    (true, false) | (false, true) => true,
+                    (true, true) | (false, false) => false,
+                };
+                if redundant {
+                    problems.push(Problem::DuplicateLocalFile { local_file });
+                }
+            }
+        } else {
+            let local_file = matching[0];
+
+            match (should_be_git_ref, local_file.spec_file_name().is_git_ref())
+            {
+                (Some(git_ref), false) => {
+                    // Should be git ref but is JSON: convert to git ref.
+                    problems.push(Problem::BlessedVersionShouldBeGitRef {
+                        local_file,
+                        git_ref: git_ref.clone(),
+                    });
+                }
+                (None, true) => {
+                    // Should be JSON but is git ref: convert to JSON.
+                    problems.push(Problem::GitRefShouldBeJson {
+                        local_file,
+                        blessed,
+                    });
+                }
+                (Some(_), true) | (None, false) => {
+                    // Format matches preference: no conversion needed.
+                }
+            }
+        }
+
+        problems.extend(non_matching.into_iter().map(|s| {
+            Problem::BlessedVersionExtraLocalSpec {
+                spec_file_name: s.spec_file_name().clone(),
+            }
+        }));
+    }
 
     Resolution::new_blessed(problems)
 }
@@ -1129,9 +1688,56 @@ fn validate_generated(
     }
 }
 
+/// Describes the first commit for the latest version.
+///
+/// Used to decide whether to suggest git ref conversion for older versions.
+#[derive(Clone, Copy, Debug)]
+enum LatestFirstCommit {
+    NotBlessed,
+    Blessed(GitCommitHash),
+    BlessedError,
+}
+
+/// Returns true if this tool should convert a blessed version to a git ref,
+/// assuming that git ref storage is enabled.
+fn should_convert_to_git_ref(
+    latest: LatestFirstCommit,
+    first_commit: GitCommitHash,
+) -> bool {
+    // This match statement captures the decision table:
+    //
+    //      status         |  suggest conversion?
+    //                     |
+    //    NotBlessed       |    yes (always)
+    //   Blessed(same)     |        no
+    // Blessed(different)  |       yes
+    //    BlessedError     |        no
+    match latest {
+        LatestFirstCommit::NotBlessed => {
+            // The latest version is not blessed. This means that a new version
+            // is being added, so we should always convert blessed versions to
+            // git refs.
+            true
+        }
+
+        LatestFirstCommit::Blessed(latest_first_commit) => {
+            // The latest version is blessed. Only suggest conversions if the
+            // version's first commit is different from the latest version's
+            // first commit.
+            first_commit != latest_first_commit
+        }
+
+        LatestFirstCommit::BlessedError => {
+            // The latest version is blessed, but an error occurred while
+            // determining its first commit.
+            false
+        }
+    }
+}
+
 #[cfg(test)]
-mod test {
-    use super::DisplayableVec;
+mod tests {
+    use super::*;
 
     #[test]
     fn test_displayable_vec() {
@@ -1143,5 +1749,43 @@ mod test {
 
         let v = DisplayableVec(vec![8, 12, 14]);
         assert_eq!(v.to_string(), "8, 12, 14");
+    }
+
+    #[test]
+    fn test_should_suggest_git_ref_conversion() {
+        let current = commit(COMMIT_A);
+
+        assert!(
+            should_convert_to_git_ref(LatestFirstCommit::NotBlessed, current),
+            "latest NotBlessed => always suggest conversion"
+        );
+
+        let latest = LatestFirstCommit::Blessed(commit(COMMIT_A));
+        assert!(
+            !should_convert_to_git_ref(latest, current),
+            "latest Blessed with same commit => do not suggest conversion"
+        );
+
+        let latest = LatestFirstCommit::Blessed(commit(COMMIT_B));
+        assert!(
+            should_convert_to_git_ref(latest, current),
+            "latest Blessed with different commit => suggest conversion"
+        );
+
+        assert!(
+            !should_convert_to_git_ref(
+                LatestFirstCommit::BlessedError,
+                current
+            ),
+            "latest BlessedUnknown => do not suggest conversion"
+        );
+    }
+
+    // Test commit hashes.
+    const COMMIT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const COMMIT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn commit(s: &str) -> GitCommitHash {
+        s.parse().unwrap()
     }
 }

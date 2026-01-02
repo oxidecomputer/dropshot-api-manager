@@ -130,42 +130,75 @@ impl ApiSpecFileName {
     }
 
     /// Returns the path of this file relative to the root of the OpenAPI
-    /// documents
+    /// documents.
     pub fn path(&self) -> Utf8PathBuf {
         match &self.kind {
             ApiSpecFileNameKind::Lockstep => {
                 Utf8PathBuf::from_iter([self.basename()])
             }
-            ApiSpecFileNameKind::Versioned { .. } => Utf8PathBuf::from_iter([
-                self.ident.deref().clone(),
-                self.basename(),
-            ]),
+            ApiSpecFileNameKind::Versioned { .. }
+            | ApiSpecFileNameKind::VersionedGitRef { .. } => {
+                Utf8PathBuf::from_iter([
+                    self.ident.deref().clone(),
+                    self.basename(),
+                ])
+            }
         }
     }
 
-    /// Returns the base name of this file path
+    /// Returns the base name of this file path.
     pub fn basename(&self) -> String {
         match &self.kind {
             ApiSpecFileNameKind::Lockstep => format!("{}.json", self.ident),
             ApiSpecFileNameKind::Versioned { version, hash } => {
                 format!("{}-{}-{}.json", self.ident, version, hash)
             }
+            ApiSpecFileNameKind::VersionedGitRef { version, hash } => {
+                format!("{}-{}-{}.json.gitref", self.ident, version, hash)
+            }
         }
     }
 
-    /// For versioned APIs, returns the version part of the filename
+    /// For versioned APIs, returns the version part of the filename.
     pub fn version(&self) -> Option<&semver::Version> {
         match &self.kind {
             ApiSpecFileNameKind::Lockstep => None,
-            ApiSpecFileNameKind::Versioned { version, .. } => Some(version),
+            ApiSpecFileNameKind::Versioned { version, .. }
+            | ApiSpecFileNameKind::VersionedGitRef { version, .. } => {
+                Some(version)
+            }
         }
     }
 
-    /// For versioned APIs, returns the hash part of the filename
+    /// For versioned APIs, returns the hash part of the filename.
     pub fn hash(&self) -> Option<&str> {
         match &self.kind {
             ApiSpecFileNameKind::Lockstep => None,
-            ApiSpecFileNameKind::Versioned { hash, .. } => Some(hash),
+            ApiSpecFileNameKind::Versioned { hash, .. }
+            | ApiSpecFileNameKind::VersionedGitRef { hash, .. } => Some(hash),
+        }
+    }
+
+    /// Returns true if this is a git ref file.
+    pub fn is_git_ref(&self) -> bool {
+        matches!(self.kind, ApiSpecFileNameKind::VersionedGitRef { .. })
+    }
+
+    /// Converts a `VersionedGitRef` to its `Versioned` equivalent.
+    ///
+    /// For non-git ref files, returns a clone of self.
+    pub fn to_json_filename(&self) -> ApiSpecFileName {
+        match &self.kind {
+            ApiSpecFileNameKind::VersionedGitRef { version, hash } => {
+                ApiSpecFileName::new(
+                    self.ident.clone(),
+                    ApiSpecFileNameKind::Versioned {
+                        version: version.clone(),
+                        hash: hash.clone(),
+                    },
+                )
+            }
+            _ => self.clone(),
         }
     }
 }
@@ -180,6 +213,17 @@ pub enum ApiSpecFileNameKind {
         /// The version of the API this document describes.
         version: semver::Version,
         /// The hash of the file contents.
+        hash: String,
+    },
+    /// The file's path implies a versioned API stored as a git ref.
+    ///
+    /// Instead of storing the full JSON content, a `.gitref` file contains a
+    /// reference in the format `commit:path` that can be used to retrieve the
+    /// content via `git show`.
+    VersionedGitRef {
+        /// The version of the API this document describes.
+        version: semver::Version,
+        /// The hash of the file contents (from the original file).
         hash: String,
     },
 }

@@ -26,7 +26,8 @@ pub(crate) fn debug_impl(
 
     // Print information about local files.
 
-    let (local_files, errors) = env.local_source.load(apis, &styles)?;
+    let (local_files, errors) =
+        env.local_source.load(apis, &styles, &env.repo_root)?;
     dump_structure(&local_files, &errors);
 
     // Print information about what we found in Git.
@@ -35,7 +36,8 @@ pub(crate) fn debug_impl(
     dump_structure(&blessed, &errors);
 
     // Print information about generated files.
-    let (generated, errors) = generated_source.load(apis, &styles)?;
+    let (generated, errors) =
+        generated_source.load(apis, &styles, &env.repo_root)?;
     dump_structure(&generated, &errors);
 
     // Print result of resolving the differences.
@@ -111,10 +113,14 @@ fn dump_structure<T: AsRawFiles>(
         for (version, files) in info.versions() {
             println!("        version {}:", version);
             for api_spec in files.as_raw_files() {
+                let version_str = api_spec
+                    .parsed_version()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unparseable".to_string());
                 println!(
                     "            file {} (v{})",
                     api_spec.spec_file_name().path(),
-                    api_spec.version()
+                    version_str
                 );
             }
         }

@@ -199,7 +199,7 @@ pub enum BlessedSource {
 }
 
 impl BlessedSource {
-    /// Load the blessed OpenAPI documents
+    /// Load the blessed OpenAPI documents.
     pub fn load(
         &self,
         repo_root: &Utf8Path,
@@ -215,7 +215,12 @@ impl BlessedSource {
                     local_directory,
                 );
                 let api_files: ApiSpecFilesBuilder<'_, BlessedApiSpecFile> =
-                    walk_local_directory(local_directory, apis, &mut errors)?;
+                    walk_local_directory(
+                        local_directory,
+                        apis,
+                        &mut errors,
+                        repo_root,
+                    )?;
                 Ok((BlessedFiles::from(api_files), errors))
             }
             BlessedSource::GitRevisionMergeBase { revision, directory } => {
@@ -254,11 +259,12 @@ pub enum GeneratedSource {
 }
 
 impl GeneratedSource {
-    /// Load the generated OpenAPI documents (i.e., generating them as needed)
+    /// Load the generated OpenAPI documents (i.e., generating them as needed).
     pub fn load(
         &self,
         apis: &ManagedApis,
         styles: &Styles,
+        repo_root: &Utf8Path,
     ) -> anyhow::Result<(GeneratedFiles, ErrorAccumulator)> {
         let mut errors = ErrorAccumulator::new();
         match self {
@@ -277,8 +283,12 @@ impl GeneratedSource {
                     "Loading".style(styles.success_header),
                     local_directory,
                 );
-                let api_files =
-                    walk_local_directory(local_directory, apis, &mut errors)?;
+                let api_files = walk_local_directory(
+                    local_directory,
+                    apis,
+                    &mut errors,
+                    repo_root,
+                )?;
                 Ok((GeneratedFiles::from(api_files), errors))
             }
         }
@@ -299,11 +309,14 @@ pub enum LocalSource {
 }
 
 impl LocalSource {
-    /// Load the local OpenAPI documents
+    /// Load the local OpenAPI documents.
+    ///
+    /// The `repo_root` parameter is needed to resolve `.gitref` files.
     pub fn load(
         &self,
         apis: &ManagedApis,
         styles: &Styles,
+        repo_root: &Utf8Path,
     ) -> anyhow::Result<(LocalFiles, ErrorAccumulator)> {
         let mut errors = ErrorAccumulator::new();
         match self {
@@ -319,6 +332,7 @@ impl LocalSource {
                         abs_dir,
                         apis,
                         &mut errors,
+                        repo_root,
                     )?,
                     errors,
                 ))
