@@ -72,10 +72,7 @@ impl LocalApiSpecFile {
 
 impl SpecFileInfo for LocalApiSpecFile {
     fn spec_file_name(&self) -> &ApiSpecFileName {
-        match self {
-            LocalApiSpecFile::Valid(spec) => spec.spec_file_name(),
-            LocalApiSpecFile::Unparseable { name, .. } => name,
-        }
+        self.spec_file_name()
     }
 
     fn parsed_version(&self) -> Option<&semver::Version> {

@@ -1479,11 +1479,11 @@ fn resolve_api_version_blessed<'a>(
         }
     }
 
-    // Determine if this version should be stored as a git ref (slow path).
-    // We need this info before handling corrupted files so we can regenerate
-    // them in the correct format.
-    let should_be_git_ref = if use_git_ref_storage && !is_latest {
-        match git_ref {
+    // Local function to compute the git ref for this version. This is
+    // expensive because it may need to resolve a git revision to a commit
+    // hash.
+    let compute_should_be_git_ref =
+        |problems: &mut Vec<Problem<'a>>| match git_ref {
             Some(r) => match r.to_git_ref(&env.repo_root) {
                 Ok(current) => should_convert_to_git_ref(
                     latest_first_commit,
@@ -1499,39 +1499,31 @@ fn resolve_api_version_blessed<'a>(
                 }
             },
             None => None,
-        }
-    } else {
-        None
-    };
-
-    // Report corrupted local files that need regeneration from blessed.
-    for local_file in &corrupted {
-        problems.push(Problem::BlessedVersionCorruptedLocal {
-            local_file,
-            blessed,
-            git_ref: should_be_git_ref.clone(),
-        });
-    }
+        };
 
     if matching.is_empty() && corrupted.is_empty() {
         // No valid or corrupted local files match the blessed version.
         problems.push(Problem::BlessedVersionMissingLocal {
             spec_file_name: blessed.spec_file_name().clone(),
         });
-    } else if matching.is_empty() {
-        // Only corrupted files match - they'll be regenerated. Still need to
-        // mark non-matching files as extra.
-        problems.extend(non_matching.into_iter().map(|s| {
-            Problem::BlessedVersionExtraLocalSpec {
-                spec_file_name: s.spec_file_name().clone(),
-            }
-        }));
     } else if !use_git_ref_storage || is_latest {
         // Fast path: git ref storage disabled or this is the latest version.
-        // Computing first commits is slow, and we know we always want JSON in
-        // this case, so we can avoid computing them here.
+        // We know we always want JSON in this case, so we can avoid computing
+        // git refs here.
 
-        if matching.len() > 1 {
+        // Report corrupted local files that need regeneration from blessed.
+        for local_file in &corrupted {
+            problems.push(Problem::BlessedVersionCorruptedLocal {
+                local_file,
+                blessed,
+                git_ref: None,
+            });
+        }
+
+        if matching.is_empty() {
+            // Only corrupted files match - they'll be regenerated. Still need
+            // to mark non-matching files as extra.
+        } else if matching.len() > 1 {
             // We might have both api.json and api.json.gitref for the same
             // version. Mark the redundant file (always the gitref file in this
             // case) for deletion.
@@ -1554,10 +1546,23 @@ fn resolve_api_version_blessed<'a>(
             }
         }));
     } else {
-        // Slow path: git ref storage enabled and not latest.
-        // should_be_git_ref was computed earlier.
+        // Slow path: git ref storage enabled and not latest. Compute whether
+        // this version should be stored as a git ref.
+        let should_be_git_ref = compute_should_be_git_ref(&mut problems);
 
-        if matching.len() > 1 {
+        // Report corrupted local files that need regeneration from blessed.
+        for local_file in &corrupted {
+            problems.push(Problem::BlessedVersionCorruptedLocal {
+                local_file,
+                blessed,
+                git_ref: should_be_git_ref.clone(),
+            });
+        }
+
+        if matching.is_empty() {
+            // Only corrupted files match - they'll be regenerated. Still need
+            // to mark non-matching files as extra.
+        } else if matching.len() > 1 {
             // We might have both api.json and api.json.gitref for the same
             // version. Mark the redundant file for deletion.
             for local_file in matching {
