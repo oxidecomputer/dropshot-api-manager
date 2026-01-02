@@ -6,6 +6,7 @@
 use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
+    git::GitRef,
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
     },
@@ -69,17 +70,23 @@ NewtypeDeref! {
 }
 
 impl LocalFiles {
-    /// Load OpenAPI documents from a given directory tree
+    /// Load OpenAPI documents from a given directory tree.
     ///
     /// If it's at all possible to load any documents, this will return an `Ok`
     /// value, but you should still check the `errors` field on the returned
     /// [`LocalFiles`].
+    ///
+    /// The `repo_root` parameter is needed to resolve `.gitref` files, which
+    /// store a reference to an OpenAPI document rather than the document
+    /// itself.
     pub fn load_from_directory(
         dir: &Utf8Path,
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
+        repo_root: &Utf8Path,
     ) -> anyhow::Result<LocalFiles> {
-        let api_files = walk_local_directory(dir, apis, error_accumulator)?;
+        let api_files =
+            walk_local_directory(dir, apis, error_accumulator, repo_root)?;
         Ok(Self::from(api_files))
     }
 }
@@ -90,33 +97,38 @@ impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
     }
 }
 
-/// Load OpenAPI documents for the local directory tree
+/// Load OpenAPI documents for the local directory tree.
 ///
 /// Under `dir`, we expect to find either:
 ///
-/// * for each lockstep API, a file called `api-ident.json` (e.g., `wicketd.json`)
+/// * for each lockstep API, a file called `api-ident.json` (e.g.,
+///   `wicketd.json`)
 /// * for each versioned API, a directory called `api-ident` that contains:
 ///     * any number of files called `api-ident-SEMVER-HASH.json`
 ///       (e.g., dns-server-1.0.0-eb52aeeb.json)
+///     * any number of git ref files called `api-ident-SEMVER-HASH.json.gitref`
+///       that contain a `commit:path` reference to the actual content
 ///     * one symlink called `api-ident-latest.json` that points to a file in
 ///       the same directory
 ///
 /// Here's an example:
 ///
 /// ```text
-/// wicketd.json                                # file for lockstep API
-/// dns-server/                                 # directory for versioned API
-/// dns-server/dns-server-1.0.0-eb2aeeb.json    # file for versioned API
-/// dns-server/dns-server-2.0.0-298ea47.json    # file for versioned API
-/// dns-server/dns-server-latest.json           # symlink
+/// wicketd.json                                     # file for lockstep API
+/// dns-server/                                      # directory for versioned API
+/// dns-server/dns-server-1.0.0-eb2aeeb.json         # file for versioned API
+/// dns-server/dns-server-2.0.0-fba287a.json.gitref  # git ref for versioned API
+/// dns-server/dns-server-3.0.0-298ea47.json         # file for versioned API
+/// dns-server/dns-server-latest.json                # symlink
 /// ```
-// This function is always used for the "local" files.  It can sometimes be
+// This function is always used for the "local" files. It can sometimes be
 // used for both generated and blessed files, if the user asks to load those
 // from the local filesystem instead of their usual sources.
 pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
     dir: &'_ Utf8Path,
     apis: &'a ManagedApis,
     error_accumulator: &'a mut ErrorAccumulator,
+    repo_root: &Utf8Path,
 ) -> anyhow::Result<ApiSpecFilesBuilder<'a, T>> {
     let mut api_files = ApiSpecFilesBuilder::new(apis, error_accumulator);
     let entry_iter =
@@ -126,7 +138,7 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
             maybe_entry.with_context(|| format!("readdir {:?} entry", dir))?;
 
         // If this entry is a file, then we'd expect it to be the JSON file
-        // for one of our lockstep APIs.  Check and see.
+        // for one of our lockstep APIs. Check and see.
         let path = entry.path();
         let file_name = entry.file_name();
         let file_type = entry
@@ -146,7 +158,12 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
                 }
             };
         } else if file_type.is_dir() {
-            load_versioned_directory(&mut api_files, path, file_name);
+            load_versioned_directory(
+                &mut api_files,
+                path,
+                file_name,
+                repo_root,
+            );
         } else {
             // This is not something the tool cares about, but it's not
             // obviously a problem, either.
@@ -167,6 +184,7 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
     api_files: &mut ApiSpecFilesBuilder<'_, T>,
     path: &Utf8Path,
     basename: &str,
+    repo_root: &Utf8Path,
 ) {
     let Some(ident) = api_files.versioned_directory(basename) else {
         return;
@@ -211,6 +229,53 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
             continue;
         }
 
+        // Handle .gitref files: these contain a `commit:path` reference to the
+        // actual content in git.
+        if file_name.ends_with(".json.gitref") {
+            let Some(spec_file_name) =
+                api_files.versioned_git_ref_file_name(&ident, file_name)
+            else {
+                continue;
+            };
+
+            let git_ref_contents = match fs_err::read_to_string(entry.path()) {
+                Ok(content) => content,
+                Err(error) => {
+                    api_files.load_error(anyhow!(error).context(format!(
+                        "failed to read git ref file {:?}",
+                        entry.path()
+                    )));
+                    continue;
+                }
+            };
+
+            let git_ref = match git_ref_contents.parse::<GitRef>() {
+                Ok(git_ref) => git_ref,
+                Err(error) => {
+                    api_files.load_error(anyhow!(error).context(format!(
+                        "failed to parse git ref file {:?}",
+                        entry.path()
+                    )));
+                    continue;
+                }
+            };
+
+            let contents = match git_ref.read_contents(repo_root) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    api_files.load_error(error.context(format!(
+                        "failed to read content for git ref {:?}",
+                        entry.path()
+                    )));
+                    continue;
+                }
+            };
+
+            api_files.load_contents(spec_file_name, contents);
+            continue;
+        }
+
+        // Handle regular .json files.
         let Some(file_name) = api_files.versioned_file_name(&ident, file_name)
         else {
             continue;
