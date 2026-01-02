@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Newtype and collection to represent OpenAPI documents local to this working
 //! tree

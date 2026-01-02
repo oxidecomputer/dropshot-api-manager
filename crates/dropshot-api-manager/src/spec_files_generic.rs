@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Working with OpenAPI documents, whether generated, blessed, or local to this
 //! repository

@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Test fixtures for common API scenarios in dropshot-api-manager tests.
 
