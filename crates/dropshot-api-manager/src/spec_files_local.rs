@@ -136,7 +136,7 @@ impl AsRawFiles for Vec<LocalApiSpecFile> {
 ///
 /// For more on what's been validated at this point, see
 /// [`ApiSpecFilesBuilder`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LocalFiles(BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>);
 
 NewtypeDeref! {

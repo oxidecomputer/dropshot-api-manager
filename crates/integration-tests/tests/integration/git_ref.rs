@@ -439,9 +439,8 @@ fn test_no_conversion_without_git_ref_enabled() -> Result<()> {
 /// Test that git ref files are converted back to JSON when git ref storage is
 /// disabled, with content preservation.
 ///
-/// This is the reverse of `test_conversion`. When a user
-/// disables git ref storage (by removing `use_git_ref_storage()` from their API
-/// config), existing git ref files should be converted back to full JSON files.
+/// This is the reverse of `test_conversion`. When a user disables git ref
+/// storage, existing git ref files should be converted back to full JSON files.
 #[test]
 fn test_convert_to_json_when_disabled() -> Result<()> {
     let env = TestEnvironment::new()?;
@@ -890,68 +889,70 @@ fn test_git_error_reports_problem() -> Result<()> {
     Ok(())
 }
 
-/// Test behavior when running in a shallow clone where the commit that added
-/// an API version is not accessible.
+/// Test behavior when running in a shallow clone where git refs point to
+/// commits whose objects are not available.
 ///
-/// In a shallow clone (e.g., `git clone --depth 1`), the commit history is
-/// truncated. If a blessed API version was added in a commit before the
-/// shallow boundary, `git log --diff-filter=A` can't find the actual commit
-/// where the file was added.
+/// This simulates the scenario where:
 ///
-/// Note that Git doesn't return an error in this case. Instead, it returns the
-/// wrong commit (the shallow boundary commit), because git treats boundary
-/// commits as having no parent, making any files present in the boundary appear
-/// to have been "added" there.
-///
-/// This test documents this behavior and verifies that the tool:
-///
-/// 1. Successfully creates git refs (no error).
-/// 2. But the git refs point to the shallow boundary, not the actual first
-///    commit.
+/// 1. Git ref storage is set up and committed to main.
+/// 2. CI does a shallow clone (`git clone --depth 1`).
+/// 3. CI runs `check` and the git refs can't be resolved because the commits
+///    they reference are outside the shallow boundary.
 #[test]
-fn test_shallow_clone_creates_incorrect_git_refs() -> Result<()> {
+fn test_shallow_clone_with_git_refs() -> Result<()> {
     let env = TestEnvironment::new()?;
 
+    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+    env.commit_documents()?;
+
+    env.make_unrelated_commit("intermediate")?;
+
+    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v4)?;
+    env.commit_documents()?;
+
+    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+
+    let shallow_env = env.shallow_clone(1)?;
+
+    assert!(
+        shallow_env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "git ref file should exist in shallow clone"
+    );
+
+    // Check should fail early.
+    let result = check_apis_up_to_date(shallow_env.environment(), &v4);
+    result.expect_err("check should fail in shallow clone with git refs");
+
+    Ok(())
+}
+
+/// Test that shallow clones work fine when git ref storage is not enabled.
+#[test]
+fn test_shallow_clone_without_git_refs() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Use APIs without git ref storage.
     let v1_v2_v3 = versioned_health_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
-    let first_commit = env.get_current_commit_hash_full()?;
 
-    env.make_unrelated_commit("intermediate commit")?;
-    let second_commit = env.get_current_commit_hash_full()?;
+    env.make_unrelated_commit("intermediate")?;
 
-    assert_ne!(first_commit, second_commit);
-
-    // Simulate a shallow clone: first_commit is no longer accessible.
-    env.make_shallow(&second_commit)?;
-
-    let v4_git_ref = versioned_health_with_v4_git_ref_apis()?;
-    let result = check_apis_up_to_date(env.environment(), &v4_git_ref)?;
-    assert_eq!(result, CheckResult::NeedsUpdate);
-    env.generate_documents(&v4_git_ref)?;
+    let shallow_env = env.shallow_clone(1)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref created"
-    );
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 git ref created"
-    );
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 git ref created"
+        shallow_env
+            .versioned_local_document_exists("versioned-health", "1.0.0")?,
+        "v1 document should exist in shallow clone"
     );
 
-    // Git refs point to the wrong commit (the shallow boundary instead of
-    // the actual first commit).
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
-
-    assert_eq!(
-        v1_ref_commit, second_commit,
-        "In shallow clone, git ref points to shallow boundary"
-    );
+    // Check should succeed since we're not using git ref storage.
+    let result = check_apis_up_to_date(shallow_env.environment(), &v1_v2_v3)?;
+    assert_eq!(result, CheckResult::Success);
 
     Ok(())
 }

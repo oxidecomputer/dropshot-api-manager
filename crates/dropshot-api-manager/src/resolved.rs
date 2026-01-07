@@ -6,7 +6,7 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::{GitCommitHash, GitRef, is_shallow_clone},
+    git::{GitCommitHash, GitRef},
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
@@ -47,14 +47,14 @@ where
     }
 }
 
-/// A non-error note that's worth highlighting to the user
+/// A non-error note that's worth highlighting to the user.
 // These are not technically errors, but it is useful to treat them the same
 // way in terms of having an associated message, etc.
 #[derive(Debug, Error)]
 pub enum Note {
     /// A previously-supported API version has been removed locally.
     ///
-    /// This is not an error because we do expect to EOL old API specs.  There's
+    /// This is not an error because we do expect to EOL old API specs. There's
     /// not currently a way for this tool to know if the EOL'ing is correct or
     /// not, so we at least highlight it to the user.
     #[error(
@@ -65,18 +65,6 @@ pub enum Note {
          possible mismerge."
     )]
     BlessedVersionRemoved { api_ident: ApiIdent, version: semver::Version },
-
-    /// The repository is a shallow clone.
-    ///
-    /// Shallow clones can cause git ref storage to produce incorrect results,
-    /// as Git may report the wrong commit when searching for the commit that
-    /// added a file.
-    #[error(
-        "This repository appears to be a shallow clone. Git ref storage for \
-         versioned APIs may produce incorrect results. Consider running \
-         `git fetch --unshallow` to fetch complete history."
-    )]
-    ShallowClone,
 }
 
 /// Describes the result of resolving the blessed spec(s), generated spec(s),
@@ -828,7 +816,7 @@ impl<'a> Resolved<'a> {
 
         // Get one easy case out of the way: if there are any blessed API
         // versions that aren't supported any more, note that.
-        let mut notes: Vec<Note> = resolve_removed_blessed_versions(
+        let notes: Vec<Note> = resolve_removed_blessed_versions(
             &supported_versions_by_api,
             blessed,
         )
@@ -837,13 +825,6 @@ impl<'a> Resolved<'a> {
             version: version.clone(),
         })
         .collect();
-
-        // Warn if this is a shallow clone and any APIs use git ref storage.
-        let any_uses_git_ref =
-            apis.iter_apis().any(|a| apis.uses_git_ref_storage(a));
-        if any_uses_git_ref && is_shallow_clone(&env.repo_root) {
-            notes.push(Note::ShallowClone);
-        }
 
         // Get the other easy case out of the way: if there are any local spec
         // files for APIs or API versions that aren't supported any more, that's
