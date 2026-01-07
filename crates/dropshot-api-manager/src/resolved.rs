@@ -674,14 +674,17 @@ impl Fix<'_> {
 
                 // Write the git ref file in canonical format (forward slashes,
                 // trailing newline).
-                fs_err::write(&git_ref_path, git_ref.to_file_contents())?;
+                let overwrite_status = overwrite_file(
+                    &git_ref_path,
+                    git_ref.to_file_contents().as_bytes(),
+                )?;
 
                 // Remove the original JSON file.
                 fs_err::remove_file(&json_path)?;
 
                 Ok(vec![
                     format!("converted {} to git ref", json_path),
-                    format!("created {}", git_ref_path),
+                    format!("created {}: {:?}", git_ref_path, overwrite_status),
                 ])
             }
             Fix::ConvertToJson { local_file, blessed } => {
@@ -698,13 +701,13 @@ impl Fix<'_> {
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(json_basename);
 
-                fs_err::write(&json_path, contents)?;
+                let overwrite_status = overwrite_file(&json_path, contents)?;
 
                 fs_err::remove_file(&git_ref_path)?;
 
                 Ok(vec![
                     format!("converted {} from git ref to JSON", git_ref_path),
-                    format!("created {}", json_path),
+                    format!("created {}: {:?}", json_path, overwrite_status),
                 ])
             }
             Fix::RegenerateFromBlessed { local_file, blessed, git_ref } => {
@@ -727,18 +730,25 @@ impl Fix<'_> {
                         .join(&git_ref_basename);
 
                     // Write in canonical format (forward slashes, trailing newline).
-                    fs_err::write(&git_ref_path, git_ref.to_file_contents())?;
+                    let overwrite_status = overwrite_file(
+                        &git_ref_path,
+                        git_ref.to_file_contents().as_bytes(),
+                    )?;
 
                     Ok(vec![
                         format!("removed corrupted file {}", local_path),
-                        format!("created git ref {}", git_ref_path),
+                        format!(
+                            "created git ref {}: {:?}",
+                            git_ref_path, overwrite_status
+                        ),
                     ])
                 } else {
                     // Write the JSON content directly.
-                    fs_err::write(&local_path, blessed.contents())?;
+                    let overwrite_status =
+                        overwrite_file(&local_path, blessed.contents())?;
                     Ok(vec![format!(
-                        "regenerated {} from blessed content",
-                        local_path
+                        "regenerated {} from blessed content: {:?}",
+                        local_path, overwrite_status
                     )])
                 }
             }
