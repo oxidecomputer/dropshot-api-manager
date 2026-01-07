@@ -1694,3 +1694,220 @@ fn rename_conflict_blessed_verify(
 
     Ok(())
 }
+
+/// Test that unparseable git ref files (e.g., with conflict markers) are
+/// detected and regenerated.
+#[test]
+fn test_unparseable_git_ref_regenerated() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash_full()?;
+
+    env.make_unrelated_commit("intermediate")?;
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref"
+    );
+
+    let v1_git_ref_path = env
+        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
+        .expect("v1 git ref should exist");
+    let corrupted_content = "<<<<<<< HEAD\n\
+abc123:documents/versioned-health/old.json\n\
+=======\n\
+def456:documents/versioned-health/new.json\n\
+>>>>>>> branch\n";
+    env.create_file(&v1_git_ref_path, corrupted_content)?;
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for unparseable git ref"
+    );
+
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 git ref should be regenerated"
+    );
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v1_commit, v1_v2_commit,
+        "regenerated v1 git ref should point to the original commit"
+    );
+
+    let v1_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
+    assert!(
+        v1_content.contains("\"openapi\""),
+        "regenerated git ref content should be valid OpenAPI"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that git ref files with non-canonical format (backslashes, missing
+/// trailing newline) are regenerated.
+#[test]
+fn test_non_canonical_git_ref_regenerated() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash_full()?;
+
+    env.make_unrelated_commit("intermediate")?;
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref"
+    );
+
+    let v1_git_ref_path = env
+        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
+        .expect("v1 git ref should exist");
+    let original_content = env.read_file(&v1_git_ref_path)?;
+    let original_content = original_content.trim();
+
+    let (commit, path) = original_content
+        .split_once(':')
+        .expect("git ref should have commit:path format");
+    let non_canonical_path = path.replace('/', "\\");
+    let non_canonical_content = format!("{}:{}", commit, non_canonical_path);
+    env.create_file(&v1_git_ref_path, &non_canonical_content)?;
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for non-canonical git ref"
+    );
+
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    assert!(
+        v1_git_ref.ends_with('\n'),
+        "regenerated git ref should have trailing newline"
+    );
+    assert!(
+        !v1_git_ref.contains('\\'),
+        "regenerated git ref should use forward slashes"
+    );
+
+    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v1_commit, v1_v2_commit,
+        "regenerated v1 git ref should point to the original commit"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that an empty git ref file is detected and regenerated.
+#[test]
+fn test_empty_git_ref_regenerated() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+
+    env.make_unrelated_commit("intermediate")?;
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    let v1_git_ref_path = env
+        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
+        .expect("v1 git ref should exist");
+    env.create_file(&v1_git_ref_path, "")?;
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for empty git ref"
+    );
+
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    assert!(
+        v1_git_ref.contains(':'),
+        "regenerated git ref should have commit:path format"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that a git ref file with an invalid commit hash is regenerated.
+#[test]
+fn test_invalid_commit_hash_git_ref_regenerated() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+
+    env.make_unrelated_commit("intermediate")?;
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    let v1_git_ref_path = env
+        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
+        .expect("v1 git ref should exist");
+    let invalid_content =
+        "not-a-valid-hash:documents/versioned-health/file.json\n";
+    env.create_file(&v1_git_ref_path, invalid_content)?;
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for invalid commit hash"
+    );
+
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v1_commit.len(),
+        40,
+        "regenerated git ref should have valid SHA-1 commit hash"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}

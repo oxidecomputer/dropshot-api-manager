@@ -201,6 +201,57 @@ impl ApiSpecFileName {
             _ => self.clone(),
         }
     }
+
+    /// Converts a `Versioned` to its `VersionedGitRef` equivalent.
+    ///
+    /// For `VersionedGitRef` files, returns a clone of self.
+    /// For `Lockstep` files, returns a clone of self (lockstep files are not
+    /// converted to git refs).
+    pub fn to_git_ref_filename(&self) -> ApiSpecFileName {
+        match &self.kind {
+            ApiSpecFileNameKind::Versioned { version, hash } => {
+                ApiSpecFileName::new(
+                    self.ident.clone(),
+                    ApiSpecFileNameKind::VersionedGitRef {
+                        version: version.clone(),
+                        hash: hash.clone(),
+                    },
+                )
+            }
+            _ => self.clone(),
+        }
+    }
+
+    /// Returns the basename for this file as a git ref.
+    ///
+    /// - If this is already a `VersionedGitRef`, returns `basename()` directly.
+    /// - If this is a `Versioned`, returns `basename() + ".gitref"`.
+    /// - For `Lockstep`, returns `basename()` (lockstep files are not converted
+    ///   to git refs).
+    pub fn git_ref_basename(&self) -> String {
+        match &self.kind {
+            ApiSpecFileNameKind::VersionedGitRef { .. } => self.basename(),
+            ApiSpecFileNameKind::Versioned { .. } => {
+                format!("{}.gitref", self.basename())
+            }
+            ApiSpecFileNameKind::Lockstep => self.basename(),
+        }
+    }
+
+    /// Returns the basename for this file as a JSON file.
+    ///
+    /// - If this is a `VersionedGitRef`, returns the basename without the
+    ///   `.gitref` suffix.
+    /// - Otherwise, returns `basename()` directly.
+    pub fn json_basename(&self) -> String {
+        match &self.kind {
+            ApiSpecFileNameKind::Versioned { .. } => self.basename(),
+            ApiSpecFileNameKind::VersionedGitRef { version, hash } => {
+                format!("{}-{}-{}.json", self.ident, version, hash)
+            }
+            ApiSpecFileNameKind::Lockstep => self.basename(),
+        }
+    }
 }
 
 /// Describes how a particular OpenAPI document is named.
