@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+atomicwrites.workspace = true
 camino.workspace = true
 camino-tempfile.workspace = true
 camino-tempfile-ext.workspace = true
