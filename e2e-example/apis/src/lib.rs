@@ -25,6 +25,9 @@ pub mod versioned {
     use serde::Serialize;
 
     api_versions!([
+        // Exercise: try uncommenting version 4 below. This will cause
+        // the Dropshot API manager to generate a new OpenAPI document.
+        // (4, FOUR_DOT_OH),
         // Version 3.0.0 was added to capture bytewise changes to the schema
         // serialization (e.g., the Number wrapper type being serialized as a
         // separate schema instead of inlined).
