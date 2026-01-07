@@ -13,7 +13,8 @@ use crate::{
 };
 use anyhow::{anyhow, bail};
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, ApiSpecFileNameKind,
+    ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
+    VersionedApiSpecFileName,
 };
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -111,11 +112,10 @@ impl GeneratedFiles {
                             )))
                         }
                         Ok(contents) => {
-                            let file_name = ApiSpecFileName::new(
+                            let file_name = LockstepApiSpecFileName::new(
                                 api.ident().clone(),
-                                ApiSpecFileNameKind::Lockstep,
                             );
-                            api_files.load_contents(file_name, contents);
+                            api_files.load_contents(file_name.into(), contents);
                         }
                     }
                 }
@@ -137,15 +137,13 @@ impl GeneratedFiles {
                             )))
                         }
                         Ok(contents) => {
-                            let file_name = ApiSpecFileName::new(
+                            let file_name = VersionedApiSpecFileName::new(
                                 api.ident().clone(),
-                                ApiSpecFileNameKind::Versioned {
-                                    version: version.clone(),
-                                    hash: hash_contents(&contents),
-                                },
+                                version.clone(),
+                                hash_contents(&contents),
                             );
                             latest = Some(file_name.clone());
-                            api_files.load_contents(file_name, contents);
+                            api_files.load_contents(file_name.into(), contents);
                         }
                     }
                 }

@@ -8,7 +8,8 @@ use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, ApiSpecFileNameKind,
+    ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
+    VersionedApiSpecFileName, VersionedApiSpecKind,
 };
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
@@ -30,15 +31,14 @@ pub struct UnparseableFile {
     pub path: Utf8PathBuf,
 }
 
-/// Attempts to parse the given file basename as an ApiSpecFileName of kind
-/// `Versioned`
+/// Attempts to parse the given file basename as a `VersionedApiSpecFileName`.
 ///
 /// These look like: `ident-SEMVER-HASH.json`.
 fn parse_versioned_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
-) -> Result<ApiSpecFileName, BadVersionedFileName> {
+) -> Result<VersionedApiSpecFileName, BadVersionedFileName> {
     let ident = ApiIdent::from(ident.to_string());
     let Some(api) = apis.api(&ident) else {
         return Err(BadVersionedFileName::NoSuchApi);
@@ -105,21 +105,18 @@ fn parse_versioned_file_name(
         });
     }
 
-    Ok(ApiSpecFileName::new(
-        ident,
-        ApiSpecFileNameKind::Versioned { version, hash: hash.to_string() },
-    ))
+    Ok(VersionedApiSpecFileName::new(ident, version, hash.to_string()))
 }
 
-/// Attempts to parse the given file basename as an ApiSpecFileName of kind
-/// `VersionedGitRef`.
+/// Attempts to parse the given file basename as a `VersionedApiSpecFileName`
+/// with git ref storage.
 ///
 /// These look like: `ident-SEMVER-HASH.json.gitref`.
 fn parse_versioned_git_ref_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
-) -> Result<ApiSpecFileName, BadVersionedFileName> {
+) -> Result<VersionedApiSpecFileName, BadVersionedFileName> {
     // The file name must end with .json.gitref.
     let json_basename = basename.strip_suffix(".gitref").ok_or_else(|| {
         BadVersionedFileName::UnexpectedName {
@@ -131,28 +128,15 @@ fn parse_versioned_git_ref_file_name(
     // Parse the underlying versioned name to get the version and hash.
     let versioned = parse_versioned_file_name(apis, ident, json_basename)?;
 
-    match versioned.kind() {
-        ApiSpecFileNameKind::Versioned { version, hash } => {
-            Ok(ApiSpecFileName::new(
-                versioned.ident().clone(),
-                ApiSpecFileNameKind::VersionedGitRef {
-                    version: version.clone(),
-                    hash: hash.clone(),
-                },
-            ))
-        }
-        other => unreachable!(
-            "parse_versioned_file_name always returns Versioned, found {other:?}"
-        ),
-    }
+    // Convert to git ref format.
+    Ok(versioned.to_git_ref())
 }
 
-/// Attempts to parse the given file basename as an ApiSpecFileName of kind
-/// `Lockstep`
+/// Attempts to parse the given file basename as a `LockstepApiSpecFileName`.
 fn parse_lockstep_file_name(
     apis: &ManagedApis,
     basename: &str,
-) -> Result<ApiSpecFileName, BadLockstepFileName> {
+) -> Result<LockstepApiSpecFileName, BadLockstepFileName> {
     let ident = ApiIdent::from(
         basename
             .strip_suffix(".json")
@@ -166,7 +150,7 @@ fn parse_lockstep_file_name(
         return Err(BadLockstepFileName::NotLockstep);
     }
 
-    Ok(ApiSpecFileName::new(ident, ApiSpecFileNameKind::Lockstep))
+    Ok(LockstepApiSpecFileName::new(ident))
 }
 
 /// Describes a failure to parse a file name for a lockstep API
@@ -298,9 +282,9 @@ impl ApiSpecFile {
             }
         };
 
-        match spec_file_name.kind() {
-            ApiSpecFileNameKind::Versioned { version, hash } => {
-                if *version != parsed_version {
+        match &spec_file_name {
+            ApiSpecFileName::Versioned(v) => {
+                if *v.version() != parsed_version {
                     return Err((
                         ApiSpecFileParseError::VersionMismatch {
                             path: spec_file_name.path().to_owned(),
@@ -310,33 +294,23 @@ impl ApiSpecFile {
                     ));
                 }
 
-                let expected_hash = hash_contents(&contents_buf);
-                if expected_hash != *hash {
-                    return Err((
-                        ApiSpecFileParseError::HashMismatch {
-                            path: spec_file_name.path().to_owned(),
-                            expected: expected_hash,
-                            actual: hash.clone(),
-                        },
-                        contents_buf,
-                    ));
+                // Only check hash for JSON files. Git ref files use the git ref
+                // itself as the source of truth.
+                if v.kind() == VersionedApiSpecKind::Json {
+                    let expected_hash = hash_contents(&contents_buf);
+                    if expected_hash != v.hash() {
+                        return Err((
+                            ApiSpecFileParseError::HashMismatch {
+                                path: spec_file_name.path().to_owned(),
+                                expected: expected_hash,
+                                actual: v.hash().to_owned(),
+                            },
+                            contents_buf,
+                        ));
+                    }
                 }
             }
-            ApiSpecFileNameKind::VersionedGitRef { version, .. } => {
-                // Git ref files: validate that the version matches, but skip
-                // hash check. The content came from git, so the git ref itself
-                // is the source of truth.
-                if *version != parsed_version {
-                    return Err((
-                        ApiSpecFileParseError::VersionMismatch {
-                            path: spec_file_name.path().to_owned(),
-                            file_version: parsed_version,
-                        },
-                        contents_buf,
-                    ));
-                }
-            }
-            ApiSpecFileNameKind::Lockstep => {}
+            ApiSpecFileName::Lockstep(_) => {}
         }
 
         Ok(ApiSpecFile {
@@ -516,7 +490,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                 );
                 None
             }
-            Ok(file_name) => Some(file_name),
+            Ok(file_name) => Some(file_name.into()),
         }
     }
 
@@ -568,7 +542,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         basename: &str,
     ) -> Option<ApiSpecFileName> {
         match parse_versioned_file_name(self.apis, ident, basename) {
-            Ok(file_name) => Some(file_name),
+            Ok(file_name) => Some(file_name.into()),
             Err(
                 warning @ (BadVersionedFileName::NoSuchApi
                 | BadVersionedFileName::NotVersioned),
@@ -608,7 +582,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         basename: &str,
     ) -> Option<ApiSpecFileName> {
         match parse_versioned_git_ref_file_name(self.apis, ident, basename) {
-            Ok(file_name) => Some(file_name),
+            Ok(file_name) => Some(file_name.into()),
             Err(
                 warning @ (BadVersionedFileName::NoSuchApi
                 | BadVersionedFileName::NotVersioned),
@@ -643,7 +617,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         symlink_path: &Utf8Path,
         ident: &ApiIdent,
         basename: &str,
-    ) -> Option<ApiSpecFileName> {
+    ) -> Option<VersionedApiSpecFileName> {
         match parse_versioned_file_name(self.apis, ident, basename) {
             Ok(file_name) => Some(file_name),
             Err(
@@ -835,7 +809,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     pub fn load_latest_link(
         &mut self,
         ident: &ApiIdent,
-        links_to: ApiSpecFileName,
+        links_to: VersionedApiSpecFileName,
     ) {
         let Some(api) = self.apis.api(ident) else {
             let error =
@@ -891,7 +865,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
 #[derive(Debug)]
 pub struct ApiFiles<T> {
     spec_files: BTreeMap<semver::Version, T>,
-    latest_link: Option<ApiSpecFileName>,
+    latest_link: Option<VersionedApiSpecFileName>,
     /// Files that exist on disk but couldn't be parsed. These are tracked so
     /// that generate can delete them and create correct files in their place.
     unparseable_files: Vec<UnparseableFile>,
@@ -910,7 +884,7 @@ impl<T: AsRawFiles> ApiFiles<T> {
         &self.spec_files
     }
 
-    pub fn latest_link(&self) -> Option<&ApiSpecFileName> {
+    pub fn latest_link(&self) -> Option<&VersionedApiSpecFileName> {
         self.latest_link.as_ref()
     }
 
@@ -1062,10 +1036,7 @@ mod test {
         let name = parse_lockstep_file_name(&apis, "lockstep.json").unwrap();
         assert_eq!(
             name,
-            ApiSpecFileName::new(
-                ApiIdent::from("lockstep".to_owned()),
-                ApiSpecFileNameKind::Lockstep,
-            )
+            LockstepApiSpecFileName::new(ApiIdent::from("lockstep".to_owned()))
         );
     }
 
@@ -1080,12 +1051,10 @@ mod test {
         .unwrap();
         assert_eq!(
             name,
-            ApiSpecFileName::new(
+            VersionedApiSpecFileName::new(
                 ApiIdent::from("versioned".to_owned()),
-                ApiSpecFileNameKind::Versioned {
-                    version: Version::new(1, 2, 3),
-                    hash: "feedface".to_owned(),
-                },
+                Version::new(1, 2, 3),
+                "feedface".to_owned(),
             )
         );
     }
@@ -1174,12 +1143,10 @@ mod test {
         .unwrap();
         assert_eq!(
             name,
-            ApiSpecFileName::new(
+            VersionedApiSpecFileName::new_git_ref(
                 ApiIdent::from("versioned".to_owned()),
-                ApiSpecFileNameKind::VersionedGitRef {
-                    version: Version::new(1, 2, 3),
-                    hash: "feedface".to_owned(),
-                },
+                Version::new(1, 2, 3),
+                "feedface".to_owned(),
             )
         );
     }

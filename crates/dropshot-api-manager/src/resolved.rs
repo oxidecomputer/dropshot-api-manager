@@ -19,7 +19,9 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
-use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
+use dropshot_api_manager_types::{
+    ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
+};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{Debug, Display},
@@ -143,7 +145,7 @@ pub enum Problem<'a> {
          merged with upstream and had to change your local version number.  \
          In either case, this tool can remove the unused file for you."
     )]
-    LocalSpecFileOrphaned { spec_file_name: ApiSpecFileName },
+    LocalSpecFileOrphaned { spec_file_name: VersionedApiSpecFileName },
 
     #[error(
         "A local OpenAPI document could not be parsed: {}. \
@@ -163,7 +165,7 @@ pub enum Problem<'a> {
          versions in Rust.  If you didn't, restore the file from git: \
          {spec_file_name}"
     )]
-    BlessedVersionMissingLocal { spec_file_name: ApiSpecFileName },
+    BlessedVersionMissingLocal { spec_file_name: VersionedApiSpecFileName },
 
     #[error(
         "For this blessed version, found an extra OpenAPI document that does \
@@ -174,7 +176,7 @@ pub enum Problem<'a> {
          number (when you merged the list of supported versions in Rust) and \
          this file is vestigial. This tool can remove the unused file for you."
     )]
-    BlessedVersionExtraLocalSpec { spec_file_name: ApiSpecFileName },
+    BlessedVersionExtraLocalSpec { spec_file_name: VersionedApiSpecFileName },
 
     #[error(
         "error comparing OpenAPI document generated from current code with \
@@ -231,7 +233,9 @@ pub enum Problem<'a> {
         "Extra (incorrect) OpenAPI documents were found for locally-added \
          version: {spec_file_names}.  This tool can remove the files for you."
     )]
-    LocalVersionExtra { spec_file_names: DisplayableVec<ApiSpecFileName> },
+    LocalVersionExtra {
+        spec_file_names: DisplayableVec<VersionedApiSpecFileName>,
+    },
 
     #[error(
         "For this locally-added version, the OpenAPI document generated \
@@ -273,7 +277,10 @@ pub enum Problem<'a> {
     },
 
     #[error("\"Latest\" symlink for versioned API {api_ident:?} is missing")]
-    LatestLinkMissing { api_ident: ApiIdent, link: &'a ApiSpecFileName },
+    LatestLinkMissing {
+        api_ident: ApiIdent,
+        link: &'a VersionedApiSpecFileName,
+    },
 
     #[error(
         "\"Latest\" symlink for versioned API {api_ident:?} is stale: points \
@@ -283,8 +290,8 @@ pub enum Problem<'a> {
     )]
     LatestLinkStale {
         api_ident: ApiIdent,
-        found: &'a ApiSpecFileName,
-        link: &'a ApiSpecFileName,
+        found: &'a VersionedApiSpecFileName,
+        link: &'a VersionedApiSpecFileName,
     },
 
     #[error(
@@ -332,7 +339,7 @@ pub enum Problem<'a> {
          // <source>".
     )]
     GitRefFirstCommitUnknown {
-        spec_file_name: ApiSpecFileName,
+        spec_file_name: VersionedApiSpecFileName,
         #[source]
         source: anyhow::Error,
     },
@@ -347,13 +354,13 @@ impl<'a> Problem<'a> {
         match self {
             Problem::LocalSpecFileOrphaned { spec_file_name } => {
                 Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![spec_file_name.clone()]),
+                    files: DisplayableVec(vec![spec_file_name.clone().into()]),
                 })
             }
             Problem::BlessedVersionMissingLocal { .. } => None,
             Problem::BlessedVersionExtraLocalSpec { spec_file_name } => {
                 Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![spec_file_name.clone()]),
+                    files: DisplayableVec(vec![spec_file_name.clone().into()]),
                 })
             }
             Problem::BlessedVersionCompareError { .. } => None,
@@ -370,7 +377,16 @@ impl<'a> Problem<'a> {
                 })
             }
             Problem::LocalVersionExtra { spec_file_names } => {
-                Some(Fix::DeleteFiles { files: spec_file_names.clone() })
+                Some(Fix::DeleteFiles {
+                    files: DisplayableVec(
+                        spec_file_names
+                            .0
+                            .iter()
+                            .cloned()
+                            .map(Into::into)
+                            .collect(),
+                    ),
+                })
             }
             Problem::LocalVersionStale { spec_files, generated } => {
                 Some(Fix::UpdateVersionedFiles {
@@ -437,7 +453,7 @@ pub enum Fix<'a> {
     },
     UpdateSymlink {
         api_ident: &'a ApiIdent,
-        link: &'a ApiSpecFileName,
+        link: &'a VersionedApiSpecFileName,
     },
     /// Convert a full JSON file to a git ref file.
     ConvertToGitRef {
@@ -504,7 +520,7 @@ impl Display for Fix<'_> {
                 writeln!(
                     f,
                     "update symlink to point to {}",
-                    link.to_json_filename().basename()
+                    link.json_basename()
                 )?;
             }
             Fix::ConvertToGitRef { local_file, .. } => {
@@ -651,7 +667,7 @@ impl Fix<'_> {
                 // same directory so that it's correct no matter where it's
                 // resolved from. If the link target is a gitref, convert it to
                 // the JSON filename (the symlink should always point to JSON).
-                let target = link.to_json_filename().basename();
+                let target = link.json_basename();
                 match fs_err::remove_file(&path) {
                     Ok(_) => (),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -955,7 +971,9 @@ fn resolve_orphaned_local_specs<'a>(
         BTreeSet<&'a semver::Version>,
     >,
     local: &'a LocalFiles,
-) -> impl Iterator<Item = &'a ApiSpecFileName> + 'a {
+) -> impl Iterator<Item = &'a VersionedApiSpecFileName> + 'a {
+    // Orphaned specs are always versioned: lockstep APIs have exactly one file,
+    // so orphans can't exist for them.
     local.iter().flat_map(|(ident, api_files)| {
         let set = supported_versions_by_api.get(ident);
         api_files
@@ -963,7 +981,11 @@ fn resolve_orphaned_local_specs<'a>(
             .iter()
             .filter_map(move |(version, files)| match set {
                 Some(set) if !set.contains(version) => {
-                    Some(files.iter().map(|f| f.spec_file_name()))
+                    Some(files.iter().map(|f| {
+                        f.spec_file_name()
+                            .as_versioned()
+                            .expect("orphaned specs are versioned")
+                    }))
                 }
                 _ => None,
             })
@@ -1019,7 +1041,7 @@ fn resolve_api<'a>(
                             let blessed_file = api_blessed
                                 .and_then(|b| b.versions().get(latest_version));
                             let spec_file_name = blessed_file
-                                .map(|f| f.spec_file_name().clone());
+                                .map(|f| f.versioned_spec_file_name().clone());
                             (
                                 LatestFirstCommit::BlessedError,
                                 Some((spec_file_name, error)),
@@ -1071,14 +1093,12 @@ fn resolve_api<'a>(
 
         // If there was an error computing the first commit for the latest
         // version, add the error to the latest version's resolution.
-        if let Some((spec_file_name, error)) = latest_first_commit_error {
+        if let Some((Some(spec_file_name), error)) = latest_first_commit_error {
             if let Some(resolution) = by_version.get_mut(latest_version) {
-                if let Some(spec_file_name) = spec_file_name {
-                    resolution.add_problem(Problem::GitRefFirstCommitUnknown {
-                        spec_file_name,
-                        source: error,
-                    });
-                }
+                resolution.add_problem(Problem::GitRefFirstCommitUnknown {
+                    spec_file_name,
+                    source: error,
+                });
             }
         }
 
@@ -1086,8 +1106,7 @@ fn resolve_api<'a>(
         let latest_generated = api_generated.latest_link().expect(
             "\"generated\" source should always have a \"latest\" link",
         );
-        let generated_version =
-            latest_generated.version().expect("versioned APIs have a version");
+        let generated_version = latest_generated.version();
         let resolution =
             by_version.get(generated_version).unwrap_or_else(|| {
                 panic!(
@@ -1130,9 +1149,7 @@ fn resolve_api<'a>(
                     //
                     // 4. latest_local is not blessed. In that case, we do
                     //    want to update the symlink.
-                    let local_version = latest_local
-                        .version()
-                        .expect("versioned APIs have a version");
+                    let local_version = latest_local.version();
                     match resolution.kind() {
                         ResolutionKind::Lockstep => {
                             unreachable!("this is a versioned API");
@@ -1175,7 +1192,7 @@ fn resolve_api<'a>(
                                 });
                             Some(Problem::LatestLinkStale {
                                 api_ident: api.ident().clone(),
-                                link: blessed.spec_file_name(),
+                                link: blessed.versioned_spec_file_name(),
                                 found: latest_local,
                             })
                         }
@@ -1219,7 +1236,7 @@ fn resolve_api<'a>(
                             });
                         Some(Problem::LatestLinkMissing {
                             api_ident: api.ident().clone(),
-                            link: blessed.spec_file_name(),
+                            link: blessed.versioned_spec_file_name(),
                         })
                     }
                     ResolutionKind::NewLocally => {
@@ -1465,7 +1482,9 @@ fn resolve_api_version_blessed<'a>(
                     }
                     Err(error) => {
                         problems.push(Problem::GitRefFirstCommitUnknown {
-                            spec_file_name: blessed.spec_file_name().clone(),
+                            spec_file_name: blessed
+                                .versioned_spec_file_name()
+                                .clone(),
                             source: error,
                         });
                         VersionStorageFormat::Error
@@ -1478,7 +1497,7 @@ fn resolve_api_version_blessed<'a>(
     if matching.is_empty() && corrupted.is_empty() {
         // No valid or corrupted local files match the blessed version.
         problems.push(Problem::BlessedVersionMissingLocal {
-            spec_file_name: blessed.spec_file_name().clone(),
+            spec_file_name: blessed.versioned_spec_file_name().clone(),
         });
     } else if !use_git_ref_storage || is_latest {
         // Fast path: git ref storage disabled or this is the latest version.
@@ -1516,7 +1535,11 @@ fn resolve_api_version_blessed<'a>(
 
         problems.extend(non_matching.into_iter().map(|s| {
             Problem::BlessedVersionExtraLocalSpec {
-                spec_file_name: s.spec_file_name().clone(),
+                spec_file_name: s
+                    .spec_file_name()
+                    .as_versioned()
+                    .expect("blessed extra spec is versioned")
+                    .clone(),
             }
         }));
     } else {
@@ -1594,7 +1617,11 @@ fn resolve_api_version_blessed<'a>(
 
         problems.extend(non_matching.into_iter().map(|s| {
             Problem::BlessedVersionExtraLocalSpec {
-                spec_file_name: s.spec_file_name().clone(),
+                spec_file_name: s
+                    .spec_file_name()
+                    .as_versioned()
+                    .expect("blessed extra spec is versioned")
+                    .clone(),
             }
         }));
     }
@@ -1635,7 +1662,15 @@ fn resolve_api_version_local<'a>(
         // There was a matching spec, but also some non-matching ones.
         // These are superfluous.  (It's not clear how this could happen.)
         let spec_file_names = DisplayableVec(
-            non_matching.iter().map(|s| s.spec_file_name().clone()).collect(),
+            non_matching
+                .iter()
+                .map(|s| {
+                    s.spec_file_name()
+                        .as_versioned()
+                        .expect("local specs in versioned API are versioned")
+                        .clone()
+                })
+                .collect(),
         );
         problems.push(Problem::LocalVersionExtra { spec_file_names });
     }

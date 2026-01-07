@@ -17,7 +17,9 @@ use crate::{
 };
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
+use dropshot_api_manager_types::{
+    ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
+};
 use std::{collections::BTreeMap, ops::Deref};
 
 /// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents from
@@ -26,14 +28,62 @@ use std::{collections::BTreeMap, ops::Deref};
 /// The blessed source contains the documents that are not allowed to be changed
 /// locally because they've been committed-to upstream.
 ///
-/// Note that this type can represent documents for both lockstep APIs and
-/// versioned APIs, but it's meaningless for lockstep APIs.  Any documents for
-/// versioned APIs are blessed by definition.
-pub struct BlessedApiSpecFile(ApiSpecFile);
-NewtypeDebug! { () pub struct BlessedApiSpecFile(ApiSpecFile); }
-NewtypeDeref! { () pub struct BlessedApiSpecFile(ApiSpecFile); }
-NewtypeDerefMut! { () pub struct BlessedApiSpecFile(ApiSpecFile); }
-NewtypeFrom! { () pub struct BlessedApiSpecFile(ApiSpecFile); }
+/// This type only represents versioned APIs, not lockstep APIs. Lockstep APIs
+/// don't have a meaningful "blessed" source since they're always regenerated.
+/// The type system enforces this invariant: construction will panic if given a
+/// lockstep spec.
+pub struct BlessedApiSpecFile {
+    inner: ApiSpecFile,
+    /// Cached versioned filename, avoiding repeated conversion.
+    versioned_name: VersionedApiSpecFileName,
+}
+
+impl std::fmt::Debug for BlessedApiSpecFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlessedApiSpecFile")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl Deref for BlessedApiSpecFile {
+    type Target = ApiSpecFile;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl BlessedApiSpecFile {
+    /// Creates a new `BlessedApiSpecFile` from an `ApiSpecFile`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the spec file is for a lockstep API. Blessed files only exist
+    /// for versioned APIs.
+    pub fn new(inner: ApiSpecFile) -> Self {
+        let versioned_name = inner
+            .spec_file_name()
+            .as_versioned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "BlessedApiSpecFile requires a versioned API spec, \
+                     got lockstep: {}",
+                    inner.spec_file_name()
+                )
+            })
+            .clone();
+        Self { inner, versioned_name }
+    }
+
+    /// Returns the versioned spec file name.
+    ///
+    /// Unlike `spec_file_name()` which returns `&ApiSpecFileName`, this method
+    /// returns the more specific `&VersionedApiSpecFileName` since blessed
+    /// files are always versioned.
+    pub fn versioned_spec_file_name(&self) -> &VersionedApiSpecFileName {
+        &self.versioned_name
+    }
+}
 
 // Trait impls that allow us to use `ApiFiles<BlessedApiSpecFile>`
 //
@@ -45,7 +95,7 @@ impl ApiLoad for BlessedApiSpecFile {
     type Unparseable = std::convert::Infallible;
 
     fn make_item(raw: ApiSpecFile) -> Self {
-        BlessedApiSpecFile(raw)
+        BlessedApiSpecFile::new(raw)
     }
 
     fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
@@ -135,7 +185,8 @@ impl BlessedGitRef {
 /// any API-level validation.
 enum BlessedPathKind<'a> {
     /// Single-component path (e.g., "api.json"). Potential lockstep file.
-    Lockstep { basename: &'a str },
+    /// These are skipped since blessed files only exist for versioned APIs.
+    Lockstep,
 
     /// Two-component path with `.json.gitref` extension. Potential versioned
     /// git ref file.
@@ -154,7 +205,7 @@ impl<'a> BlessedPathKind<'a> {
     fn parse(path: &'a Utf8Path) -> Result<Self, UnrecognizedPath> {
         let parts: Vec<_> = path.iter().collect();
         match parts.as_slice() {
-            [basename] => Ok(BlessedPathKind::Lockstep { basename }),
+            [_basename] => Ok(BlessedPathKind::Lockstep),
             [api_dir, basename] if basename.ends_with(".json.gitref") => {
                 Ok(BlessedPathKind::GitRefFile { api_dir, basename })
             }
@@ -269,19 +320,20 @@ impl BlessedFiles {
                 }
             };
 
+            // Lockstep files are not loaded from blessed sources. They're
+            // always regenerated from the current code, so there's no
+            // "blessed" version to compare against.
+            if matches!(kind, BlessedPathKind::Lockstep) {
+                continue;
+            }
+
             // Read the contents. Use "/" rather than "\" on Windows.
             let git_path = format!("{directory}/{f}");
             let contents = git_show_file(repo_root, commit, git_path.as_ref())?;
 
             match kind {
-                BlessedPathKind::Lockstep { basename } => {
-                    if let Some(spec_file_name) =
-                        api_files.lockstep_file_name(basename)
-                    {
-                        api_files.load_contents(spec_file_name, contents);
-                        // Lockstep files don't need git refs since they're
-                        // always regenerated.
-                    }
+                BlessedPathKind::Lockstep => {
+                    unreachable!("handled above");
                 }
 
                 BlessedPathKind::VersionedFile { api_dir, basename } => {
