@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Test environment infrastructure for integration tests.
 
@@ -443,43 +443,68 @@ impl TestEnvironment {
         Ok(())
     }
 
-    /// Simulate a shallow clone by writing to `.git/shallow`.
+    /// Create a shallow clone of this repository in a new directory.
     ///
-    /// This makes Git behave as if the repository was cloned with `--depth 1`
-    /// starting from the given commit. History before the shallow boundary
-    /// commit will not be accessible via `git log`.
+    /// This creates an actual shallow clone using `git clone --depth <depth>`,
+    /// which means objects from commits before the shallow boundary won't exist
+    /// in the clone. This is different from just writing `.git/shallow` (which
+    /// only affects `git log` but leaves objects accessible).
     ///
-    /// The boundary commit itself is included in the shallow history, but its
-    /// parents are not.
-    pub fn make_shallow(&self, boundary_commit: &str) -> Result<()> {
-        let shallow_path = self.workspace_root.join(".git/shallow");
-        fs::write(&shallow_path, format!("{}\n", boundary_commit))
-            .with_context(|| {
-                format!("failed to write shallow file: {}", shallow_path)
-            })?;
-        Ok(())
+    /// Returns a new `TestEnvironment` pointing to the shallow clone.
+    pub fn shallow_clone(&self, depth: u32) -> Result<TestEnvironment> {
+        let temp_dir =
+            Utf8TempDir::with_prefix("dropshot-api-manager-shallow-")
+                .context("failed to create temp dir for shallow clone")?;
+
+        let clone_root = temp_dir.path().join("workspace");
+        let depth_str = depth.to_string();
+
+        // --no-local forces git to copy objects rather than using hardlinks,
+        // which is necessary for a true shallow clone.
+        Self::run_git_command(
+            temp_dir.path(),
+            &[
+                "clone",
+                "--no-local",
+                "--depth",
+                &depth_str,
+                self.workspace_root.as_str(),
+                clone_root.as_str(),
+            ],
+        )?;
+
+        Self::run_git_command(
+            &clone_root,
+            &["config", "user.name", "Test User"],
+        )?;
+        Self::run_git_command(
+            &clone_root,
+            &["config", "user.email", "test@example.com"],
+        )?;
+
+        let workspace_root = temp_dir.child("workspace");
+
+        let environment = Environment::new(
+            "test-openapi-manager",
+            workspace_root.as_path(),
+            "documents",
+        )?
+        .with_default_git_branch("main");
+
+        Ok(TestEnvironment {
+            temp_dir,
+            workspace_root: workspace_root.clone(),
+            documents_dir: workspace_root.child("documents"),
+            environment,
+        })
     }
 
-    /// Remove the shallow boundary, restoring full history access.
-    pub fn unshallow(&self) -> Result<()> {
-        let shallow_path = self.workspace_root.join(".git/shallow");
-        if shallow_path.exists() {
-            fs::remove_file(&shallow_path).with_context(|| {
-                format!("failed to remove shallow file: {}", shallow_path)
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Helper to run git commands in the workspace root.
-    fn run_git_command(
-        workspace_root: &Utf8Path,
-        args: &[&str],
-    ) -> Result<String> {
+    /// Helper to run git commands in a directory.
+    fn run_git_command(cwd: &Utf8Path, args: &[&str]) -> Result<String> {
         let git =
             std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
         let output = Command::new(git)
-            .current_dir(workspace_root)
+            .current_dir(cwd)
             .args(args)
             .output()
             .context("failed to execute git command")?;

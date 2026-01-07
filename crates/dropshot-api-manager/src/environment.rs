@@ -1,11 +1,11 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Describes the environment the command is running in, and particularly where
 //! different sets of specifications are loaded from
 
 use crate::{
     apis::ManagedApis,
-    git::GitRevision,
+    git::{GitRevision, is_shallow_clone},
     output::{
         Styles,
         headers::{GENERATING, HEADER_WIDTH},
@@ -319,6 +319,21 @@ impl LocalSource {
         repo_root: &Utf8Path,
     ) -> anyhow::Result<(LocalFiles, ErrorAccumulator)> {
         let mut errors = ErrorAccumulator::new();
+
+        // Shallow clones and git ref storage are incompatible.
+        let any_uses_git_ref =
+            apis.iter_apis().any(|a| apis.uses_git_ref_storage(a));
+        if any_uses_git_ref && is_shallow_clone(repo_root) {
+            errors.error(anyhow::anyhow!(
+                "this repository is a shallow clone, but git ref storage is \
+                 enabled for some APIs. Git refs cannot be resolved in a \
+                 shallow clone because the referenced commits may not be \
+                 available. To fix this, run `git fetch --unshallow` to \
+                 fetch complete history, or make a fresh clone without --depth."
+            ));
+            return Ok((LocalFiles::default(), errors));
+        }
+
         match self {
             LocalSource::Directory { abs_dir, .. } => {
                 eprintln!(
