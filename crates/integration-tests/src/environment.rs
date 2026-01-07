@@ -3,6 +3,7 @@
 //! Test environment infrastructure for integration tests.
 
 use anyhow::{Context, Result, anyhow};
+use atomicwrites::AtomicFile;
 use camino::{Utf8Path, Utf8PathBuf};
 use camino_tempfile::Utf8TempDir;
 use camino_tempfile_ext::{fixture::ChildPath, prelude::*};
@@ -10,6 +11,7 @@ use clap::Parser;
 use dropshot_api_manager::{Environment, GitRef, ManagedApis};
 use std::{
     fs,
+    io::Write,
     process::{Command, ExitCode},
 };
 
@@ -434,7 +436,11 @@ impl TestEnvironment {
         // Create or update a dummy file.
         let dummy_path = self.workspace_root.join("dummy.txt");
         let content = format!("{}\n{}\n", message, chrono::Utc::now());
-        fs::write(&dummy_path, content)?;
+        AtomicFile::new(
+            &dummy_path,
+            atomicwrites::OverwriteBehavior::AllowOverwrite,
+        )
+        .write(|f| f.write_all(content.as_bytes()))?;
         Self::run_git_command(&self.workspace_root, &["add", "dummy.txt"])?;
         Self::run_git_command(
             &self.workspace_root,
