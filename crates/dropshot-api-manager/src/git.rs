@@ -377,15 +377,16 @@ impl GitRef {
         format!("{}\n", self)
     }
 
-    /// Returns whether the given file contents need to be rewritten.
+    /// Returns whether the given file contents representing a _valid_ Git ref
+    /// file need to be rewritten.
     ///
     /// File contents need rewriting if they don't match the canonical format:
+    ///
     /// - Missing trailing newline.
     /// - Contains backslashes in the path.
     /// - Has extra whitespace.
     ///
-    /// This is a static method that checks raw file contents without fully
-    /// parsing them. It's used to detect files that are valid but need
+    /// This static method is used to detect files that are valid but need
     /// normalization.
     pub fn needs_rewrite(contents: &str) -> bool {
         // Check for missing trailing newline.

@@ -1721,10 +1721,10 @@ fn test_unparseable_git_ref_regenerated() -> Result<()> {
         .find_versioned_git_ref_path("versioned-health", "1.0.0")?
         .expect("v1 git ref should exist");
     let corrupted_content = "<<<<<<< HEAD\n\
-        abc123:documents/versioned-health/old.json\n\
-        =======\n\
-        def456:documents/versioned-health/new.json\n\
-        >>>>>>> branch\n";
+abc123:documents/versioned-health/old.json\n\
+=======\n\
+def456:documents/versioned-health/new.json\n\
+>>>>>>> branch\n";
     env.create_file(&v1_git_ref_path, corrupted_content)?;
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
