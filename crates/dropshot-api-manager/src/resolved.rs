@@ -562,14 +562,17 @@ impl Fix<'_> {
                 // Write the git ref file. Add a trailing newline so diffs don't
                 // have the "\ No newline at end of file" message. Otherwise,
                 // the extra newline has no impact on usability or correctness.
-                fs_err::write(&git_ref_path, format!("{}\n", git_ref))?;
+                let overwrite_status = overwrite_file(
+                    &git_ref_path,
+                    format!("{}\n", git_ref).as_bytes(),
+                )?;
 
                 // Remove the original JSON file.
                 fs_err::remove_file(&json_path)?;
 
                 Ok(vec![
                     format!("converted {} to git ref", json_path),
-                    format!("created {}", git_ref_path),
+                    format!("created {}: {:?}", git_ref_path, overwrite_status),
                 ])
             }
             Fix::ConvertToJson { local_file } => {
@@ -597,13 +600,13 @@ impl Fix<'_> {
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(json_basename);
 
-                fs_err::write(&json_path, contents)?;
+                let overwrite_status = overwrite_file(&json_path, contents)?;
 
                 fs_err::remove_file(&git_ref_path)?;
 
                 Ok(vec![
                     format!("converted {} from git ref to JSON", git_ref_path),
-                    format!("created {}", json_path),
+                    format!("created {}: {:?}", json_path, overwrite_status),
                 ])
             }
         }
