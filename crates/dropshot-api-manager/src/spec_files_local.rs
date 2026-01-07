@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Newtype and collection to represent OpenAPI documents local to this working
 //! tree
@@ -9,23 +9,83 @@ use crate::{
     git::GitRef,
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
+        SpecFileInfo,
     },
 };
 use anyhow::{Context, anyhow};
 use camino::Utf8Path;
-use dropshot_api_manager_types::ApiIdent;
-use std::{collections::BTreeMap, ops::Deref};
+use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
+use std::collections::BTreeMap;
 
-/// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents found
-/// in this working tree
+/// A local file that exists but couldn't be parsed.
+///
+/// This happens when a file has merge conflict markers or is otherwise
+/// corrupted. The version is determined from the filename, allowing the
+/// generate command to regenerate the correct contents.
+///
+/// We still store the raw contents so they can be accessed if needed (e.g.,
+/// for diffing or debugging).
+#[derive(Debug)]
+pub struct LocalApiUnparseable {
+    /// The parsed filename (contains version and hash info).
+    pub name: ApiSpecFileName,
+    /// The raw file contents that couldn't be parsed.
+    pub contents: Vec<u8>,
+}
+
+/// Represents an OpenAPI document found in this working tree.
 ///
 /// This includes documents for lockstep APIs and versioned APIs, for both
 /// blessed and locally-added versions.
-pub struct LocalApiSpecFile(ApiSpecFile);
-NewtypeDebug! { () pub struct LocalApiSpecFile(ApiSpecFile); }
-NewtypeDeref! { () pub struct LocalApiSpecFile(ApiSpecFile); }
-NewtypeDerefMut! { () pub struct LocalApiSpecFile(ApiSpecFile); }
-NewtypeFrom! { () pub struct LocalApiSpecFile(ApiSpecFile); }
+///
+/// Files may be either valid (successfully parsed) or unparseable (e.g., due
+/// to merge conflict markers). Unparseable files are tracked so they can be
+/// regenerated during the generate command.
+#[derive(Debug)]
+pub enum LocalApiSpecFile {
+    /// A valid, successfully parsed OpenAPI document.
+    Valid(Box<ApiSpecFile>),
+    /// A file that exists but couldn't be parsed.
+    Unparseable(LocalApiUnparseable),
+}
+
+impl LocalApiSpecFile {
+    /// Returns the spec file name.
+    pub fn spec_file_name(&self) -> &ApiSpecFileName {
+        match self {
+            Self::Valid(spec) => spec.spec_file_name(),
+            Self::Unparseable(u) => &u.name,
+        }
+    }
+
+    /// Returns the raw file contents.
+    ///
+    /// This works for both valid and unparseable files.
+    pub fn contents(&self) -> &[u8] {
+        match self {
+            Self::Valid(spec) => spec.contents(),
+            Self::Unparseable(u) => &u.contents,
+        }
+    }
+
+    /// Returns true if this file is unparseable.
+    pub fn is_unparseable(&self) -> bool {
+        matches!(self, Self::Unparseable(_))
+    }
+}
+
+impl SpecFileInfo for LocalApiSpecFile {
+    fn spec_file_name(&self) -> &ApiSpecFileName {
+        self.spec_file_name()
+    }
+
+    fn version(&self) -> Option<&semver::Version> {
+        match self {
+            Self::Valid(spec) => Some(spec.version()),
+            Self::Unparseable(_) => None,
+        }
+    }
+}
 
 // Trait impls that allow us to use `ApiFiles<Vec<LocalApiSpecFile>>`
 //
@@ -34,22 +94,38 @@ NewtypeFrom! { () pub struct LocalApiSpecFile(ApiSpecFile); }
 
 impl ApiLoad for Vec<LocalApiSpecFile> {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
+    type Unparseable = LocalApiUnparseable;
 
     fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
-        self.push(LocalApiSpecFile::from(item));
+        self.push(LocalApiSpecFile::Valid(Box::new(item)));
         Ok(())
     }
 
     fn make_item(raw: ApiSpecFile) -> Self {
-        vec![LocalApiSpecFile::from(raw)]
+        vec![LocalApiSpecFile::Valid(Box::new(raw))]
+    }
+
+    fn make_unparseable(
+        name: ApiSpecFileName,
+        contents: Vec<u8>,
+    ) -> Option<Self::Unparseable> {
+        Some(LocalApiUnparseable { name, contents })
+    }
+
+    fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
+        vec![LocalApiSpecFile::Unparseable(unparseable)]
+    }
+
+    fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
+        self.push(LocalApiSpecFile::Unparseable(unparseable));
     }
 }
 
 impl AsRawFiles for Vec<LocalApiSpecFile> {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a ApiSpecFile> + 'a> {
-        Box::new(self.iter().map(|t| t.deref()))
+    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
+        Box::new(self.iter().map(|f| f as &dyn SpecFileInfo))
     }
 }
 
@@ -207,7 +283,32 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
         let file_name = entry.file_name();
 
         if ident.versioned_api_is_latest_symlink(file_name) {
-            // We should be looking at a symlink.
+            // We should be looking at a symlink. However, VCS tools like jj
+            // can turn symlinks into regular files with conflict markers when
+            // there's a symlink conflict. In that case, we treat it as a
+            // missing/corrupted symlink and let generate recreate it.
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(error) => {
+                    api_files.load_warning(anyhow!(error).context(format!(
+                        "failed to get file type for {:?}",
+                        entry.path()
+                    )));
+                    continue;
+                }
+            };
+
+            if !file_type.is_symlink() {
+                // This is not a symlink (likely corrupted by a merge conflict).
+                // Skip it so generate will recreate it.
+                api_files.load_warning(anyhow!(
+                    "expected symlink but found regular file {:?}; \
+                     will regenerate",
+                    entry.path()
+                ));
+                continue;
+            }
+
             let symlink = match entry.path().read_link_utf8() {
                 Ok(s) => s,
                 Err(error) => {

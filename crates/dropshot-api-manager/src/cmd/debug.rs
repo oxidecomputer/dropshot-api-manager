@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{
     apis::ManagedApis,
@@ -113,10 +113,14 @@ fn dump_structure<T: AsRawFiles>(
         for (version, files) in info.versions() {
             println!("        version {}:", version);
             for api_spec in files.as_raw_files() {
+                let version_str = api_spec
+                    .version()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unparseable".to_string());
                 println!(
                     "            file {} (v{})",
                     api_spec.spec_file_name().path(),
-                    api_spec.version()
+                    version_str
                 );
             }
         }
