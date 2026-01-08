@@ -917,6 +917,20 @@ impl TestEnvironment {
         Ok(conflicts)
     }
 
+    /// Set a jj bookmark to a specific revision.
+    pub fn jj_set_bookmark(&self, name: &str, rev: &str) -> Result<()> {
+        self.run_jj_command(&["bookmark", "set", name, "-r", rev])?;
+        Ok(())
+    }
+
+    /// Create a new working copy commit at the given revision.
+    ///
+    /// This is equivalent to `jj new -r <rev>`.
+    pub fn jj_new(&self, rev: &str) -> Result<()> {
+        self.run_jj_command(&["new", "-r", rev])?;
+        Ok(())
+    }
+
     /// Helper to run jj commands in the workspace root.
     fn run_jj_command(&self, args: &[&str]) -> Result<String> {
         let jj = std::env::var("JJ").unwrap_or_else(|_| "jj".to_string());
