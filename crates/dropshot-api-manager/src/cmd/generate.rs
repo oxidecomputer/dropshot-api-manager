@@ -43,10 +43,12 @@ pub(crate) fn generate_impl(
         styles.colorize();
     }
 
-    let (generated, errors) = generated_source.load(apis, &styles)?;
+    let (generated, errors) =
+        generated_source.load(apis, &styles, &env.repo_root)?;
     display_load_problems(&errors, &styles)?;
 
-    let (local_files, errors) = env.local_source.load(apis, &styles)?;
+    let (local_files, errors) =
+        env.local_source.load(apis, &styles, &env.repo_root)?;
     display_load_problems(&errors, &styles)?;
 
     let (blessed, errors) =
@@ -159,10 +161,11 @@ pub(crate) fn generate_impl(
         return Ok(GenerateResult::Failures);
     }
 
-    // Finally, check again for any problems.  Since we expect this should have
+    // Finally, check again for any problems. Since we expect this should have
     // fixed everything, be quiet unless we find something amiss.
     let mut nproblems = 0;
-    let (local_files, errors) = env.local_source.load(apis, &styles)?;
+    let (local_files, errors) =
+        env.local_source.load(apis, &styles, &env.repo_root)?;
     eprintln!(
         "{:>HEADER_WIDTH$} all local files",
         "Rechecking".style(styles.success_header),
