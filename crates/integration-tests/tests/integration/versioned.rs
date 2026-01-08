@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Integration tests for versioned APIs in dropshot-api-manager.
 //!
@@ -988,6 +988,74 @@ fn test_extra_validation_with_extra_file() -> Result<()> {
     assert!(v3.first.is_latest);
     assert_eq!(v3.second.is_blessed, Some(true));
     assert!(v3.second.is_latest);
+
+    Ok(())
+}
+
+/// Test that a malformed "latest" symlink pointing to a non-versioned file is
+/// handled gracefully (not with a panic).
+///
+/// This simulates a situation where someone accidentally creates a symlink like
+/// `versioned-health-latest.json -> versioned-health.json` (a non-versioned
+/// target).
+#[test]
+fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    env.generate_documents(&apis)?;
+
+    // Verify the symlink exists and points to a versioned file.
+    assert!(env.versioned_latest_document_exists("versioned-health"));
+    let original_target = env
+        .read_link("documents/versioned-health/versioned-health-latest.json")?;
+    assert!(
+        original_target.as_str().contains("-3.0.0-"),
+        "original symlink should point to v3.0.0 file, got: {}",
+        original_target
+    );
+
+    // Delete the valid symlink and create a malformed one pointing to a
+    // non-versioned target.
+    env.delete_versioned_latest_symlink("versioned-health")?;
+
+    let symlink_path = env
+        .documents_dir()
+        .join("versioned-health/versioned-health-latest.json");
+
+    // Create a symlink pointing to a non-versioned file name. The target
+    // doesn't need to exist: we're testing that the symlink parsing handles
+    // this gracefully.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("versioned-health.json", &symlink_path)
+        .context("failed to create malformed symlink")?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file("versioned-health.json", &symlink_path)
+        .context("failed to create malformed symlink")?;
+
+    // The check should not panic. It should report that updates are needed
+    // (because the "latest" symlink is effectively missing/malformed).
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "malformed symlink should be detected as needing update"
+    );
+
+    // Generate should fix the symlink.
+    env.generate_documents(&apis)?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // The symlink should now point to the correct versioned file.
+    let new_target = env
+        .read_link("documents/versioned-health/versioned-health-latest.json")?;
+    assert!(
+        new_target.as_str().contains("-3.0.0-"),
+        "regenerated symlink should point to v3.0.0 file, got: {}",
+        new_target
+    );
 
     Ok(())
 }
