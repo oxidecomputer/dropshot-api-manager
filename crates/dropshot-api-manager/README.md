@@ -153,6 +153,65 @@ api_versions!([
 
 To ensure everything works well, run `cargo openapi generate`. Your OpenAPI document should be generated on disk and listed in the output.
 
+##### Versions crate
+
+For long-term sustainability of managing types across versioned APIs, we recommend using a _versions crate_ as described in [RFD 619 Managing types across Dropshot API versions](https://rfd.shared.oxide.computer/rfd/619). Here's an archetypical crate graph:
+
+```mermaid
+flowchart TD
+    subgraph crates [crate dependencies]
+        versions["versions crate
+        (all published types)"]
+        types["types crate
+        (re-exports latest)"]
+        api["API trait"]
+
+        types --> versions
+        api --> versions
+    end
+
+    subgraph business [business logic]
+        stateless[stateless logic]
+        stateful[stateful logic]
+        stateful --> stateless
+    end
+
+    stateless --> types
+
+    subgraph boundary [boundary code]
+        real_impl[real API implementation]
+        test_impl[test API implementation]
+    end
+
+    client[Progenitor client]
+
+    real_impl --> api
+    real_impl --> stateful
+    real_impl -.-> |"prior versions"| versions
+
+    test_impl --> api
+    test_impl --> stateless
+    test_impl -.-> |"prior versions"| versions
+
+    client --> versions
+
+    subgraph binaries [binaries]
+        prod([production binary])
+        test([test binary])
+    end
+
+    prod --> real_impl
+    test --> test_impl
+```
+
+The key points:
+
+- The **versions crate** is the source of truth for all published types.
+- The **types crate** is a facade that re-exports from `latest`, used by business logic.
+- The **API trait** depends only on the versions crate (not the types crate).
+- **Business logic** depends only on the types crate, not the versions crate.
+- **Boundary code** depends on the versions crate for prior version endpoints.
+
 #### Performing validation
 
 By default, the Dropshot API manager does not do any kind of validation or linting on the generated document, beyond the basic checks performed by Dropshot itself. If desired, the API manager can be configured to perform _global validation_ on all documents, as well as _extra validation_ on some of them.
@@ -182,48 +241,7 @@ Assuming you're starting from a fresh branch from `main`, the general workflow f
 
 ### Iterating on versioned APIs
 
-This workflow is modeled after the lockstep one, but it's a little trickier because of the considerations around online update. **Check out the [Dropshot API Versioning](https://docs.rs/dropshot/latest/dropshot/index.html#api-versioning) docs for important background.**
-
-Again, we assume you're starting from a fresh branch from "main".
-
-1. Pull up the `api_versions!` call for your API, in the root of the API crate.
-
-2. Follow the instructions there to pick a new version number (the next unused integer) and an identifier.  For this example, suppose you find:
-
-    ```rust
-    api_versions!([
-      (1, INITIAL),
-    ])
-    ```
-
-    You'll change this to:
-
-    ```rust
-    api_versions!([
-        (2, MY_CHANGE),
-        (1, INITIAL),
-    ])
-    ```
-
-   Among other things, the `api_versions!` call turns these identifiers into named constants that you'll use in the next step.  For example, `(1, INITIAL)` defines a constant `VERSION_INITIAL` and `(2, MY_CHANGE)` defines the constant `VERSION_MY_CHANGE`.
-
-3. Also in the API crate, make your API changes.  However, you have to preserve the behavior of previous versions of the API. For some examples, see [Dropshot's versioning example](https://github.com/oxidecomputer/dropshot/blob/main/dropshot/examples/versioning.rs).
-
-    * If you're adding a new endpoint, then your new endpoint's `#[endpoint]` attribute should say `versions = VERSION_MY_CHANGE..` (meaning "introduced in version `VERSION_MY_CHANGE`").
-    * If you're removing an endpoint, then you want to change the endpoint's `#[endpoint]` attribute to say `versions = ..VERSION_MY_CHANGE` (meaning "removed in version `VERSION_MY_CHANGE`).  (If the endpoint was previously introduced in some other version, then the new value might say `versions = VERSION_OTHER..VERSION_MY_CHANGE` instead of `versions = ..VERSION_MY_CHANGE`.)
-    * If you're changing the arguments or return type of an endpoint, you'll need to treat this as a separate add/remove:
-
-      * Do not change the existing endpoint's arguments or return type at all.
-      * Mark the existing endpoint as removed in `VERSION_MY_CHANGE` as described above.
-      * Define new Rust types for the new version's arguments or return type (whichever are changing).
-      * Define a new endpoint using the new types and introduced in `VERSION_MY_CHANGE`, as described above.
-
-4. As with lockstep crates, you can do either of these in whichever order you want:
-
-    * Update the server(s) (the trait impl).  You can immediately see what's needed with `cargo check`.
-    * Update the client.  To do this, run `cargo openapi generate` to regenerate the OpenAPI document(s).  Then `cargo check` will tell you how the  client(s) need to be updated.
-
-5. Repeat steps 3-4 as needed.  You should **not** repeat steps 1-2 as you iterate.
+See [guides/new-version.md](guides/new-version.md) for an overview and for detailed instructions using the versions crate pattern.
 
 As of this writing, every API has exactly one Rust client package and it's always generated from the latest version of the API.  Per RFD 532, this is sufficient for APIs that are server-side-only versioned.  For APIs that will be client-side versioned, you may need to create additional Rust packages that use Progenitor to generate clients based on older OpenAPI documents.  This has not been done before but is believed to be straightforward.
 
