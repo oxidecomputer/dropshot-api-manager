@@ -25,13 +25,13 @@ This part of the guide uses the versions crate pattern described in [RFD 619 Man
 
 This guide is designed to be compatible with LLMs such as Claude Code. Example prompt:
 
-> Fetch and follow https://raw.githubusercontent.com/oxidecomputer/dropshot-api-manager/refs/heads/main/guides/new-version.md to add a new version to the Sled Agent API which makes changes X, Y, and Z.
+> Fetch https://raw.githubusercontent.com/oxidecomputer/dropshot-api-manager/refs/heads/main/guides/new-version.md without summarizing it, and follow it to add a new version to the Sled Agent API which makes changes X, Y, and Z.
 
 <details>
 
 <summary>Instructions for LLMs</summary>
 
-**Important:** Fetch and read https://rfd.shared.oxide.computer/rfd/0619/raw. This RFD contains the desired state and provides context for operations.
+**Important:** Fetch and read https://rfd.shared.oxide.computer/rfd/0619/raw without summarizing it. This RFD contains the desired state and provides context for operations.
 
 </details>
 
