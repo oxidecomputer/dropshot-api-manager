@@ -31,7 +31,57 @@ This guide is designed to be compatible with LLMs such as Claude Code. Example p
 
 <summary>Instructions for LLMs</summary>
 
-**Important:** Fetch and read https://rfd.shared.oxide.computer/rfd/0619/raw without summarizing it. This RFD contains the desired state and provides context for operations.
+Follow this guide exactly, systematically, and precisely. Pay attention to section headings.
+
+**Background:** Fetch and read https://rfd.shared.oxide.computer/rfd/0619/raw without summarizing it. This RFD contains the desired state and provides context for operations.
+
+**Locating files:**
+
+- The API trait is at `{api-name}-api/src/lib.rs`.
+- The implementation is typically at `{server-crate}/src/http_entrypoints.rs`, though it may sometimes be in a different file.
+- The versions crate is typically at `{api-name}-types/versions/src/lib.rs` or `{api-name}/types/versions/src/lib.rs`.
+
+**Import patterns:**
+
+In API traits, always import `latest` and `vN` modules with `use foo_versions::{latest, v1, v2, ...};`. Then, use `vN::path::Type` for prior versions or `latest::path::Type` for the newest versions, never the fully-qualified `foo_versions::vN::path::Type`.
+
+**Common mistakes to avoid:**
+
+1. Don't use floating identifiers (`latest::`) for prior versions of endpoints.
+2. Don't use versioned identifiers (`vN::`) for the latest version of endpoints.
+3. Don't add types to the API crate. All types should live in the versions crate.
+4. Don't put functional (non-conversion-related) code next to versioned types. Put them in the `impls` module in the versions crate.
+5. The `vN::` impl signatures must exactly match the trait signatures (`vN::` paths).
+6. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**, not the versions crate.
+7. Retain all existing comments. Don't add useless comments. Be extremely sparing with added prose.
+8. Don't make unrelated changes. Focus only on the new version being added.
+
+**Order of operations:**
+
+1. Determine the next API version number and add it to `api_versions!`.
+2. Add new or changed types to a new version module in the versions crate.
+3. Add type conversions from/to the prior version.
+4. Update re-exports in `latest.rs`.
+5. Update the types crate if new modules are added.
+6. Update the API trait (rename old endpoints, add new endpoints).
+7. Regenerate OpenAPI documents.
+8. Update API implementations.
+9. Move non-conversion methods to newer types if needed.
+
+**After each major step, run:**
+
+```
+cargo fmt
+cargo check -p {api-crate} -p {server-crate}
+```
+
+**After completing all steps, run:**
+
+```
+cargo xtask openapi check
+```
+
+This verifies that blessed API versions remain compatible and locally-added versions are correctly generated.
 
 </details>
 
