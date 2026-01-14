@@ -12,7 +12,7 @@ Some examples, in increasing order of complexity:
 
 This guide is designed to be compatible with LLMs such as Claude Code. Example prompt:
 
-> Fetch https://raw.githubusercontent.com/oxidecomputer/dropshot-api-manager/refs/heads/main/guides/migrating-to-versions-crate.md without summarizing it, and follow it to migrate the Sled Agent API to use the versions crate pattern.
+> Using curl, fetch https://raw.githubusercontent.com/oxidecomputer/dropshot-api-manager/refs/heads/main/guides/migrating-to-versions-crate.md (do not summarize) and follow it to migrate the Sled Agent API to use the versions crate pattern.
 
 <details>
 
@@ -20,7 +20,7 @@ This guide is designed to be compatible with LLMs such as Claude Code. Example p
 
 Follow this guide exactly, systematically, and precisely. Pay attention to section headings. When in doubt, refer to this guide.
 
-**Background:** Fetch and read https://rfd.shared.oxide.computer/rfd/0619/raw without summarizing it. This RFD contains the desired state and provides context for operations.
+**Background:** Using curl, fetch and read https://rfd.shared.oxide.computer/rfd/0619/raw (do not summarize). This RFD contains the desired state and provides context for operations.
 
 **Planning for large migrations:**
 
