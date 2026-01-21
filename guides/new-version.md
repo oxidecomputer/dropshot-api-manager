@@ -212,7 +212,7 @@ impl From<MyType> for v1::path::MyType {
 // above.
 ```
 
-In general, there is no need to implement conversions from other prior versions, since you can go through intermediate versions. In some cases it may be more efficient to do so anyway; use appropriate judgment.
+In general, don't add `From` impls from other prior versions. (So, if a type changed from `v1` to `v4` to `v9`, avoid implementing conversions from `v9` to `v1` or vice versa.) Instead, hop through intermediate versions in the API trait. In some cases it may be more efficient to have direct conversions to prior versions; use appropriate judgment.
 
 ### Add or update re-exports in `latest.rs`
 
@@ -337,6 +337,60 @@ pub trait MyApi {
 #### For *changed* endpoints only
 
 If possible (particularly if conversions only use `From` or `TryFrom`), make the prior version a provided method on the trait, with a default implementation that forwards to the corresponding latest versions. See [RFD 619's example API trait](https://rfd.shared.oxide.computer/rfd/619#example-api-trait).
+
+Update changed endpoints to hop through intermediate versions if necessary. For example:
+
+```rust
+pub trait MyApi {
+    #[endpoint {
+        method = GET,
+        path = "/instance/spec",
+        versions = VERSION_THREE..
+    }]
+    async fn instance_spec_get(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<latest::instance_spec::InstanceSpecGetResponse>,
+        HttpError,
+    >;
+    
+    #[endpoint {
+        operation_id = "instance_spec_get",
+        method = GET,
+        path = "/instance/spec",
+        versions = VERSION_PROGRAMMABLE_SMBIOS..VERSION_NVME_MODEL_NUMBER
+    }]
+    async fn instance_spec_get_v2(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<v2::instance_spec::InstanceSpecGetResponse>,
+        HttpError,
+    > {
+        // Convert from v3 to v2.
+        Ok(Self::instance_spec_get(rqctx)
+            .await?
+            .map(v2::instance_spec::InstanceSpecGetResponse::from))
+    }
+    
+    #[endpoint {
+        operation_id = "instance_spec_get",
+        method = GET,
+        path = "/instance/spec",
+        versions = ..VERSION_PROGRAMMABLE_SMBIOS
+    }]
+    async fn instance_spec_get_v1(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<
+        HttpResponseOk<v1::instance_spec::InstanceSpecGetResponse>,
+        HttpError,
+    > {
+        // Convert from v2 (returned by the `_v2` method) to v1.
+        Ok(Self::instance_spec_get_v2(rqctx)
+            .await?
+            .map(v1::instance_spec::InstanceSpecGetResponse::from))
+    }
+}
+```
 
 ### Regenerate OpenAPI documents
 
