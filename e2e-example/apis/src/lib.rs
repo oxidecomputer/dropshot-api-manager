@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Example API descriptions for the Dropshot API manager -- a couple of
 //! examples, one that's lockstep and one that's versioned.
@@ -19,12 +19,15 @@ pub mod lockstep {
 }
 
 pub mod versioned {
-    use dropshot::{HttpError, HttpResponseOk, RequestContext};
+    use dropshot::{HttpError, HttpResponseOk, Query, RequestContext};
     use dropshot_api_manager_types::api_versions;
     use schemars::JsonSchema;
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
 
     api_versions!([
+        // Version 4.0.0 adds an endpoint with query parameters, to test
+        // detection of query parameter changes.
+        (4, WITH_QUERY_PARAMS),
         // Version 3.0.0 was added to capture bytewise changes to the schema
         // serialization (e.g., the Number wrapper type being serialized as a
         // separate schema instead of inlined).
@@ -64,6 +67,19 @@ pub mod versioned {
         async fn get_thing_v2(
             rqctx: RequestContext<Self::Context>,
         ) -> Result<HttpResponseOk<ThingV2>, HttpError>;
+
+        /// Search for items.
+        ///
+        /// This endpoint demonstrates query parameters for testing purposes.
+        #[endpoint {
+            method = GET,
+            path = "/search",
+            versions = VERSION_WITH_QUERY_PARAMS..
+        }]
+        async fn search(
+            rqctx: RequestContext<Self::Context>,
+            query_params: Query<SearchParams>,
+        ) -> Result<HttpResponseOk<Vec<SearchResult>>, HttpError>;
     }
 
     #[derive(Serialize, JsonSchema)]
@@ -85,4 +101,20 @@ pub mod versioned {
 
     #[derive(Serialize, JsonSchema)]
     struct Number(u32);
+
+    /// Query parameters for the search endpoint.
+    #[derive(Deserialize, JsonSchema)]
+    pub struct SearchParams {
+        /// The search query string.
+        pub query: String,
+    }
+
+    /// A search result item.
+    #[derive(Serialize, JsonSchema)]
+    pub struct SearchResult {
+        /// The ID of the matching item.
+        pub id: u64,
+        /// The name of the matching item.
+        pub name: String,
+    }
 }
