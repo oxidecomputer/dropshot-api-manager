@@ -29,7 +29,7 @@ dropshot = "0.16.4"
 dropshot-api-manager = { path = "crates/dropshot-api-manager", version = "0.3.0" }
 dropshot-api-manager-types = { path = "crates/dropshot-api-manager-types", version = "0.3.0" }
 e2e-example-apis = { path = "e2e-example/apis" }
-fs-err = "3.1.1"
+fs-err = "3.2.2"
 hex = "0.4.3"
 indent_write = "2.2.0"
 newtype_derive = "0.1.6"
