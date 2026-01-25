@@ -21,7 +21,7 @@ atomicwrites = "0.4.4"
 camino = "1.2.1"
 camino-tempfile = "1.4.1"
 camino-tempfile-ext = "0.3.3"
-chrono = { version = "0.4.38", features = ["serde"] }
+chrono = { version = "0.4.43", features = ["serde"] }
 clap = "4.5"
 debug-ignore = "1.0.5"
 drift = "0.1.2"
