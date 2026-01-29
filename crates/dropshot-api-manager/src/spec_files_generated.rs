@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Newtype and collection to represent OpenAPI documents generated from the
 //! API definitions
@@ -8,12 +8,13 @@ use crate::{
     environment::ErrorAccumulator,
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        hash_contents,
+        SpecFileInfo, hash_contents,
     },
 };
 use anyhow::{anyhow, bail};
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, ApiSpecFileNameKind,
+    ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
+    VersionedApiSpecFileName,
 };
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -35,6 +36,7 @@ NewtypeFrom! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
 
 impl ApiLoad for GeneratedApiSpecFile {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
+    type Unparseable = std::convert::Infallible;
 
     fn make_item(raw: ApiSpecFile) -> Self {
         GeneratedApiSpecFile(raw)
@@ -49,13 +51,28 @@ impl ApiLoad for GeneratedApiSpecFile {
             item.spec_file_name()
         );
     }
+
+    fn make_unparseable(
+        _name: ApiSpecFileName,
+        _contents: Vec<u8>,
+    ) -> Option<Self::Unparseable> {
+        None
+    }
+
+    fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
+        match unparseable {}
+    }
+
+    fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
+        match unparseable {}
+    }
 }
 
 impl AsRawFiles for GeneratedApiSpecFile {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a ApiSpecFile> + 'a> {
-        Box::new(std::iter::once(self.deref()))
+    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
+        Box::new(std::iter::once(self.deref() as &dyn SpecFileInfo))
     }
 }
 
@@ -95,11 +112,10 @@ impl GeneratedFiles {
                             )))
                         }
                         Ok(contents) => {
-                            let file_name = ApiSpecFileName::new(
+                            let file_name = LockstepApiSpecFileName::new(
                                 api.ident().clone(),
-                                ApiSpecFileNameKind::Lockstep,
                             );
-                            api_files.load_contents(file_name, contents);
+                            api_files.load_contents(file_name.into(), contents);
                         }
                     }
                 }
@@ -121,15 +137,13 @@ impl GeneratedFiles {
                             )))
                         }
                         Ok(contents) => {
-                            let file_name = ApiSpecFileName::new(
+                            let file_name = VersionedApiSpecFileName::new(
                                 api.ident().clone(),
-                                ApiSpecFileNameKind::Versioned {
-                                    version: version.clone(),
-                                    hash: hash_contents(&contents),
-                                },
+                                version.clone(),
+                                hash_contents(&contents),
                             );
                             latest = Some(file_name.clone());
-                            api_files.load_contents(file_name, contents);
+                            api_files.load_contents(file_name.into(), contents);
                         }
                     }
                 }

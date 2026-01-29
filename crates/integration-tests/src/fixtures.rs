@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Test fixtures for common API scenarios in dropshot-api-manager tests.
 
@@ -15,6 +15,24 @@ use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+
+/// Storage strategy for blessed API versions.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum Storage {
+    /// Store all versions as concrete JSON files.
+    ///
+    /// This is the standard mode where each version has a full JSON file
+    /// checked into the repository.
+    #[default]
+    Concrete,
+
+    /// Store blessed versions as git refs, local versions as JSON files.
+    ///
+    /// In this mode, blessed versions are stored as `.gitref` files containing
+    /// a git commit reference, and the actual JSON content is fetched from git
+    /// history. This reduces repository bloat for APIs with many versions.
+    GitRef,
+}
 
 /// A minimal API with just a health check endpoint.
 #[dropshot::api_description]
@@ -172,7 +190,7 @@ pub mod versioned_health {
 
     api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedHealthApi {
         type Context;
 
@@ -255,7 +273,7 @@ pub mod versioned_user {
         (1, INITIAL),
     ]);
 
-    #[dropshot::api_description]
+    #[dropshot::api_description { module = "api_mod" }]
     pub trait VersionedUserApi {
         type Context;
 
@@ -497,6 +515,382 @@ pub mod versioned_health_reduced {
     };
 }
 
+/// Versioned health API fixture without v1 (only v2 and v3).
+///
+/// Used to simulate removal of the first version.
+pub mod versioned_health_no_v1 {
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS)]);
+
+    // Reuse the same API and response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
+        VersionedHealthApi, api_mod,
+    };
+}
+
+/// Versioned health API fixture with only v1.
+///
+/// Used to test git ref conversion when multiple versions share the same
+/// first commit as the new latest.
+pub mod versioned_health_v1_only {
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(1, INITIAL)]);
+
+    // Reuse the same API and response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        HealthStatusV1, VersionedHealthApi, api_mod,
+    };
+}
+
+/// Versioned health API fixture with v1, v2, and v4 (skipping v3).
+///
+/// Used to test merge scenarios where two branches add different new versions
+/// while both converting the same older versions to git refs.
+pub mod versioned_health_v1_v2_v4 {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([
+        (4, WITH_ENHANCED_METRICS),
+        (2, WITH_DETAILED_STATUS),
+        (1, INITIAL),
+    ]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+    }
+
+    // Reuse the same response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+    };
+}
+
+/// Alternate v3 of the versioned health API with different content.
+///
+/// This produces a different OpenAPI document (different hash) than the
+/// standard v3, which is useful for testing merge conflict scenarios where two
+/// branches both add "v3" but with different content.
+pub mod versioned_health_v3_alternate {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+) - alternate version with extended metrics.
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetricsExtended>, HttpError>;
+    }
+
+    /// Extended service metrics response (alternate v3).
+    ///
+    /// This has additional fields compared to the standard ServiceMetrics,
+    /// producing a different OpenAPI document.
+    #[derive(JsonSchema, Serialize)]
+    pub struct ServiceMetricsExtended {
+        pub requests_per_second: f64,
+        pub error_rate: f64,
+        pub avg_response_time_ms: f64,
+        pub active_connections: u32,
+        /// Additional field not in the standard v3.
+        pub peak_connections: u32,
+        /// Additional field not in the standard v3.
+        pub uptime_seconds: u64,
+    }
+
+    // Reuse the same response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+    };
+}
+
+/// Second alternate v3 of the versioned health API.
+///
+/// Produces different OpenAPI content than both standard v3 and
+/// `versioned_health_v3_alternate`, useful for testing successive modifications
+/// to the same version in multi-commit rebase scenarios.
+pub mod versioned_health_v3_alternate2 {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(3, WITH_METRICS), (2, WITH_DETAILED_STATUS), (1, INITIAL)]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+) - second alternate version with full metrics.
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetricsFull>, HttpError>;
+    }
+
+    /// Full service metrics response (second alternate v3).
+    ///
+    /// This has different additional fields compared to both the standard
+    /// ServiceMetrics and ServiceMetricsExtended, producing a unique OpenAPI
+    /// document.
+    #[derive(JsonSchema, Serialize)]
+    pub struct ServiceMetricsFull {
+        pub requests_per_second: f64,
+        pub error_rate: f64,
+        pub avg_response_time_ms: f64,
+        pub active_connections: u32,
+        /// Memory usage in bytes (unique to this alternate).
+        pub memory_usage_bytes: u64,
+        /// CPU utilization percentage (unique to this alternate).
+        pub cpu_utilization_percent: f64,
+    }
+
+    // Reuse the same response types from the main versioned_health module.
+    pub use super::versioned_health::{
+        DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+    };
+}
+
+/// Versioned health API with v1, v2, v3, v4 where v4 uses the alternate metrics.
+///
+/// Used to resolve merge conflicts by incorporating main's v3 and making the
+/// branch's alternate v3 into v4.
+pub mod versioned_health_v1_v2_v3_v4alt {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([
+        (4, WITH_EXTENDED_METRICS),
+        (3, WITH_METRICS),
+        (2, WITH_DETAILED_STATUS),
+        (1, INITIAL),
+    ]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+): combined version.
+        ///
+        /// This doc comment is deliberately different from the others to ensure
+        /// that we use the blessed version to resolve merge conflicts.
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..VERSION_WITH_EXTENDED_METRICS
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetrics>, HttpError>;
+
+        /// Get service metrics (v4+).
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "4.0.0"..
+        }]
+        async fn get_metrics_extended(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetricsExtended>, HttpError>;
+    }
+
+    // Reuse types from versioned_health and the alternate module.
+    pub use super::{
+        versioned_health::{
+            DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+            ServiceMetrics,
+        },
+        versioned_health_v3_alternate::ServiceMetricsExtended,
+    };
+}
+
+/// Versioned health API with v1, v2, v3, v4 where v4 uses the second alternate
+/// metrics.
+///
+/// Used to resolve the second conflict in multi-commit rebase scenarios where
+/// the feature branch iterates on a new version. The v4 here uses
+/// `ServiceMetricsFull` (from `versioned_health_v3_alternate2`).
+pub mod versioned_health_v1_v2_v3_v4alt2 {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([
+        (4, WITH_FULL_METRICS),
+        (3, WITH_METRICS),
+        (2, WITH_DETAILED_STATUS),
+        (1, INITIAL),
+    ]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedHealthApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
+
+        /// Get detailed health status (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/health/detailed",
+            operation_id = "detailed_health_check",
+            versions = "2.0.0"..
+        }]
+        async fn detailed_health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
+
+        /// Get service metrics (v3+): combined version.
+        ///
+        /// This doc comment is deliberately different from the others to ensure
+        /// that we use the blessed version to resolve merge conflicts.
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "3.0.0"..VERSION_WITH_FULL_METRICS
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetrics>, HttpError>;
+
+        /// Get service metrics (v4+): full metrics version.
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "4.0.0"..
+        }]
+        async fn get_metrics_full(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetricsFull>, HttpError>;
+    }
+
+    // Reuse types from versioned_health and the second alternate module.
+    pub use super::{
+        versioned_health::{
+            DependencyStatus, DetailedHealthStatus, HealthStatusV1,
+            ServiceMetrics,
+        },
+        versioned_health_v3_alternate2::ServiceMetricsFull,
+    };
+}
+
 /// Versioned health API fixture that skips the middle version (2.0.0).
 /// This has versions 3.0.0 and 1.0.0 only, simulating retirement of an older
 /// blessed version.
@@ -696,8 +1090,7 @@ pub fn versioned_health_api() -> ManagedApiConfig {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     }
 }
 
@@ -714,8 +1107,7 @@ pub fn versioned_user_api() -> ManagedApiConfig {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_user::versioned_user_api_mod::stub_api_description,
+        api_description: versioned_user::api_mod::stub_api_description,
     }
 }
 
@@ -786,10 +1178,26 @@ pub fn lockstep_multi_apis() -> Result<ManagedApis> {
     ManagedApis::new(configs).context("failed to create ManagedApis")
 }
 
+/// Create a versioned health ManagedApi with the specified storage.
+pub fn versioned_health_api_with_storage(storage: Storage) -> ManagedApi {
+    let config = versioned_health_api();
+    match storage {
+        Storage::Concrete => ManagedApi::from(config),
+        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+    }
+}
+
+/// Create versioned health APIs with the specified storage.
+pub fn versioned_health_apis_with_storage(
+    storage: Storage,
+) -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_api_with_storage(storage)])
+        .context("failed to create versioned health ManagedApis")
+}
+
 /// Create a versioned health API for testing.
 pub fn versioned_health_apis() -> Result<ManagedApis> {
-    ManagedApis::new(vec![versioned_health_api()])
-        .context("failed to create versioned health ManagedApis")
+    versioned_health_apis_with_storage(Storage::Concrete)
 }
 
 /// Create a versioned user API for testing.
@@ -846,8 +1254,7 @@ pub fn versioned_health_trivial_change_allowed_apis() -> Result<ManagedApis> {
             description: Some("A versioned health API with trivial changes"),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     };
 
     ManagedApis::new(vec![
@@ -882,11 +1289,12 @@ pub fn versioned_health_trivial_change_with_new_latest_apis()
     )
 }
 
-/// Create versioned health API with reduced versions (simulating version
-/// removal).
-pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
-    // Create a configuration similar to versioned health but with fewer
-    // versions. We'll create a new fixture for this.
+/// Create versioned health API with reduced versions (v1, v2 only).
+///
+/// Used to simulate the initial state before adding v3.
+pub fn versioned_health_reduced_apis_with_storage(
+    storage: Storage,
+) -> Result<ManagedApis> {
     let config = ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
@@ -906,8 +1314,18 @@ pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
             versioned_health_reduced::api_mod::stub_api_description,
     };
 
-    ManagedApis::new(vec![config])
+    let api = match storage {
+        Storage::Concrete => ManagedApi::from(config),
+        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+    };
+    ManagedApis::new(vec![api])
         .context("failed to create reduced versioned health ManagedApis")
+}
+
+/// Create versioned health API with reduced versions (simulating version
+/// removal).
+pub fn versioned_health_reduced_apis() -> Result<ManagedApis> {
+    versioned_health_reduced_apis_with_storage(Storage::Concrete)
 }
 
 pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
@@ -936,6 +1354,54 @@ pub fn versioned_health_skip_middle_apis() -> Result<ManagedApis> {
 
     ManagedApis::new(vec![config])
         .context("failed to create skip middle versioned health ManagedApis")
+}
+
+/// Create versioned health API without v1 (only v2 and v3).
+///
+/// Used to simulate removal of the first version.
+pub fn versioned_health_no_v1_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_no_v1::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description: versioned_health_no_v1::api_mod::stub_api_description,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create no-v1 versioned health ManagedApis")
+}
+
+/// Create versioned health API with only v1.
+///
+/// Used to test git ref conversion when multiple versions share the same
+/// first commit as the new latest.
+pub fn versioned_health_v1_only_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_v1_only::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v1_only::api_mod::stub_api_description,
+    };
+
+    ManagedApis::new(vec![config])
+        .context("failed to create v1-only versioned health ManagedApis")
 }
 
 /// Create a versioned health API with incompatible changes that break backward
@@ -1039,8 +1505,7 @@ pub fn versioned_health_with_validation_api() -> ManagedApi {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     })
     .with_extra_validation(validate)
 }
@@ -1058,8 +1523,7 @@ pub fn versioned_health_with_extra_file_api() -> ManagedApi {
             ),
             ..Default::default()
         },
-        api_description:
-            versioned_health::versioned_health_api_mod::stub_api_description,
+        api_description: versioned_health::api_mod::stub_api_description,
     })
     .with_extra_validation(validate_with_extra_file)
 }
@@ -1074,4 +1538,264 @@ pub fn versioned_health_with_extra_file_apis() -> Result<ManagedApis> {
     ManagedApis::new(vec![versioned_health_with_extra_file_api()]).context(
         "failed to create versioned health with conditional files ManagedApis",
     )
+}
+
+/// Create a versioned health API with git ref storage enabled.
+pub fn versioned_health_git_ref_api() -> ManagedApi {
+    versioned_health_api_with_storage(Storage::GitRef)
+}
+
+/// Create versioned health APIs with git ref storage enabled.
+pub fn versioned_health_git_ref_apis() -> Result<ManagedApis> {
+    versioned_health_apis_with_storage(Storage::GitRef)
+}
+
+/// Create a versioned health API with v4 and git ref storage enabled.
+pub fn versioned_health_with_v4_git_ref_api() -> ManagedApi {
+    ManagedApi::from(ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_with_v4::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_with_v4::api_mod::stub_api_description,
+    })
+    .with_git_ref_storage()
+}
+
+/// Create versioned health APIs with v4 and git ref storage enabled.
+pub fn versioned_health_with_v4_git_ref_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_v4_git_ref_api()]).context(
+        "failed to create versioned health with v4 git ref ManagedApis",
+    )
+}
+
+/// Create a versioned health API with v4 but without git ref storage.
+///
+/// This is used to test conversion from git ref files back to JSON files when
+/// git ref storage is disabled.
+pub fn versioned_health_with_v4_api() -> ManagedApi {
+    ManagedApi::from(ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_with_v4::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_with_v4::api_mod::stub_api_description,
+    })
+}
+
+/// Create versioned health APIs with v4 but without git ref storage.
+///
+/// This is used to test conversion from git ref files back to JSON files when
+/// git ref storage is disabled.
+pub fn versioned_health_with_v4_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_v4_api()])
+        .context("failed to create versioned health with v4 ManagedApis")
+}
+
+/// Create lockstep APIs (for testing that lockstep never uses git ref storage).
+pub fn lockstep_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![lockstep_health_api()])
+        .context("failed to create lockstep ManagedApis")
+}
+
+/// Create a versioned health API with reduced versions (v1, v2 only) and git
+/// ref storage enabled.
+pub fn versioned_health_reduced_git_ref_apis() -> Result<ManagedApis> {
+    versioned_health_reduced_apis_with_storage(Storage::GitRef)
+}
+
+/// Create a versioned health API with v1, v2, v4 (skipping v3) and git ref
+/// storage enabled.
+///
+/// Used to test merge scenarios where two branches add different new versions
+/// while both converting the same older versions to git refs.
+pub fn versioned_health_v1_v2_v4_git_ref_apis() -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions: versioned_health_v1_v2_v4::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v1_v2_v4::api_mod::stub_api_description,
+    };
+
+    ManagedApis::new(vec![ManagedApi::from(config).with_git_ref_storage()])
+        .context(
+            "failed to create v1,v2,v4 versioned health git ref ManagedApis",
+        )
+}
+
+/// Create a versioned health API with the alternate v3 (different content than
+/// standard v3).
+///
+/// Used to simulate a branch that adds v3 with different content than main.
+pub fn versioned_health_v3_alternate_apis(
+    storage: Storage,
+) -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions:
+                versioned_health_v3_alternate::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v3_alternate::api_mod::stub_api_description,
+    };
+
+    let api = match storage {
+        Storage::Concrete => ManagedApi::from(config),
+        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+    };
+    ManagedApis::new(vec![api])
+        .context("failed to create v3-alternate versioned health ManagedApis")
+}
+
+/// Create a versioned health API with the alternate v3 and git ref storage.
+pub fn versioned_health_v3_alternate_git_ref_apis() -> Result<ManagedApis> {
+    versioned_health_v3_alternate_apis(Storage::GitRef)
+}
+
+/// Create a versioned health API with v1, v2, v3, v4 where v4 uses the extended
+/// metrics (from the alternate v3).
+///
+/// Used to resolve merge conflicts by incorporating main's v3 and making the
+/// branch's alternate v3 into v4.
+pub fn versioned_health_v1_v2_v3_v4alt_apis(
+    storage: Storage,
+) -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions:
+                versioned_health_v1_v2_v3_v4alt::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v1_v2_v3_v4alt::api_mod::stub_api_description,
+    };
+
+    let api = match storage {
+        Storage::Concrete => ManagedApi::from(config),
+        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+    };
+    ManagedApis::new(vec![api]).context(
+        "failed to create v1,v2,v3,v4-alt versioned health ManagedApis",
+    )
+}
+
+/// Create a versioned health API with v1, v2, v3, v4alt and git ref storage.
+pub fn versioned_health_v1_v2_v3_v4alt_git_ref_apis() -> Result<ManagedApis> {
+    versioned_health_v1_v2_v3_v4alt_apis(Storage::GitRef)
+}
+
+/// Create a versioned health API with the second alternate v3 (different content
+/// than both standard v3 and first alternate).
+///
+/// Used to simulate successive modifications to the same version in multi-commit
+/// rebase scenarios.
+pub fn versioned_health_v3_alternate2_apis(
+    storage: Storage,
+) -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions:
+                versioned_health_v3_alternate2::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v3_alternate2::api_mod::stub_api_description,
+    };
+
+    let api = match storage {
+        Storage::Concrete => ManagedApi::from(config),
+        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+    };
+    ManagedApis::new(vec![api])
+        .context("failed to create v3-alternate2 versioned health ManagedApis")
+}
+
+/// Create a versioned health API with the second alternate v3 and git ref storage.
+pub fn versioned_health_v3_alternate2_git_ref_apis() -> Result<ManagedApis> {
+    versioned_health_v3_alternate2_apis(Storage::GitRef)
+}
+
+/// Create a versioned health API with v1, v2, v3, v4 where v4 uses the second
+/// alternate (full) metrics.
+///
+/// Used to resolve the second conflict in multi-commit rebase scenarios.
+pub fn versioned_health_v1_v2_v3_v4alt2_apis(
+    storage: Storage,
+) -> Result<ManagedApis> {
+    let config = ManagedApiConfig {
+        ident: "versioned-health",
+        versions: Versions::Versioned {
+            supported_versions:
+                versioned_health_v1_v2_v3_v4alt2::supported_versions(),
+        },
+        title: "Versioned Health API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned health API for testing version evolution",
+            ),
+            ..Default::default()
+        },
+        api_description:
+            versioned_health_v1_v2_v3_v4alt2::api_mod::stub_api_description,
+    };
+
+    let api = match storage {
+        Storage::Concrete => ManagedApi::from(config),
+        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+    };
+    ManagedApis::new(vec![api]).context(
+        "failed to create v1,v2,v3,v4-alt2 versioned health ManagedApis",
+    )
+}
+
+/// Create a versioned health API with v1, v2, v3, v4alt2 and git ref storage.
+pub fn versioned_health_v1_v2_v3_v4alt2_git_ref_apis() -> Result<ManagedApis> {
+    versioned_health_v1_v2_v3_v4alt2_apis(Storage::GitRef)
 }

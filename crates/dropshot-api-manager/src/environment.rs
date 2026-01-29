@@ -1,11 +1,11 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Describes the environment the command is running in, and particularly where
 //! different sets of specifications are loaded from
 
 use crate::{
     apis::ManagedApis,
-    git::GitRevision,
+    git::{GitRevision, is_shallow_clone},
     output::{
         Styles,
         headers::{GENERATING, HEADER_WIDTH},
@@ -199,7 +199,7 @@ pub enum BlessedSource {
 }
 
 impl BlessedSource {
-    /// Load the blessed OpenAPI documents
+    /// Load the blessed OpenAPI documents.
     pub fn load(
         &self,
         repo_root: &Utf8Path,
@@ -215,7 +215,12 @@ impl BlessedSource {
                     local_directory,
                 );
                 let api_files: ApiSpecFilesBuilder<'_, BlessedApiSpecFile> =
-                    walk_local_directory(local_directory, apis, &mut errors)?;
+                    walk_local_directory(
+                        local_directory,
+                        apis,
+                        &mut errors,
+                        repo_root,
+                    )?;
                 Ok((BlessedFiles::from(api_files), errors))
             }
             BlessedSource::GitRevisionMergeBase { revision, directory } => {
@@ -254,11 +259,12 @@ pub enum GeneratedSource {
 }
 
 impl GeneratedSource {
-    /// Load the generated OpenAPI documents (i.e., generating them as needed)
+    /// Load the generated OpenAPI documents (i.e., generating them as needed).
     pub fn load(
         &self,
         apis: &ManagedApis,
         styles: &Styles,
+        repo_root: &Utf8Path,
     ) -> anyhow::Result<(GeneratedFiles, ErrorAccumulator)> {
         let mut errors = ErrorAccumulator::new();
         match self {
@@ -277,8 +283,12 @@ impl GeneratedSource {
                     "Loading".style(styles.success_header),
                     local_directory,
                 );
-                let api_files =
-                    walk_local_directory(local_directory, apis, &mut errors)?;
+                let api_files = walk_local_directory(
+                    local_directory,
+                    apis,
+                    &mut errors,
+                    repo_root,
+                )?;
                 Ok((GeneratedFiles::from(api_files), errors))
             }
         }
@@ -299,13 +309,31 @@ pub enum LocalSource {
 }
 
 impl LocalSource {
-    /// Load the local OpenAPI documents
+    /// Load the local OpenAPI documents.
+    ///
+    /// The `repo_root` parameter is needed to resolve `.gitref` files.
     pub fn load(
         &self,
         apis: &ManagedApis,
         styles: &Styles,
+        repo_root: &Utf8Path,
     ) -> anyhow::Result<(LocalFiles, ErrorAccumulator)> {
         let mut errors = ErrorAccumulator::new();
+
+        // Shallow clones and git ref storage are incompatible.
+        let any_uses_git_ref =
+            apis.iter_apis().any(|a| apis.uses_git_ref_storage(a));
+        if any_uses_git_ref && is_shallow_clone(repo_root) {
+            errors.error(anyhow::anyhow!(
+                "this repository is a shallow clone, but git ref storage is \
+                 enabled for some APIs. Git refs cannot be resolved in a \
+                 shallow clone because the referenced commits may not be \
+                 available. To fix this, run `git fetch --unshallow` to \
+                 fetch complete history, or make a fresh clone without --depth."
+            ));
+            return Ok((LocalFiles::default(), errors));
+        }
+
         match self {
             LocalSource::Directory { abs_dir, .. } => {
                 eprintln!(
@@ -319,6 +347,7 @@ impl LocalSource {
                         abs_dir,
                         apis,
                         &mut errors,
+                        repo_root,
                     )?,
                     errors,
                 ))

@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Integration tests for versioned APIs in dropshot-api-manager.
 //!
@@ -7,8 +7,12 @@
 //! and must remain stable across changes.
 
 use anyhow::{Context, Result};
+use camino::Utf8PathBuf;
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
-use integration_tests::*;
+use integration_tests::{
+    ExpectedConflictKind, ExpectedConflicts, all_conflict_paths,
+    jj_conflict_paths, *,
+};
 use openapiv3::OpenAPI;
 use semver::Version;
 
@@ -990,4 +994,297 @@ fn test_extra_validation_with_extra_file() -> Result<()> {
     assert!(v3.second.is_latest);
 
     Ok(())
+}
+
+/// Test that a malformed "latest" symlink pointing to a non-versioned file is
+/// handled gracefully (not with a panic).
+///
+/// This simulates a situation where someone accidentally creates a symlink like
+/// `versioned-health-latest.json -> versioned-health.json` (a non-versioned
+/// target).
+#[test]
+fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = versioned_health_apis()?;
+
+    env.generate_documents(&apis)?;
+
+    // Verify the symlink exists and points to a versioned file.
+    assert!(env.versioned_latest_document_exists("versioned-health"));
+    let original_target = env
+        .read_link("documents/versioned-health/versioned-health-latest.json")?;
+    assert!(
+        original_target.as_str().contains("-3.0.0-"),
+        "original symlink should point to v3.0.0 file, got: {}",
+        original_target
+    );
+
+    // Delete the valid symlink and create a malformed one pointing to a
+    // non-versioned target.
+    env.delete_versioned_latest_symlink("versioned-health")?;
+
+    let symlink_path = env
+        .documents_dir()
+        .join("versioned-health/versioned-health-latest.json");
+
+    // Create a symlink pointing to a non-versioned file name. The target
+    // doesn't need to exist: we're testing that the symlink parsing handles
+    // this gracefully.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("versioned-health.json", &symlink_path)
+        .context("failed to create malformed symlink")?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file("versioned-health.json", &symlink_path)
+        .context("failed to create malformed symlink")?;
+
+    // The check should not panic. It should report that updates are needed
+    // (because the "latest" symlink is effectively missing/malformed).
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "malformed symlink should be detected as needing update"
+    );
+
+    // Generate should fix the symlink.
+    env.generate_documents(&apis)?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // The symlink should now point to the correct versioned file.
+    let new_target = env
+        .read_link("documents/versioned-health/versioned-health-latest.json")?;
+    assert!(
+        new_target.as_str().contains("-3.0.0-"),
+        "regenerated symlink should point to v3.0.0 file, got: {}",
+        new_target
+    );
+
+    Ok(())
+}
+
+/// Test successive commits modifying the same non-blessed version with concrete
+/// storage.
+///
+/// This is the concrete storage variant of the git ref
+/// `test_rebase_successive_changes_to_nonblessed_version`. Without git ref
+/// conversion, the first conflict is the symlink only. The second conflict
+/// includes rename/delete conflicts on the v3/v4 files.
+#[test]
+fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
+{
+    let env = TestEnvironment::new()?;
+    let (expected_first_conflicts, expected_second_conflicts) =
+        successive_changes_concrete_setup(&env)?;
+
+    // First conflict: symlink only.
+    let rebase_result = env.try_rebase_onto("main")?;
+    let RebaseResult::Conflict(conflicted_files) = rebase_result else {
+        panic!(
+            "expected symlink conflict on first rebase step; got clean rebase"
+        );
+    };
+    assert_eq!(
+        conflicted_files,
+        all_conflict_paths(&expected_first_conflicts),
+        "first conflict should be symlink only"
+    );
+
+    // Resolve: promote feature's alt-1 to v4, keep main's v3.
+    let v1_v2_v3_v4alt_apis =
+        versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_v3_v4alt_apis)?;
+
+    // Second conflict: rename/delete on v3/v4 files plus symlink.
+    let continue_result = env.try_continue_rebase()?;
+    let RebaseResult::Conflict(second_conflicted_files) = continue_result
+    else {
+        panic!(
+            "expected rename/delete conflicts on second rebase step; got clean rebase"
+        );
+    };
+    assert_eq!(
+        second_conflicted_files,
+        all_conflict_paths(&expected_second_conflicts),
+        "second conflict should include v3/v4 files and symlink"
+    );
+
+    // Resolve: update v4 to alt-2 content.
+    let v1_v2_v3_v4alt2_apis =
+        versioned_health_v1_v2_v3_v4alt2_apis(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_v3_v4alt2_apis)?;
+
+    env.continue_rebase()?;
+
+    successive_changes_concrete_verify(&env, &v1_v2_v3_v4alt2_apis)
+}
+
+/// Setup for [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
+///
+/// Creates this git history:
+///
+/// ```text
+/// main: [v1,v2] -- [add v3 standard]
+///            \
+///             feature: [add v3 alt-1] -- [update to v3 alt-2]
+/// ```
+///
+/// Returns (first_conflicts, second_conflicts).
+fn successive_changes_concrete_setup(
+    env: &TestEnvironment,
+) -> Result<(ExpectedConflicts, ExpectedConflicts)> {
+    // Create v1, v2 on main.
+    let v1_v2_apis =
+        versioned_health_reduced_apis_with_storage(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+
+    env.create_branch("feature")?;
+
+    // On main, add v3 (standard version).
+    let v1_v2_v3_apis = versioned_health_apis_with_storage(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    // On feature branch, add v3 alt-1.
+    env.checkout_branch("feature")?;
+    let v3_alt1_apis = versioned_health_v3_alternate_apis(Storage::Concrete)?;
+    env.generate_documents(&v3_alt1_apis)?;
+    let v3_alt1_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 alt-1 should exist");
+    env.commit_documents()?;
+
+    // On feature branch, update v3 from alt-1 to alt-2.
+    let v3_alt2_apis = versioned_health_v3_alternate2_apis(Storage::Concrete)?;
+    env.generate_documents(&v3_alt2_apis)?;
+    let v3_alt2_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 alt-2 should exist");
+    env.commit_documents()?;
+
+    // Verify the feature branch state.
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "1.0.0")?,
+        "v1 should be JSON"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "2.0.0")?,
+        "v2 should be JSON"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should be JSON"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should not be a git ref"
+    );
+
+    // Pre-compute the v4 path for second conflict prediction.
+    let v4_path = {
+        let temp_env = TestEnvironment::new()?;
+        let v4_apis = versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
+        temp_env.generate_documents(&v4_apis)?;
+        temp_env
+            .find_versioned_document_path("versioned-health", "4.0.0")?
+            .expect("v4 should exist")
+    };
+
+    let latest_symlink: Utf8PathBuf =
+        "documents/versioned-health/versioned-health-latest.json".into();
+
+    // First conflict: symlink only.
+    let expected_first_conflicts: ExpectedConflicts =
+        [(latest_symlink.clone(), ExpectedConflictKind::Symlink)]
+            .into_iter()
+            .collect();
+
+    // Second conflict: rename/delete on v3/v4 files plus symlink.
+    let expected_second_conflicts: ExpectedConflicts = [
+        (v3_alt1_path, ExpectedConflictKind::RenameDelete),
+        (v3_alt2_path, ExpectedConflictKind::RenameDelete),
+        (v4_path, ExpectedConflictKind::RenameDelete),
+        (latest_symlink, ExpectedConflictKind::Symlink),
+    ]
+    .into_iter()
+    .collect();
+
+    Ok((expected_first_conflicts, expected_second_conflicts))
+}
+
+/// Verifies final state: all versions as JSON, no git refs.
+fn successive_changes_concrete_verify(
+    env: &TestEnvironment,
+    final_apis: &dropshot_api_manager::ManagedApis,
+) -> Result<()> {
+    // All versions should be JSON.
+    for version in ["1.0.0", "2.0.0", "3.0.0", "4.0.0"] {
+        assert!(
+            env.versioned_local_document_exists("versioned-health", version)?,
+            "{version} should be JSON"
+        );
+        assert!(
+            !env.versioned_git_ref_exists("versioned-health", version)?,
+            "{version} should not be a git ref"
+        );
+    }
+
+    let result = check_apis_up_to_date(env.environment(), final_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test successive commits modifying the same non-blessed version with concrete
+/// storage, using jj.
+///
+/// This is the jj variant of
+/// [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
+#[test]
+fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
+-> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    let (expected_first_conflicts, expected_second_conflicts) =
+        successive_changes_concrete_setup(&env)?;
+    env.jj_init()?;
+
+    // Rebase the entire feature branch onto main.
+    let rebase_result = env.jj_try_rebase("feature", "main")?;
+    let JjRebaseResult::Conflict(_) = rebase_result else {
+        panic!("expected symlink conflict on jj rebase; got clean rebase");
+    };
+
+    // Resolve the first rebased commit (feature-).
+    let first_conflicts = env.jj_get_revision_conflicts("feature-")?;
+    assert_eq!(
+        first_conflicts,
+        jj_conflict_paths(&expected_first_conflicts),
+        "first commit should conflict on symlink only"
+    );
+
+    // Resolve: promote feature's alt-1 to v4, keep main's v3.
+    let v1_v2_v3_v4alt_apis =
+        versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
+    env.jj_resolve_commit("feature-", &v1_v2_v3_v4alt_apis)?;
+
+    // Resolve the second rebased commit (feature).
+    let second_conflicts = env.jj_get_revision_conflicts("feature")?;
+    assert_eq!(
+        second_conflicts,
+        jj_conflict_paths(&expected_second_conflicts),
+        "second commit should conflict on symlink only"
+    );
+
+    // Resolve: update v4 to alt-2 content.
+    let v1_v2_v3_v4alt2_apis =
+        versioned_health_v1_v2_v3_v4alt2_apis(Storage::Concrete)?;
+    env.jj_resolve_commit("feature", &v1_v2_v3_v4alt2_apis)?;
+
+    successive_changes_concrete_verify(&env, &v1_v2_v3_v4alt2_apis)
 }

@@ -100,12 +100,198 @@ pub trait ValidationBackend {
     fn record_file_contents(&mut self, path: Utf8PathBuf, contents: Vec<u8>);
 }
 
-/// Describes the path to an OpenAPI document file, relative to some root where
-/// similar documents are found
+/// A lockstep API spec filename.
+///
+/// Lockstep APIs have a single OpenAPI document with no versioning. The
+/// filename is simply `{ident}.json`.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-pub struct ApiSpecFileName {
+pub struct LockstepApiSpecFileName {
     ident: ApiIdent,
-    kind: ApiSpecFileNameKind,
+}
+
+impl LockstepApiSpecFileName {
+    /// Creates a new lockstep API spec filename.
+    pub fn new(ident: ApiIdent) -> Self {
+        Self { ident }
+    }
+
+    /// Returns the API identifier.
+    pub fn ident(&self) -> &ApiIdent {
+        &self.ident
+    }
+
+    /// Returns the path of this file relative to the root of the OpenAPI
+    /// documents.
+    pub fn path(&self) -> Utf8PathBuf {
+        Utf8PathBuf::from(self.basename())
+    }
+
+    /// Returns the base name of this file path.
+    pub fn basename(&self) -> String {
+        format!("{}.json", self.ident)
+    }
+}
+
+impl fmt::Display for LockstepApiSpecFileName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.path().as_str())
+    }
+}
+
+/// A versioned API spec filename.
+///
+/// Versioned APIs can have multiple versions coexisting. The filename includes
+/// the version and a content hash: `{ident}/{ident}-{version}-{hash}.json` (or
+/// `.json.gitref` for git ref storage).
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub struct VersionedApiSpecFileName {
+    ident: ApiIdent,
+    version: semver::Version,
+    hash: String,
+    kind: VersionedApiSpecKind,
+}
+
+impl VersionedApiSpecFileName {
+    /// Creates a new versioned API spec filename (JSON format).
+    pub fn new(
+        ident: ApiIdent,
+        version: semver::Version,
+        hash: String,
+    ) -> Self {
+        Self { ident, version, hash, kind: VersionedApiSpecKind::Json }
+    }
+
+    /// Creates a new versioned API spec filename (git ref format).
+    pub fn new_git_ref(
+        ident: ApiIdent,
+        version: semver::Version,
+        hash: String,
+    ) -> Self {
+        Self { ident, version, hash, kind: VersionedApiSpecKind::GitRef }
+    }
+
+    /// Returns the API identifier.
+    pub fn ident(&self) -> &ApiIdent {
+        &self.ident
+    }
+
+    /// Returns the version.
+    pub fn version(&self) -> &semver::Version {
+        &self.version
+    }
+
+    /// Returns the hash.
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+
+    /// Returns the storage kind (JSON or git ref).
+    pub fn kind(&self) -> VersionedApiSpecKind {
+        self.kind
+    }
+
+    /// Returns true if this is a git ref file.
+    pub fn is_git_ref(&self) -> bool {
+        self.kind == VersionedApiSpecKind::GitRef
+    }
+
+    /// Returns the path of this file relative to the root of the OpenAPI
+    /// documents.
+    pub fn path(&self) -> Utf8PathBuf {
+        Utf8PathBuf::from_iter([self.ident.deref().clone(), self.basename()])
+    }
+
+    /// Returns the base name of this file path.
+    pub fn basename(&self) -> String {
+        match self.kind {
+            VersionedApiSpecKind::Json => {
+                format!("{}-{}-{}.json", self.ident, self.version, self.hash)
+            }
+            VersionedApiSpecKind::GitRef => {
+                format!(
+                    "{}-{}-{}.json.gitref",
+                    self.ident, self.version, self.hash
+                )
+            }
+        }
+    }
+
+    /// Converts this filename to its JSON equivalent.
+    ///
+    /// If already JSON, returns a clone of self.
+    pub fn to_json(&self) -> Self {
+        Self {
+            ident: self.ident.clone(),
+            version: self.version.clone(),
+            hash: self.hash.clone(),
+            kind: VersionedApiSpecKind::Json,
+        }
+    }
+
+    /// Converts this filename to its git ref equivalent.
+    ///
+    /// If already a git ref, returns a clone of self.
+    pub fn to_git_ref(&self) -> Self {
+        Self {
+            ident: self.ident.clone(),
+            version: self.version.clone(),
+            hash: self.hash.clone(),
+            kind: VersionedApiSpecKind::GitRef,
+        }
+    }
+
+    /// Returns the basename as a git ref filename.
+    ///
+    /// - If already a git ref, returns `basename()` directly.
+    /// - If JSON, returns `basename() + ".gitref"`.
+    pub fn git_ref_basename(&self) -> String {
+        match self.kind {
+            VersionedApiSpecKind::GitRef => self.basename(),
+            VersionedApiSpecKind::Json => format!("{}.gitref", self.basename()),
+        }
+    }
+
+    /// Returns the basename as a JSON filename.
+    ///
+    /// - If already JSON, returns `basename()` directly.
+    /// - If git ref, returns the basename without `.gitref`.
+    pub fn json_basename(&self) -> String {
+        match self.kind {
+            VersionedApiSpecKind::Json => self.basename(),
+            VersionedApiSpecKind::GitRef => {
+                format!("{}-{}-{}.json", self.ident, self.version, self.hash)
+            }
+        }
+    }
+}
+
+impl fmt::Display for VersionedApiSpecFileName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.path().as_str())
+    }
+}
+
+/// Describes how a versioned API spec file is stored.
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum VersionedApiSpecKind {
+    /// The spec is stored as a JSON file containing the full OpenAPI document.
+    Json,
+    /// The spec is stored as a git ref file.
+    ///
+    /// Instead of storing the full JSON content, a `.gitref` file contains a
+    /// reference in the format `commit:path` that can be used to retrieve the
+    /// content via `git show`.
+    GitRef,
+}
+
+/// Describes the path to an OpenAPI document file, relative to some root where
+/// similar documents are found.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum ApiSpecFileName {
+    /// A lockstep API: single OpenAPI document, no versioning.
+    Lockstep(LockstepApiSpecFileName),
+    /// A versioned API: multiple versions can coexist.
+    Versioned(VersionedApiSpecFileName),
 }
 
 impl fmt::Display for ApiSpecFileName {
@@ -115,73 +301,161 @@ impl fmt::Display for ApiSpecFileName {
 }
 
 impl ApiSpecFileName {
-    // Only used by the OpenAPI manager -- not part of the public API.
-    #[doc(hidden)]
-    pub fn new(ident: ApiIdent, kind: ApiSpecFileNameKind) -> ApiSpecFileName {
-        ApiSpecFileName { ident, kind }
-    }
-
+    /// Returns the API identifier.
     pub fn ident(&self) -> &ApiIdent {
-        &self.ident
-    }
-
-    pub fn kind(&self) -> &ApiSpecFileNameKind {
-        &self.kind
+        match self {
+            ApiSpecFileName::Lockstep(l) => l.ident(),
+            ApiSpecFileName::Versioned(v) => v.ident(),
+        }
     }
 
     /// Returns the path of this file relative to the root of the OpenAPI
-    /// documents
+    /// documents.
     pub fn path(&self) -> Utf8PathBuf {
-        match &self.kind {
-            ApiSpecFileNameKind::Lockstep => {
-                Utf8PathBuf::from_iter([self.basename()])
-            }
-            ApiSpecFileNameKind::Versioned { .. } => Utf8PathBuf::from_iter([
-                self.ident.deref().clone(),
-                self.basename(),
-            ]),
+        match self {
+            ApiSpecFileName::Lockstep(l) => l.path(),
+            ApiSpecFileName::Versioned(v) => v.path(),
         }
     }
 
-    /// Returns the base name of this file path
+    /// Returns the base name of this file path.
     pub fn basename(&self) -> String {
-        match &self.kind {
-            ApiSpecFileNameKind::Lockstep => format!("{}.json", self.ident),
-            ApiSpecFileNameKind::Versioned { version, hash } => {
-                format!("{}-{}-{}.json", self.ident, version, hash)
+        match self {
+            ApiSpecFileName::Lockstep(l) => l.basename(),
+            ApiSpecFileName::Versioned(v) => v.basename(),
+        }
+    }
+
+    /// For versioned APIs, returns the version part of the filename.
+    pub fn version(&self) -> Option<&semver::Version> {
+        match self {
+            ApiSpecFileName::Lockstep(_) => None,
+            ApiSpecFileName::Versioned(v) => Some(v.version()),
+        }
+    }
+
+    /// For versioned APIs, returns the hash part of the filename.
+    pub fn hash(&self) -> Option<&str> {
+        match self {
+            ApiSpecFileName::Lockstep(_) => None,
+            ApiSpecFileName::Versioned(v) => Some(v.hash()),
+        }
+    }
+
+    /// Returns true if this is a git ref file.
+    pub fn is_git_ref(&self) -> bool {
+        match self {
+            ApiSpecFileName::Lockstep(_) => false,
+            ApiSpecFileName::Versioned(v) => v.is_git_ref(),
+        }
+    }
+
+    /// For versioned APIs, returns the kind of storage.
+    pub fn versioned_kind(&self) -> Option<VersionedApiSpecKind> {
+        match self {
+            ApiSpecFileName::Lockstep(_) => None,
+            ApiSpecFileName::Versioned(v) => Some(v.kind()),
+        }
+    }
+
+    /// Converts a git ref filename to its JSON equivalent.
+    ///
+    /// For non-git ref files, returns a clone of self.
+    pub fn to_json_filename(&self) -> ApiSpecFileName {
+        match self {
+            ApiSpecFileName::Lockstep(_) => self.clone(),
+            ApiSpecFileName::Versioned(v) => {
+                ApiSpecFileName::Versioned(v.to_json())
             }
         }
     }
 
-    /// For versioned APIs, returns the version part of the filename
-    pub fn version(&self) -> Option<&semver::Version> {
-        match &self.kind {
-            ApiSpecFileNameKind::Lockstep => None,
-            ApiSpecFileNameKind::Versioned { version, .. } => Some(version),
+    /// Converts a JSON filename to its git ref equivalent.
+    ///
+    /// For git ref files, returns a clone of self.
+    /// For lockstep files, returns a clone of self (lockstep files are not
+    /// converted to git refs).
+    pub fn to_git_ref_filename(&self) -> ApiSpecFileName {
+        match self {
+            ApiSpecFileName::Lockstep(_) => self.clone(),
+            ApiSpecFileName::Versioned(v) => {
+                ApiSpecFileName::Versioned(v.to_git_ref())
+            }
         }
     }
 
-    /// For versioned APIs, returns the hash part of the filename
-    pub fn hash(&self) -> Option<&str> {
-        match &self.kind {
-            ApiSpecFileNameKind::Lockstep => None,
-            ApiSpecFileNameKind::Versioned { hash, .. } => Some(hash),
+    /// Returns the basename for this file as a git ref.
+    ///
+    /// - If this is already a git ref, returns `basename()` directly.
+    /// - If this is a versioned JSON file, returns `basename() + ".gitref"`.
+    /// - For lockstep, returns `basename()` (lockstep files are not converted
+    ///   to git refs).
+    pub fn git_ref_basename(&self) -> String {
+        match self {
+            ApiSpecFileName::Lockstep(l) => l.basename(),
+            ApiSpecFileName::Versioned(v) => v.git_ref_basename(),
+        }
+    }
+
+    /// Returns the basename for this file as a JSON file.
+    ///
+    /// - If this is a git ref, returns the basename without the `.gitref`
+    ///   suffix.
+    /// - Otherwise, returns `basename()` directly.
+    pub fn json_basename(&self) -> String {
+        match self {
+            ApiSpecFileName::Lockstep(l) => l.basename(),
+            ApiSpecFileName::Versioned(v) => v.json_basename(),
+        }
+    }
+
+    /// Returns a reference to the inner `VersionedApiSpecFileName` if this is
+    /// a versioned API, or `None` if this is a lockstep API.
+    pub fn as_versioned(&self) -> Option<&VersionedApiSpecFileName> {
+        match self {
+            ApiSpecFileName::Lockstep(_) => None,
+            ApiSpecFileName::Versioned(v) => Some(v),
+        }
+    }
+
+    /// Consumes `self` and returns the inner `VersionedApiSpecFileName` if
+    /// this is a versioned API, or `None` if this is a lockstep API.
+    pub fn into_versioned(self) -> Option<VersionedApiSpecFileName> {
+        match self {
+            ApiSpecFileName::Lockstep(_) => None,
+            ApiSpecFileName::Versioned(v) => Some(v),
+        }
+    }
+
+    /// Returns a reference to the inner `LockstepApiSpecFileName` if this is
+    /// a lockstep API, or `None` if this is a versioned API.
+    pub fn as_lockstep(&self) -> Option<&LockstepApiSpecFileName> {
+        match self {
+            ApiSpecFileName::Lockstep(l) => Some(l),
+            ApiSpecFileName::Versioned(_) => None,
+        }
+    }
+
+    /// Consumes `self` and returns the inner `LockstepApiSpecFileName` if
+    /// this is a lockstep API, or `None` if this is a versioned API.
+    pub fn into_lockstep(self) -> Option<LockstepApiSpecFileName> {
+        match self {
+            ApiSpecFileName::Lockstep(l) => Some(l),
+            ApiSpecFileName::Versioned(_) => None,
         }
     }
 }
 
-/// Describes how a particular OpenAPI document is named.
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-pub enum ApiSpecFileNameKind {
-    /// The file's path implies a lockstep API.
-    Lockstep,
-    /// The file's path implies a versioned API.
-    Versioned {
-        /// The version of the API this document describes.
-        version: semver::Version,
-        /// The hash of the file contents.
-        hash: String,
-    },
+impl From<LockstepApiSpecFileName> for ApiSpecFileName {
+    fn from(l: LockstepApiSpecFileName) -> Self {
+        ApiSpecFileName::Lockstep(l)
+    }
+}
+
+impl From<VersionedApiSpecFileName> for ApiSpecFileName {
+    fn from(v: VersionedApiSpecFileName) -> Self {
+        ApiSpecFileName::Versioned(v)
+    }
 }
 
 /// Newtype for API identifiers
