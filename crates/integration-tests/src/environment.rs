@@ -709,6 +709,41 @@ impl TestEnvironment {
         Ok(())
     }
 
+    /// Continue a rebase after resolving conflicts, returning the result.
+    ///
+    /// Unlike `continue_rebase`, this method returns `RebaseResult` to allow
+    /// detecting subsequent conflicts during multi-step rebases.
+    pub fn try_continue_rebase(&self) -> Result<RebaseResult> {
+        Self::run_git_command(&self.workspace_root, &["add", "-A"])?;
+        let status = Self::run_git_command_unchecked(
+            &self.workspace_root,
+            &["rebase", "--continue"],
+        )?;
+
+        if status.success() {
+            return Ok(RebaseResult::Clean);
+        }
+
+        // Use git ls-files --unmerged to check for conflicts.
+        let unmerged = Self::run_git_command(
+            &self.workspace_root,
+            &["ls-files", "--unmerged"],
+        )?;
+
+        if unmerged.is_empty() {
+            Ok(RebaseResult::Clean)
+        } else {
+            let conflicted_files: BTreeSet<Utf8PathBuf> = unmerged
+                .lines()
+                .filter_map(|line| {
+                    line.split_once('\t')
+                        .map(|(_, path)| Utf8PathBuf::from(path))
+                })
+                .collect();
+            Ok(RebaseResult::Conflict(conflicted_files))
+        }
+    }
+
     /// Helper to run git commands in a directory.
     fn run_git_command(cwd: &Utf8Path, args: &[&str]) -> Result<String> {
         let git =
@@ -824,7 +859,7 @@ impl TestEnvironment {
 
         // Check if the resulting commit has conflicts.
         if self.jj_has_conflicts("@")? {
-            let conflicts = self.jj_get_conflicted_files(branch1, "@")?;
+            let conflicts = self.jj_get_revision_conflicts("@")?;
             Ok(JjMergeResult::Conflict(conflicts))
         } else {
             Ok(JjMergeResult::Clean)
@@ -833,21 +868,21 @@ impl TestEnvironment {
 
     /// Attempt to rebase a git branch onto another using jj.
     ///
-    /// Uses `jj rebase -s source -d dest` to rebase the source commit and its
-    /// descendants onto the destination. Returns `JjRebaseResult::Clean` if the
-    /// rebase has no conflicts, or `JjRebaseResult::Conflict` with the set of
-    /// conflicted files.
+    /// Uses `jj rebase -b branch -d dest` to rebase the entire branch (from the
+    /// common ancestor with dest) onto the destination. Returns
+    /// `JjRebaseResult::Clean` if the rebase has no conflicts, or
+    /// `JjRebaseResult::Conflict` with the set of conflicted files in the tip.
     pub fn jj_try_rebase(
         &self,
-        source: &str,
+        branch: &str,
         dest: &str,
     ) -> Result<JjRebaseResult> {
-        // Rebase source and descendants onto dest.
-        self.run_jj_command(&["rebase", "-s", source, "-d", dest])?;
+        // Rebase the entire branch from common ancestor onto dest.
+        self.run_jj_command(&["rebase", "-b", branch, "-d", dest])?;
 
-        // Check if the rebased commit has conflicts.
-        if self.jj_has_conflicts(source)? {
-            let conflicts = self.jj_get_conflicted_files(dest, source)?;
+        // Check if the rebased tip has conflicts.
+        if self.jj_has_conflicts(branch)? {
+            let conflicts = self.jj_get_revision_conflicts(branch)?;
             Ok(JjRebaseResult::Conflict(conflicts))
         } else {
             Ok(JjRebaseResult::Clean)
@@ -887,36 +922,6 @@ impl TestEnvironment {
         Ok(output.trim() == "true")
     }
 
-    /// Get the set of conflicted files using `jj diff --types`.
-    ///
-    /// Parses the output of `jj diff --from from --to to --types` and returns
-    /// files where the second character is 'C' (conflict).
-    fn jj_get_conflicted_files(
-        &self,
-        from: &str,
-        to: &str,
-    ) -> Result<BTreeSet<Utf8PathBuf>> {
-        let output = self
-            .run_jj_command(&["diff", "--from", from, "--to", to, "--types"])?;
-
-        let mut conflicts = BTreeSet::new();
-        for line in output.lines() {
-            // Format: "FC path/to/file" where F=file type, C=conflict.
-            let line = line.trim();
-            if line.len() >= 2 {
-                let chars: Vec<char> = line.chars().collect();
-                // Second character is 'C' for conflict.
-                if chars.get(1) == Some(&'C') {
-                    // Skip the type prefix and space to get the path.
-                    if let Some(path) = line.get(3..) {
-                        conflicts.insert(Utf8PathBuf::from(path));
-                    }
-                }
-            }
-        }
-        Ok(conflicts)
-    }
-
     /// Set a jj bookmark to a specific revision.
     pub fn jj_set_bookmark(&self, name: &str, rev: &str) -> Result<()> {
         self.run_jj_command(&["bookmark", "set", name, "-r", rev])?;
@@ -928,6 +933,73 @@ impl TestEnvironment {
     /// This is equivalent to `jj new -r <rev>`.
     pub fn jj_new(&self, rev: &str) -> Result<()> {
         self.run_jj_command(&["new", "-r", rev])?;
+        Ok(())
+    }
+
+    /// Squash the working copy changes into its parent.
+    ///
+    /// This is equivalent to `jj squash`.
+    pub fn jj_squash(&self) -> Result<()> {
+        self.run_jj_command(&["squash"])?;
+        Ok(())
+    }
+
+    /// Check if a revision has conflicts.
+    pub fn jj_revision_has_conflicts(&self, rev: &str) -> Result<bool> {
+        self.jj_has_conflicts(rev)
+    }
+
+    /// Get the list of conflicted files in a revision.
+    ///
+    /// Uses `jj resolve --list` to get files with conflicts in the specified
+    /// revision. Returns an empty set if the revision has no conflicts.
+    pub fn jj_get_revision_conflicts(
+        &self,
+        rev: &str,
+    ) -> Result<BTreeSet<Utf8PathBuf>> {
+        // First check if the revision has conflicts at all. This avoids the
+        // error from `jj resolve --list` when there are no conflicts.
+        if !self.jj_has_conflicts(rev)? {
+            return Ok(BTreeSet::new());
+        }
+
+        let output = self.run_jj_command(&["resolve", "--list", "-r", rev])?;
+
+        let mut conflicts = BTreeSet::new();
+        for line in output.lines() {
+            // Output format: "path/to/file <conflict description>".
+            // We only want the path, so take the first whitespace-separated field.
+            let line = line.trim();
+            if let Some(path) = line.split_whitespace().next() {
+                conflicts.insert(Utf8PathBuf::from(path));
+            }
+        }
+        Ok(conflicts)
+    }
+
+    /// Resolve conflicts in a specific commit using jj new + squash pattern.
+    ///
+    /// This creates a new working copy on top of the target revision, generates
+    /// the correct files, and squashes them back into the target.
+    pub fn jj_resolve_commit(
+        &self,
+        rev: &str,
+        apis: &ManagedApis,
+    ) -> Result<()> {
+        // Create a new working copy as a child of the commit to fix, then
+        // generate the correct documents.
+        self.jj_new(rev)?;
+        self.generate_documents(apis)?;
+        self.jj_squash()?;
+
+        // Verify the commit no longer has conflicts.
+        if self.jj_has_conflicts(rev)? {
+            return Err(anyhow::anyhow!(
+                "jj conflict resolution failed: {} still has conflicts",
+                rev
+            ));
+        }
+
         Ok(())
     }
 

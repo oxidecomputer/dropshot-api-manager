@@ -7,6 +7,7 @@
 //! and must remain stable across changes.
 
 use anyhow::{Context, Result};
+use camino::Utf8PathBuf;
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
 use integration_tests::*;
 use openapiv3::OpenAPI;
@@ -1058,4 +1059,177 @@ fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Test successive commits modifying the same non-blessed version with concrete
+/// storage.
+///
+/// See [`successive_changes_concrete_setup`] for the scenario.
+#[test]
+fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
+{
+    let env = TestEnvironment::new()?;
+    let (expected_first_conflicts, expected_second_conflicts) =
+        successive_changes_concrete_setup(&env)?;
+
+    let rebase_result = env.try_rebase_onto("main")?;
+    let RebaseResult::Conflict(conflicted_files) = rebase_result else {
+        panic!("expected conflict on first rebase step; got clean rebase");
+    };
+    assert_eq!(conflicted_files, all_conflict_paths(&expected_first_conflicts),);
+
+    // Resolution: promote feature's alt-1 to v4, keep main's v3.
+    let v1_v2_v3_v4alt_apis =
+        versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_v3_v4alt_apis)?;
+
+    let continue_result = env.try_continue_rebase()?;
+    let RebaseResult::Conflict(second_conflicted_files) = continue_result
+    else {
+        panic!("expected conflict on second rebase step; got clean rebase");
+    };
+    assert_eq!(
+        second_conflicted_files,
+        all_conflict_paths(&expected_second_conflicts),
+    );
+
+    // Resolution: update v4 to alt-2 content.
+    let v1_v2_v3_v4alt2_apis =
+        versioned_health_v1_v2_v3_v4alt2_apis(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_v3_v4alt2_apis)?;
+
+    env.continue_rebase()?;
+
+    successive_changes_concrete_verify(&env, &v1_v2_v3_v4alt2_apis)
+}
+
+/// Setup for [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
+///
+/// ```text
+/// main: [v1,v2] -- [add v3 standard]
+///            \
+///             feature: [add v3 alt-1] -- [v3 alt-1 -> alt-2]
+/// ```
+fn successive_changes_concrete_setup(
+    env: &TestEnvironment,
+) -> Result<(ExpectedConflicts, ExpectedConflicts)> {
+    let v1_v2_apis =
+        versioned_health_reduced_apis_with_storage(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+
+    env.create_branch("feature")?;
+
+    let v1_v2_v3_apis = versioned_health_apis_with_storage(Storage::Concrete)?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    env.checkout_branch("feature")?;
+    let v3_alt1_apis = versioned_health_v3_alternate_apis(Storage::Concrete)?;
+    env.generate_documents(&v3_alt1_apis)?;
+    let v3_alt1_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 alt-1 should exist");
+    env.commit_documents()?;
+
+    let v3_alt2_apis = versioned_health_v3_alternate2_apis(Storage::Concrete)?;
+    env.generate_documents(&v3_alt2_apis)?;
+    let v3_alt2_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 alt-2 should exist");
+    env.commit_documents()?;
+
+    // Pre-compute the v4 path: resolution will promote alt-1 to v4.
+    let v4_path = {
+        let temp_env = TestEnvironment::new()?;
+        let v4_apis = versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
+        temp_env.generate_documents(&v4_apis)?;
+        temp_env
+            .find_versioned_document_path("versioned-health", "4.0.0")?
+            .expect("v4 should exist")
+    };
+
+    let latest_symlink: Utf8PathBuf =
+        "documents/versioned-health/versioned-health-latest.json".into();
+
+    // No git ref conversion, so only symlink conflicts on first step.
+    let expected_first_conflicts: ExpectedConflicts =
+        [(latest_symlink.clone(), ExpectedConflictKind::Symlink)]
+            .into_iter()
+            .collect();
+
+    // Git detects v3-alt1 -> v3-alt2 as rename; after resolution deletes alt1,
+    // this becomes rename/delete involving alt1, alt2, v4, and symlink.
+    let expected_second_conflicts: ExpectedConflicts = [
+        (v3_alt1_path, ExpectedConflictKind::RenameDelete),
+        (v3_alt2_path, ExpectedConflictKind::RenameDelete),
+        (v4_path, ExpectedConflictKind::RenameDelete),
+        (latest_symlink, ExpectedConflictKind::Symlink),
+    ]
+    .into_iter()
+    .collect();
+
+    Ok((expected_first_conflicts, expected_second_conflicts))
+}
+
+/// Verifies final state: all versions as JSON, no git refs.
+fn successive_changes_concrete_verify(
+    env: &TestEnvironment,
+    final_apis: &dropshot_api_manager::ManagedApis,
+) -> Result<()> {
+    // All versions should be JSON.
+    for version in ["1.0.0", "2.0.0", "3.0.0", "4.0.0"] {
+        assert!(
+            env.versioned_local_document_exists("versioned-health", version)?,
+            "{version} should be JSON"
+        );
+        assert!(
+            !env.versioned_git_ref_exists("versioned-health", version)?,
+            "{version} should not be a git ref"
+        );
+    }
+
+    let result = check_apis_up_to_date(env.environment(), final_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// jj variant of [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
+///
+/// jj lacks rename detection, so only symlink conflicts occur (not rename/delete).
+#[test]
+fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
+-> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    let (expected_first_conflicts, expected_second_conflicts) =
+        successive_changes_concrete_setup(&env)?;
+    env.jj_init()?;
+
+    let rebase_result = env.jj_try_rebase("feature", "main")?;
+    let JjRebaseResult::Conflict(_) = rebase_result else {
+        panic!("expected conflict on jj rebase; got clean rebase");
+    };
+
+    let first_conflicts = env.jj_get_revision_conflicts("feature-")?;
+    assert_eq!(first_conflicts, jj_conflict_paths(&expected_first_conflicts));
+
+    // Resolution: promote feature's alt-1 to v4, keep main's v3.
+    let v1_v2_v3_v4alt_apis =
+        versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
+    env.jj_resolve_commit("feature-", &v1_v2_v3_v4alt_apis)?;
+
+    let second_conflicts = env.jj_get_revision_conflicts("feature")?;
+    assert_eq!(second_conflicts, jj_conflict_paths(&expected_second_conflicts));
+
+    // Resolution: update v4 to alt-2 content.
+    let v1_v2_v3_v4alt2_apis =
+        versioned_health_v1_v2_v3_v4alt2_apis(Storage::Concrete)?;
+    env.jj_resolve_commit("feature", &v1_v2_v3_v4alt2_apis)?;
+
+    successive_changes_concrete_verify(&env, &v1_v2_v3_v4alt2_apis)
 }
