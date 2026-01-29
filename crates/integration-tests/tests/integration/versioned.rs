@@ -9,10 +9,7 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
-use integration_tests::{
-    ExpectedConflictKind, ExpectedConflicts, all_conflict_paths,
-    jj_conflict_paths, *,
-};
+use integration_tests::*;
 use openapiv3::OpenAPI;
 use semver::Version;
 
