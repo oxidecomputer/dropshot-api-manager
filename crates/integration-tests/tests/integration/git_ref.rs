@@ -2270,74 +2270,48 @@ fn dependent_branch_after_generate_verify(
     Ok(())
 }
 
-/// Test that multiple commits on a feature branch each conflict when rebasing
-/// onto a main branch that introduces the same version.
+/// Test successive commits modifying the same non-blessed version with git ref
+/// storage.
 ///
-/// This tests the workflow where a developer iterates on a feature (multiple
-/// commits modifying the same new version) while main evolves independently
-/// and introduces that version.
-///
-/// See [`successive_changes_setup`] for the test scenario.
+/// See [`successive_changes_setup`] for the scenario.
 #[test]
 fn test_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
     let env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_first_conflicts, expected_second_conflicts) =
         successive_changes_setup(&env)?;
 
-    // Start rebase. Expect first conflict on feature's "add v3 alt-1" commit.
     let rebase_result = env.try_rebase_onto("main")?;
     let RebaseResult::Conflict(conflicted_files) = rebase_result else {
-        panic!(
-            "first rebase step should have conflicts due to different v3 \
-             contents; got clean rebase"
-        );
+        panic!("expected conflict on first rebase step; got clean rebase");
     };
-    assert_eq!(
-        conflicted_files,
-        all_conflict_paths(&expected_first_conflicts),
-        "first conflict files should match expected"
-    );
+    assert_eq!(conflicted_files, all_conflict_paths(&expected_first_conflicts));
 
-    // Resolution for first conflict: make feature's alt-1 into v4, keep main's
-    // v3.
+    // Resolution: promote feature's alt-1 to v4, keep main's v3.
     let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
 
-    // Continue rebase. Expect second conflict on feature's "update to v3 alt-2"
-    // commit.
     let continue_result = env.try_continue_rebase()?;
     let RebaseResult::Conflict(second_conflicted_files) = continue_result
     else {
-        panic!(
-            "second rebase step should have conflicts due to v3 content \
-             changes; got clean rebase"
-        );
+        panic!("expected conflict on second rebase step; got clean rebase");
     };
     assert_eq!(
         second_conflicted_files,
         all_conflict_paths(&expected_second_conflicts),
-        "second conflict files should match expected"
     );
 
-    // Resolution for second conflict: update v4 to alt-2 content.
+    // Resolution: update v4 to alt-2 content.
     let v1_v2_v3_v4alt2_apis = versioned_health_v1_v2_v3_v4alt2_git_ref_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt2_apis)?;
 
-    // Complete the rebase.
     env.continue_rebase()?;
 
     successive_changes_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt2_apis)
 }
 
-/// Test that jj rebase of successive changes resolves conflicts commit-by-commit.
+/// jj variant of [`test_rebase_successive_changes_to_nonblessed_version`].
 ///
-/// This is the jj equivalent of
-/// [`test_rebase_successive_changes_to_nonblessed_version`]. Unlike git, jj
-/// doesn't have rename detection, so only symlink conflicts are detected.
-/// However, like the git test, we resolve each commit individually using the
-/// `jj new` + `jj squash` pattern.
-///
-/// See [`successive_changes_setup`] for the test scenario.
+/// jj lacks rename detection, so only symlink conflicts occur (not rename/rename).
 #[test]
 fn test_jj_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
     if !check_jj_available()? {
@@ -2349,147 +2323,88 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
         successive_changes_setup(&env)?;
     env.jj_init()?;
 
-    // Rebase the entire feature branch (both commits) onto main.
-    // jj rebases all commits at once, but we'll resolve them one by one.
     let rebase_result = env.jj_try_rebase("feature", "main")?;
     let JjRebaseResult::Conflict(_) = rebase_result else {
-        panic!(
-            "jj rebase should have symlink conflict due to different v3 \
-             contents; got clean rebase"
-        );
+        panic!("expected conflict on jj rebase; got clean rebase");
     };
 
-    // After rebase: feature points to the rebased tip (second commit),
-    // feature- is its parent (first rebased commit).
-    //
-    // In jj, after rebasing a chain of commits where the first creates
-    // conflicts, descendant commits inherit those conflicts. Both commits will
-    // show conflict=true.
-
-    // Resolve the first rebased commit (feature-).
     let first_conflicts = env.jj_get_revision_conflicts("feature-")?;
-    assert_eq!(
-        first_conflicts,
-        jj_conflict_paths(&expected_first_conflicts),
-        "first commit: jj should only conflict on symlink"
-    );
+    assert_eq!(first_conflicts, jj_conflict_paths(&expected_first_conflicts));
 
-    // Resolution for first commit: make feature's alt-1 into v4, keep main's v3.
+    // Resolution: promote feature's alt-1 to v4, keep main's v3.
     let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
     env.jj_resolve_commit("feature-", &v1_v2_v3_v4alt_apis)?;
 
-    // Resolve the second rebased commit (feature).
     let second_conflicts = env.jj_get_revision_conflicts("feature")?;
-    assert_eq!(
-        second_conflicts,
-        jj_conflict_paths(&expected_second_conflicts),
-        "second commit: jj should only conflict on symlink"
-    );
+    assert_eq!(second_conflicts, jj_conflict_paths(&expected_second_conflicts));
 
-    // Resolution for second commit: update v4 to alt-2 content.
+    // Resolution: update v4 to alt-2 content.
     let v1_v2_v3_v4alt2_apis = versioned_health_v1_v2_v3_v4alt2_git_ref_apis()?;
     env.jj_resolve_commit("feature", &v1_v2_v3_v4alt2_apis)?;
 
     successive_changes_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt2_apis)
 }
 
-/// Setup for [`test_rebase_successive_changes_to_nonblessed_version`] and
-/// [`test_jj_rebase_successive_changes_to_nonblessed_version`].
-///
-/// This simulates a scenario where a feature branch makes multiple successive
-/// commits modifying the same non-blessed version, and main introduces the same
-/// version. When rebased, each commit that touches the version should conflict.
+/// Setup for [`test_rebase_successive_changes_to_nonblessed_version`].
 ///
 /// ```text
-/// History after setup:
-///     main: [initial] -- [v1,v2 added] -- [add v3 standard]
-///                               |
-///                               +-- feature: [add v3 alt-1] -- [update to v3 alt-2]
-///                                       (v1,v2 → gitref)     (v3 content changes)
+/// main: [v1,v2] -- [add v3 standard]
+///            \         (v1,v2 -> gitref)
+///             feature: [add v3 alt-1] -- [v3 alt-1 -> alt-2]
+///                          (v1,v2 -> gitref)
 /// ```
-///
-/// When rebasing feature onto main:
-/// 1. First conflict: feature's "add v3 alt-1" conflicts with main's v3
-///    (rename/rename + symlink conflicts)
-/// 2. Second conflict: feature's "update to v3 alt-2" conflicts with the
-///    resolved state (rename/rename on v3 files + symlink)
-///
-/// Returns the commit hash where v1/v2 were added and the expected conflicted
-/// files for both conflicts. Leaves the environment on the feature branch.
 fn successive_changes_setup(
     env: &TestEnvironment,
 ) -> Result<(String, ExpectedConflicts, ExpectedConflicts)> {
-    // Step 1: Create v1, v2 on main.
     let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
-    // Create the feature branch point.
     env.create_branch("feature")?;
 
-    // Capture paths before git ref conversion for conflict tracking.
+    // Capture the v2 path before git ref conversion.
     let v2_json_path = env
         .find_versioned_document_path("versioned-health", "2.0.0")?
-        .expect("v2 should exist as JSON before branching");
+        .expect("v2 should exist as JSON");
 
-    // Step 2: On main, add v3 (standard version).
     let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     let v3_standard_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
-        .expect("v3 should exist as JSON on main");
+        .expect("v3 should exist as JSON");
     env.commit_documents()?;
 
-    // Step 3: On feature branch, add v3 alt-1.
     env.checkout_branch("feature")?;
     let v3_alt1_apis = versioned_health_v3_alternate_git_ref_apis()?;
     env.generate_documents(&v3_alt1_apis)?;
     let v3_alt1_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
-        .expect("v3 alt-1 should exist as JSON on feature");
+        .expect("v3 alt-1 should exist");
     env.commit_documents()?;
 
-    // Step 4: On feature branch, update v3 from alt-1 to alt-2.
     let v3_alt2_apis = versioned_health_v3_alternate2_git_ref_apis()?;
     env.generate_documents(&v3_alt2_apis)?;
     let v3_alt2_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
-        .expect("v3 alt-2 should exist as JSON on feature");
+        .expect("v3 alt-2 should exist");
     env.commit_documents()?;
 
-    // Verify the feature branch state: v1, v2 are git refs, v3 is JSON (alt-2).
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref on feature"
-    );
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref on feature"
-    );
-    assert!(
-        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
-        "v3 should exist as JSON on feature"
-    );
-
-    // Pre-compute the v4 path that will be created during first conflict
-    // resolution. We need this to predict second conflict files. Generate in a
-    // temporary environment to capture the hash.
+    // Pre-compute the v4 path: resolution will promote alt-1 to v4.
     let v4_json_path = {
         let temp_env = TestEnvironment::new()?;
         let v4_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
         temp_env.generate_documents(&v4_apis)?;
         temp_env
             .find_versioned_document_path("versioned-health", "4.0.0")?
-            .expect("v4 should exist in temp environment")
+            .expect("v4 should exist")
     };
 
     let latest_symlink: Utf8PathBuf =
         "documents/versioned-health/versioned-health-latest.json".into();
 
-    // First conflict: Git's rename detection sees v2.json "renamed" to
-    // different v3 files on different branches. jj has no rename detection, so
-    // only the symlink conflicts.
+    // Git detects v2 -> v3 as rename (content similarity); both branches do
+    // this to different v3 files, causing rename/rename conflict.
     let expected_first_conflicts: ExpectedConflicts = [
         (v2_json_path, ExpectedConflictKind::Rename),
         (v3_standard_json_path, ExpectedConflictKind::Rename),
@@ -2499,13 +2414,8 @@ fn successive_changes_setup(
     .into_iter()
     .collect();
 
-    // Second conflict: After resolving the first conflict (alt-1 becomes v4),
-    // the second commit tries to change v3 from alt-1 to alt-2. Git sees this
-    // as a rename/rename conflict involving:
-    // - v3-alt1: the source file being "renamed" in the original commit
-    // - v3-alt2: the destination file in the original commit
-    // - v4: the file that v3-alt1 was "renamed" to during first resolution
-    // - symlink: different targets on each side
+    // Git detects v3-alt1 -> v3-alt2 as rename; after resolution deletes alt1
+    // (promoted to v4), this becomes rename/rename involving alt1, alt2, v4.
     let expected_second_conflicts: ExpectedConflicts = [
         (v3_alt1_json_path, ExpectedConflictKind::Rename),
         (v3_alt2_json_path, ExpectedConflictKind::Rename),
@@ -2518,54 +2428,27 @@ fn successive_changes_setup(
     Ok((v1_v2_commit, expected_first_conflicts, expected_second_conflicts))
 }
 
-/// Verify the final state after resolving both conflicts in
-/// [`test_rebase_successive_changes_to_nonblessed_version`].
-///
-/// After successful rebase and resolution:
-/// - v1, v2 should be git refs pointing to the original commit
-/// - v3 should be a git ref (blessed from main, and v4 is now latest)
-/// - v4 should exist as JSON (the latest, was feature's alt-2 promoted to v4)
+/// Verifies final state: v1-v3 as git refs, v4 as JSON (latest).
 fn successive_changes_verify(
     env: &TestEnvironment,
     v1_v2_commit: &str,
     final_apis: &ManagedApis,
 ) -> Result<()> {
-    // v1 and v2 should be git refs pointing to the original commit.
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
-    );
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
-    );
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        assert!(
+            env.versioned_git_ref_exists("versioned-health", version)?,
+            "{version} should be a git ref"
+        );
+    }
 
+    // v1/v2 git refs should point to the original commit.
     let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
     let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
-    assert_eq!(
-        v1_ref_commit, v1_v2_commit,
-        "v1 git ref should point to the original commit"
-    );
+    assert_eq!(v1_ref_commit, v1_v2_commit);
 
-    // v3 is blessed (from main) and not the latest, so it should be a git ref.
-    assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should be a git ref (blessed from main, not latest)"
-    );
-    assert!(
-        !env.versioned_local_document_exists("versioned-health", "3.0.0")?,
-        "v3 should not exist as JSON (converted to git ref)"
-    );
-
-    // v4 is the latest, so it should be JSON.
-    assert!(
-        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
-        "v4 should exist as JSON (latest)"
-    );
-    assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref (latest)"
-    );
+    // v4 is latest, so it's JSON not git ref.
+    assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
+    assert!(!env.versioned_git_ref_exists("versioned-health", "4.0.0")?);
 
     let result = check_apis_up_to_date(env.environment(), final_apis)?;
     assert_eq!(result, CheckResult::Success);

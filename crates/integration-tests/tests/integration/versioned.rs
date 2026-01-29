@@ -1067,10 +1067,7 @@ fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
 /// Test successive commits modifying the same non-blessed version with concrete
 /// storage.
 ///
-/// This is the concrete storage variant of the git ref
-/// `test_rebase_successive_changes_to_nonblessed_version`. Without git ref
-/// conversion, the first conflict is the symlink only. The second conflict
-/// includes rename/delete conflicts on the v3/v4 files.
+/// See [`successive_changes_concrete_setup`] for the scenario.
 #[test]
 fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
 {
@@ -1078,39 +1075,28 @@ fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
     let (expected_first_conflicts, expected_second_conflicts) =
         successive_changes_concrete_setup(&env)?;
 
-    // First conflict: symlink only.
     let rebase_result = env.try_rebase_onto("main")?;
     let RebaseResult::Conflict(conflicted_files) = rebase_result else {
-        panic!(
-            "expected symlink conflict on first rebase step; got clean rebase"
-        );
+        panic!("expected conflict on first rebase step; got clean rebase");
     };
-    assert_eq!(
-        conflicted_files,
-        all_conflict_paths(&expected_first_conflicts),
-        "first conflict should be symlink only"
-    );
+    assert_eq!(conflicted_files, all_conflict_paths(&expected_first_conflicts),);
 
-    // Resolve: promote feature's alt-1 to v4, keep main's v3.
+    // Resolution: promote feature's alt-1 to v4, keep main's v3.
     let v1_v2_v3_v4alt_apis =
         versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
 
-    // Second conflict: rename/delete on v3/v4 files plus symlink.
     let continue_result = env.try_continue_rebase()?;
     let RebaseResult::Conflict(second_conflicted_files) = continue_result
     else {
-        panic!(
-            "expected rename/delete conflicts on second rebase step; got clean rebase"
-        );
+        panic!("expected conflict on second rebase step; got clean rebase");
     };
     assert_eq!(
         second_conflicted_files,
         all_conflict_paths(&expected_second_conflicts),
-        "second conflict should include v3/v4 files and symlink"
     );
 
-    // Resolve: update v4 to alt-2 content.
+    // Resolution: update v4 to alt-2 content.
     let v1_v2_v3_v4alt2_apis =
         versioned_health_v1_v2_v3_v4alt2_apis(Storage::Concrete)?;
     env.generate_documents(&v1_v2_v3_v4alt2_apis)?;
@@ -1122,19 +1108,14 @@ fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
 
 /// Setup for [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
 ///
-/// Creates this git history:
-///
 /// ```text
 /// main: [v1,v2] -- [add v3 standard]
 ///            \
-///             feature: [add v3 alt-1] -- [update to v3 alt-2]
+///             feature: [add v3 alt-1] -- [v3 alt-1 -> alt-2]
 /// ```
-///
-/// Returns (first_conflicts, second_conflicts).
 fn successive_changes_concrete_setup(
     env: &TestEnvironment,
 ) -> Result<(ExpectedConflicts, ExpectedConflicts)> {
-    // Create v1, v2 on main.
     let v1_v2_apis =
         versioned_health_reduced_apis_with_storage(Storage::Concrete)?;
     env.generate_documents(&v1_v2_apis)?;
@@ -1142,12 +1123,10 @@ fn successive_changes_concrete_setup(
 
     env.create_branch("feature")?;
 
-    // On main, add v3 (standard version).
     let v1_v2_v3_apis = versioned_health_apis_with_storage(Storage::Concrete)?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
-    // On feature branch, add v3 alt-1.
     env.checkout_branch("feature")?;
     let v3_alt1_apis = versioned_health_v3_alternate_apis(Storage::Concrete)?;
     env.generate_documents(&v3_alt1_apis)?;
@@ -1156,7 +1135,6 @@ fn successive_changes_concrete_setup(
         .expect("v3 alt-1 should exist");
     env.commit_documents()?;
 
-    // On feature branch, update v3 from alt-1 to alt-2.
     let v3_alt2_apis = versioned_health_v3_alternate2_apis(Storage::Concrete)?;
     env.generate_documents(&v3_alt2_apis)?;
     let v3_alt2_path = env
@@ -1164,25 +1142,7 @@ fn successive_changes_concrete_setup(
         .expect("v3 alt-2 should exist");
     env.commit_documents()?;
 
-    // Verify the feature branch state.
-    assert!(
-        env.versioned_local_document_exists("versioned-health", "1.0.0")?,
-        "v1 should be JSON"
-    );
-    assert!(
-        env.versioned_local_document_exists("versioned-health", "2.0.0")?,
-        "v2 should be JSON"
-    );
-    assert!(
-        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
-        "v3 should be JSON"
-    );
-    assert!(
-        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should not be a git ref"
-    );
-
-    // Pre-compute the v4 path for second conflict prediction.
+    // Pre-compute the v4 path: resolution will promote alt-1 to v4.
     let v4_path = {
         let temp_env = TestEnvironment::new()?;
         let v4_apis = versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
@@ -1195,13 +1155,14 @@ fn successive_changes_concrete_setup(
     let latest_symlink: Utf8PathBuf =
         "documents/versioned-health/versioned-health-latest.json".into();
 
-    // First conflict: symlink only.
+    // No git ref conversion, so only symlink conflicts on first step.
     let expected_first_conflicts: ExpectedConflicts =
         [(latest_symlink.clone(), ExpectedConflictKind::Symlink)]
             .into_iter()
             .collect();
 
-    // Second conflict: rename/delete on v3/v4 files plus symlink.
+    // Git detects v3-alt1 -> v3-alt2 as rename; after resolution deletes alt1,
+    // this becomes rename/delete involving alt1, alt2, v4, and symlink.
     let expected_second_conflicts: ExpectedConflicts = [
         (v3_alt1_path, ExpectedConflictKind::RenameDelete),
         (v3_alt2_path, ExpectedConflictKind::RenameDelete),
@@ -1237,11 +1198,9 @@ fn successive_changes_concrete_verify(
     Ok(())
 }
 
-/// Test successive commits modifying the same non-blessed version with concrete
-/// storage, using jj.
+/// jj variant of [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
 ///
-/// This is the jj variant of
-/// [`test_rebase_successive_changes_to_nonblessed_version_concrete`].
+/// jj lacks rename detection, so only symlink conflicts occur (not rename/delete).
 #[test]
 fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
 -> Result<()> {
@@ -1254,34 +1213,23 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
         successive_changes_concrete_setup(&env)?;
     env.jj_init()?;
 
-    // Rebase the entire feature branch onto main.
     let rebase_result = env.jj_try_rebase("feature", "main")?;
     let JjRebaseResult::Conflict(_) = rebase_result else {
-        panic!("expected symlink conflict on jj rebase; got clean rebase");
+        panic!("expected conflict on jj rebase; got clean rebase");
     };
 
-    // Resolve the first rebased commit (feature-).
     let first_conflicts = env.jj_get_revision_conflicts("feature-")?;
-    assert_eq!(
-        first_conflicts,
-        jj_conflict_paths(&expected_first_conflicts),
-        "first commit should conflict on symlink only"
-    );
+    assert_eq!(first_conflicts, jj_conflict_paths(&expected_first_conflicts));
 
-    // Resolve: promote feature's alt-1 to v4, keep main's v3.
+    // Resolution: promote feature's alt-1 to v4, keep main's v3.
     let v1_v2_v3_v4alt_apis =
         versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
     env.jj_resolve_commit("feature-", &v1_v2_v3_v4alt_apis)?;
 
-    // Resolve the second rebased commit (feature).
     let second_conflicts = env.jj_get_revision_conflicts("feature")?;
-    assert_eq!(
-        second_conflicts,
-        jj_conflict_paths(&expected_second_conflicts),
-        "second commit should conflict on symlink only"
-    );
+    assert_eq!(second_conflicts, jj_conflict_paths(&expected_second_conflicts));
 
-    // Resolve: update v4 to alt-2 content.
+    // Resolution: update v4 to alt-2 content.
     let v1_v2_v3_v4alt2_apis =
         versioned_health_v1_v2_v3_v4alt2_apis(Storage::Concrete)?;
     env.jj_resolve_commit("feature", &v1_v2_v3_v4alt2_apis)?;
