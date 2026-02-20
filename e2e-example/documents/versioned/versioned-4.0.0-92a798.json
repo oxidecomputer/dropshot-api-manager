@@ -1,0 +1,145 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Versioned API",
+    "description": "A versioned API",
+    "version": "4.0.0"
+  },
+  "paths": {
+    "/search": {
+      "get": {
+        "summary": "Search for items.",
+        "description": "This endpoint demonstrates query parameters for testing purposes.",
+        "operationId": "search",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "query",
+            "description": "The search query string.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_SearchResult",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchResult"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/thing": {
+      "get": {
+        "summary": "Fetch `thing`",
+        "operationId": "get_thing",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThingV2"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "description": "Error information from a response.",
+        "type": "object",
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "request_id"
+        ]
+      },
+      "Number": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "SearchResult": {
+        "description": "A search result item.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The ID of the matching item.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "name": {
+            "description": "The name of the matching item.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "ThingV2": {
+        "type": "object",
+        "properties": {
+          "thing_number": {
+            "$ref": "#/components/schemas/Number"
+          }
+        },
+        "required": [
+          "thing_number"
+        ]
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}
