@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.4.0] - 2026-02-26
+
 ### Added
 
 - Support for Git stubs for versioned APIs, which enable Git's rename detection to work on blessed versions. For more information, see [oxidecomputer/git-stub](https://github.com/oxidecomputer/git-stub) and [RFD 634](https://rfd.shared.oxide.computer/rfd/0634).
@@ -88,6 +90,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.4.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.4.0
 [0.3.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.3.0
 [0.2.4]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.4
 [0.2.3]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.3
