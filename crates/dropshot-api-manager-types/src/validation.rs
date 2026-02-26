@@ -4,7 +4,7 @@ use crate::{ManagedApiMetadata, Versions};
 use camino::Utf8PathBuf;
 use std::{fmt, ops::Deref};
 
-/// Context for validation of OpenAPI specifications.
+/// Context for validation of OpenAPI documents.
 pub struct ValidationContext<'a> {
     backend: &'a mut dyn ValidationBackend,
 }

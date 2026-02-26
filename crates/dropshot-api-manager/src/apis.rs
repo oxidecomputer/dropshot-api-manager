@@ -27,7 +27,7 @@ pub struct ManagedApiConfig {
     /// how this API is versioned
     pub versions: Versions,
 
-    /// title of the API (goes into OpenAPI spec)
+    /// title of the API (goes into OpenAPI document)
     pub title: &'static str,
 
     /// metadata about the API
@@ -56,7 +56,7 @@ pub struct ManagedApi {
     /// how this API is versioned
     versions: Versions,
 
-    /// title of the API (goes into OpenAPI spec)
+    /// title of the API (goes into OpenAPI document)
     title: &'static str,
 
     /// metadata about the API

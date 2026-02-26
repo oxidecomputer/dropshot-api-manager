@@ -195,7 +195,7 @@ Problems are either **fixable** (tool can auto-correct) or **unfixable** (requir
 
 1. **Three-way reconciliation**—blessed, generated, and local sources are compared to detect drift and ensure compatibility.
 
-2. **Wire compatibility checking**—uses the `drift` crate to semantically compare OpenAPI specs. Trivial changes (doc updates, type renames) are allowed in blessed versions; semantic changes (forward compatible, backwards compatible, or incompatible) are not.
+2. **Wire compatibility checking**—uses the `drift` crate to semantically compare OpenAPI documents. Trivial changes (doc updates, type renames) are allowed in blessed versions; semantic changes (forward compatible, backwards compatible, or incompatible) are not.
 
 3. **Atomic file operations**—uses `atomicwrites` crate to prevent corruption on interruption.
 
@@ -255,8 +255,8 @@ crates/
 ### Key dependencies
 
 - **dropshot**: Dropshot HTTP framework and API description generation.
-- **openapiv3**: OpenAPI spec parsing and representation.
-- **drift**: Semantic diff of OpenAPI specs for compatibility checking.
+- **openapiv3**: OpenAPI document parsing and representation.
+- **drift**: Semantic diff of OpenAPI documents for compatibility checking.
 - **thiserror**: Error derive macros.
 - **anyhow**: Error handling and context.
 - **camino**: UTF-8 paths (`Utf8PathBuf`).
@@ -269,7 +269,7 @@ crates/
 - **owo-colors**: Colored terminal output.
 - **similar**: Diff generation for display.
 - **supports-color**: Terminal color capability detection.
-- **openapi-lint**: Custom linting for OpenAPI specs.
+- **openapi-lint**: Custom linting for OpenAPI documents.
 
 ## Quick reference
 

@@ -12,6 +12,7 @@ This example has three subdirectories:
   * `LockstepApi`: a simple unversioned API
   * `VersionedApi`: an API that supports multiple versions, where each version has a separate OpenAPI document generated for it
 * [`bin`](bin): The _integration point_: a top-level OpenAPI manager binary that defines the list of managed APIs, as well as where the corresponding documents should be generated. This crate is a thin wrapper around the `dropshot-api-manager` crate.
+* [`client`](client): Shows how to write a [Progenitor](https://docs.rs/progenitor) client against a Git stub.
 * [`documents`](documents): The location where documents are generated. The OpenAPI manager is responsible for managing all the state in this directory.
 
 ## Running the example
