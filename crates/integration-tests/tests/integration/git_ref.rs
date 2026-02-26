@@ -840,6 +840,7 @@ fn test_git_error_reports_problem() -> Result<()> {
         std::env::set_var("GIT", &fake_git);
         // Tell fake_git where the real git is.
         std::env::set_var("REAL_GIT", original_git.as_deref().unwrap_or("git"));
+        std::env::set_var("FAKE_GIT_FAIL", "diff_filter_a");
     }
 
     let v4_apis = versioned_health_with_v4_git_ref_apis()?;
@@ -2452,6 +2453,281 @@ fn successive_changes_verify(
 
     let result = check_apis_up_to_date(env.environment(), final_apis)?;
     assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that stale git ref commit hashes are detected and fixed.
+///
+/// After a rebase or force-push, the commit hash stored in a `.gitref` file
+/// may refer to a commit that is no longer an ancestor of the merge base.
+/// The tool should detect this and update the git ref to the correct commit.
+///
+/// This test simulates this by creating a divergent branch with a commit that
+/// has the same files as main. The divergent commit exists in the object
+/// store (so `git cat-file blob` works), but is not an ancestor of HEAD.
+/// Overwriting the gitref files to point to this divergent commit simulates
+/// what happens after a rebase.
+#[test]
+fn test_stale_git_ref_commit() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Step 1: generate v1-v3 and commit them.
+    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+    env.commit_documents()?;
+    let original_commit = env.get_current_commit_hash_full()?;
+
+    // Step 2: create a divergent branch from the current commit. This
+    // branch's commit will exist in git's object store but will not be an
+    // ancestor of main's HEAD after main advances. The divergent commit's
+    // tree includes the v1-v3 files, so `git cat-file blob` will work.
+    env.create_branch("diverged")?;
+    env.checkout_branch("diverged")?;
+    env.make_unrelated_commit("divergent work")?;
+    let divergent_commit = env.get_current_commit_hash_full()?;
+    env.checkout_branch("main")?;
+
+    // Step 3: advance main past the branch point. The divergent commit is
+    // now NOT an ancestor of main's HEAD.
+    env.make_unrelated_commit("advance main")?;
+
+    // Step 4: add v4 so that v1-v3 get converted to git refs.
+    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v4)?;
+    env.commit_documents()?;
+
+    // Verify that v1-v3 are git refs pointing to the original commit.
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        assert!(
+            env.versioned_git_ref_exists("versioned-health", version)?,
+            "v{version} should be a git ref"
+        );
+        let git_ref_content =
+            env.read_versioned_git_ref("versioned-health", version)?;
+        let commit = git_ref_content.trim().split(':').next().unwrap();
+        assert_eq!(
+            commit, original_commit,
+            "v{version} git ref should point to the original commit"
+        );
+    }
+
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(
+        result,
+        CheckResult::Success,
+        "check should pass before tampering"
+    );
+
+    // Step 5: overwrite the git ref files to point to the divergent commit.
+    // This simulates what happens after a rebase: the commit hash is real
+    // and the content is accessible, but the commit is not an ancestor of
+    // the merge base.
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        let git_ref_path = env
+            .find_versioned_git_ref_path("versioned-health", version)?
+            .expect("git ref should exist");
+        let git_ref_content =
+            env.read_versioned_git_ref("versioned-health", version)?;
+        // Replace the commit hash but keep the path.
+        let path_part = git_ref_content
+            .trim()
+            .split_once(':')
+            .expect("git ref should contain ':'")
+            .1;
+        let stale_content = format!("{}:{}\n", divergent_commit, path_part);
+        env.create_file(&git_ref_path, &stale_content)?;
+    }
+
+    // Step 6: check should detect the stale commits.
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should detect stale git ref commits"
+    );
+
+    // Step 7: generate should fix the stale git refs.
+    env.generate_documents(&v4)?;
+
+    // Verify the git refs now point to the correct commit.
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        let git_ref_content =
+            env.read_versioned_git_ref("versioned-health", version)?;
+        let commit = git_ref_content.trim().split(':').next().unwrap();
+        assert_eq!(
+            commit, original_commit,
+            "v{version} git ref should be updated to the correct commit"
+        );
+    }
+
+    // Step 8: check should now pass.
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(
+        result,
+        CheckResult::Success,
+        "check should pass after fixing stale git refs"
+    );
+
+    Ok(())
+}
+
+/// Test that stale git ref commits are fixed even when duplicate files exist.
+///
+/// When both a `.json` and `.json.gitref` exist for the same version (e.g.,
+/// from an interrupted conversion), AND the gitref's commit is stale, both
+/// problems should be fixed in a single `generate` invocation.
+#[test]
+fn test_stale_git_ref_commit_with_duplicate() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Set up v1-v3, then create a divergent branch for the stale commit.
+    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+    env.commit_documents()?;
+    let original_commit = env.get_current_commit_hash_full()?;
+
+    env.create_branch("diverged")?;
+    env.checkout_branch("diverged")?;
+    env.make_unrelated_commit("divergent work")?;
+    let divergent_commit = env.get_current_commit_hash_full()?;
+    env.checkout_branch("main")?;
+
+    env.make_unrelated_commit("advance main")?;
+
+    // Add v4 so v1-v3 become git refs.
+    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v4)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Tamper with v1's gitref to point to the divergent commit (stale).
+    let git_ref_path = env
+        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
+        .expect("v1 git ref should exist");
+    let git_ref_content =
+        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let path_part = git_ref_content
+        .trim()
+        .split_once(':')
+        .expect("git ref should contain ':'")
+        .1;
+    let stale_content = format!("{}:{}\n", divergent_commit, path_part);
+    env.create_file(&git_ref_path, &stale_content)?;
+
+    // Also create a duplicate JSON file for v1 (simulating an interrupted
+    // conversion).
+    let json_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
+    let json_path = git_ref_path.with_extension("");
+    env.create_file(&json_path, &json_content)?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 git ref should exist"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "1.0.0")?,
+        "v1 duplicate JSON should exist"
+    );
+
+    // Check should detect both issues.
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should detect both duplicate and stale commit"
+    );
+
+    // A single generate should fix both: remove the duplicate AND update the
+    // stale commit.
+    env.generate_documents(&v4)?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 git ref should still exist"
+    );
+    assert!(
+        !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
+        "v1 duplicate JSON should be removed"
+    );
+
+    // The git ref should now point to the correct commit.
+    let git_ref_content =
+        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let commit = git_ref_content.trim().split(':').next().unwrap();
+    assert_eq!(
+        commit, original_commit,
+        "v1 git ref should be updated to the correct commit"
+    );
+
+    // Check should pass without needing a second generate.
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(
+        result,
+        CheckResult::Success,
+        "check should pass after single generate"
+    );
+
+    Ok(())
+}
+
+/// Test that git errors during stale commit recomputation are handled
+/// gracefully.
+///
+/// When `git merge-base --is-ancestor` fails (e.g., due to a corrupt or
+/// inaccessible object store), `BlessedGitRef::to_git_ref` should propagate
+/// the error as an unfixable `GitRefFirstCommitUnknown` problem rather than
+/// panicking.
+///
+/// This exercises the `BlessedGitRef::Known` path where `git_is_ancestor`
+/// errors, as opposed to the existing `test_git_error_reports_problem` which
+/// exercises the `BlessedGitRef::Lazy` path where `git_first_commit_for_file`
+/// errors.
+#[test]
+fn test_stale_git_ref_is_ancestor_error() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Set up v1-v3, commit, then add v4 so v1-v3 become git refs (Known
+    // variants).
+    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3)?;
+    env.commit_documents()?;
+
+    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v4)?;
+    env.commit_documents()?;
+
+    // Verify everything is clean before injecting the failure.
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    assert_eq!(result, CheckResult::Success, "check should pass initially");
+
+    // Now swap in fake-git that fails on --is-ancestor. This causes
+    // git_is_ancestor to return an error, which propagates through
+    // BlessedGitRef::to_git_ref as an Err.
+    let fake_git = std::env::var("NEXTEST_BIN_EXE_fake_git")
+        .expect("NEXTEST_BIN_EXE_fake_git should be set by nextest");
+    let original_git = std::env::var("GIT").ok();
+
+    // SAFETY:
+    // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
+    unsafe {
+        std::env::set_var("GIT", &fake_git);
+        std::env::set_var("REAL_GIT", original_git.as_deref().unwrap_or("git"));
+        std::env::set_var("FAKE_GIT_FAIL", "is_ancestor");
+    }
+
+    let result = check_apis_up_to_date(env.environment(), &v4)?;
+
+    // Should report failures: the git_is_ancestor error propagates as an
+    // unfixable GitRefFirstCommitUnknown problem for the non-latest blessed
+    // versions (v1-v3) that have BlessedGitRef::Known variants.
+    assert_eq!(
+        result,
+        CheckResult::Failures,
+        "check should report failures when git_is_ancestor errors"
+    );
 
     Ok(())
 }
