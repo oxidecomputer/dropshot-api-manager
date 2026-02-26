@@ -26,12 +26,13 @@ pub enum Storage {
     #[default]
     Concrete,
 
-    /// Store blessed versions as git refs, local versions as JSON files.
+    /// Store blessed versions as Git stubs, local versions as JSON files.
     ///
-    /// In this mode, blessed versions are stored as `.gitref` files containing
-    /// a git commit reference, and the actual JSON content is fetched from git
-    /// history. This reduces repository bloat for APIs with many versions.
-    GitRef,
+    /// In this mode, blessed versions are stored as `.gitstub` files
+    /// containing a git commit reference, and the actual JSON content is
+    /// fetched from git history. This reduces repository bloat for APIs with
+    /// many versions.
+    GitStub,
 }
 
 /// A minimal API with just a health check endpoint.
@@ -532,7 +533,7 @@ pub mod versioned_health_no_v1 {
 
 /// Versioned health API fixture with only v1.
 ///
-/// Used to test git ref conversion when multiple versions share the same
+/// Used to test Git stub conversion when multiple versions share the same
 /// first commit as the new latest.
 pub mod versioned_health_v1_only {
     use dropshot_api_manager_types::api_versions;
@@ -548,7 +549,7 @@ pub mod versioned_health_v1_only {
 /// Versioned health API fixture with v1, v2, and v4 (skipping v3).
 ///
 /// Used to test merge scenarios where two branches add different new versions
-/// while both converting the same older versions to git refs.
+/// while both converting the same older versions to Git stubs.
 pub mod versioned_health_v1_v2_v4 {
     use super::*;
     use dropshot_api_manager_types::api_versions;
@@ -1183,7 +1184,7 @@ pub fn versioned_health_api_with_storage(storage: Storage) -> ManagedApi {
     let config = versioned_health_api();
     match storage {
         Storage::Concrete => ManagedApi::from(config),
-        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+        Storage::GitStub => ManagedApi::from(config).with_git_stub_storage(),
     }
 }
 
@@ -1316,7 +1317,7 @@ pub fn versioned_health_reduced_apis_with_storage(
 
     let api = match storage {
         Storage::Concrete => ManagedApi::from(config),
-        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+        Storage::GitStub => ManagedApi::from(config).with_git_stub_storage(),
     };
     ManagedApis::new(vec![api])
         .context("failed to create reduced versioned health ManagedApis")
@@ -1381,7 +1382,7 @@ pub fn versioned_health_no_v1_apis() -> Result<ManagedApis> {
 
 /// Create versioned health API with only v1.
 ///
-/// Used to test git ref conversion when multiple versions share the same
+/// Used to test Git stub conversion when multiple versions share the same
 /// first commit as the new latest.
 pub fn versioned_health_v1_only_apis() -> Result<ManagedApis> {
     let config = ManagedApiConfig {
@@ -1540,18 +1541,18 @@ pub fn versioned_health_with_extra_file_apis() -> Result<ManagedApis> {
     )
 }
 
-/// Create a versioned health API with git ref storage enabled.
-pub fn versioned_health_git_ref_api() -> ManagedApi {
-    versioned_health_api_with_storage(Storage::GitRef)
+/// Create a versioned health API with Git stub storage enabled.
+pub fn versioned_health_git_stub_api() -> ManagedApi {
+    versioned_health_api_with_storage(Storage::GitStub)
 }
 
-/// Create versioned health APIs with git ref storage enabled.
-pub fn versioned_health_git_ref_apis() -> Result<ManagedApis> {
-    versioned_health_apis_with_storage(Storage::GitRef)
+/// Create versioned health APIs with Git stub storage enabled.
+pub fn versioned_health_git_stub_apis() -> Result<ManagedApis> {
+    versioned_health_apis_with_storage(Storage::GitStub)
 }
 
-/// Create a versioned health API with v4 and git ref storage enabled.
-pub fn versioned_health_with_v4_git_ref_api() -> ManagedApi {
+/// Create a versioned health API with v4 and Git stub storage enabled.
+pub fn versioned_health_with_v4_git_stub_api() -> ManagedApi {
     ManagedApi::from(ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
@@ -1567,20 +1568,20 @@ pub fn versioned_health_with_v4_git_ref_api() -> ManagedApi {
         api_description:
             versioned_health_with_v4::api_mod::stub_api_description,
     })
-    .with_git_ref_storage()
+    .with_git_stub_storage()
 }
 
-/// Create versioned health APIs with v4 and git ref storage enabled.
-pub fn versioned_health_with_v4_git_ref_apis() -> Result<ManagedApis> {
-    ManagedApis::new(vec![versioned_health_with_v4_git_ref_api()]).context(
-        "failed to create versioned health with v4 git ref ManagedApis",
+/// Create versioned health APIs with v4 and Git stub storage enabled.
+pub fn versioned_health_with_v4_git_stub_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_health_with_v4_git_stub_api()]).context(
+        "failed to create versioned health with v4 Git stub ManagedApis",
     )
 }
 
-/// Create a versioned health API with v4 but without git ref storage.
+/// Create a versioned health API with v4 but without Git stub storage.
 ///
-/// This is used to test conversion from git ref files back to JSON files when
-/// git ref storage is disabled.
+/// This is used to test conversion from Git stubs back to JSON files when
+/// Git stub storage is disabled.
 pub fn versioned_health_with_v4_api() -> ManagedApi {
     ManagedApi::from(ManagedApiConfig {
         ident: "versioned-health",
@@ -1599,16 +1600,16 @@ pub fn versioned_health_with_v4_api() -> ManagedApi {
     })
 }
 
-/// Create versioned health APIs with v4 but without git ref storage.
+/// Create versioned health APIs with v4 but without Git stub storage.
 ///
-/// This is used to test conversion from git ref files back to JSON files when
-/// git ref storage is disabled.
+/// This is used to test conversion from Git stubs back to JSON files when
+/// Git stub storage is disabled.
 pub fn versioned_health_with_v4_apis() -> Result<ManagedApis> {
     ManagedApis::new(vec![versioned_health_with_v4_api()])
         .context("failed to create versioned health with v4 ManagedApis")
 }
 
-/// Create lockstep APIs (for testing that lockstep never uses git ref storage).
+/// Create lockstep APIs (for testing that lockstep never uses Git stub storage).
 pub fn lockstep_apis() -> Result<ManagedApis> {
     ManagedApis::new(vec![lockstep_health_api()])
         .context("failed to create lockstep ManagedApis")
@@ -1616,16 +1617,16 @@ pub fn lockstep_apis() -> Result<ManagedApis> {
 
 /// Create a versioned health API with reduced versions (v1, v2 only) and git
 /// ref storage enabled.
-pub fn versioned_health_reduced_git_ref_apis() -> Result<ManagedApis> {
-    versioned_health_reduced_apis_with_storage(Storage::GitRef)
+pub fn versioned_health_reduced_git_stub_apis() -> Result<ManagedApis> {
+    versioned_health_reduced_apis_with_storage(Storage::GitStub)
 }
 
-/// Create a versioned health API with v1, v2, v4 (skipping v3) and git ref
+/// Create a versioned health API with v1, v2, v4 (skipping v3) and Git stub
 /// storage enabled.
 ///
 /// Used to test merge scenarios where two branches add different new versions
-/// while both converting the same older versions to git refs.
-pub fn versioned_health_v1_v2_v4_git_ref_apis() -> Result<ManagedApis> {
+/// while both converting the same older versions to Git stubs.
+pub fn versioned_health_v1_v2_v4_git_stub_apis() -> Result<ManagedApis> {
     let config = ManagedApiConfig {
         ident: "versioned-health",
         versions: Versions::Versioned {
@@ -1642,9 +1643,9 @@ pub fn versioned_health_v1_v2_v4_git_ref_apis() -> Result<ManagedApis> {
             versioned_health_v1_v2_v4::api_mod::stub_api_description,
     };
 
-    ManagedApis::new(vec![ManagedApi::from(config).with_git_ref_storage()])
+    ManagedApis::new(vec![ManagedApi::from(config).with_git_stub_storage()])
         .context(
-            "failed to create v1,v2,v4 versioned health git ref ManagedApis",
+            "failed to create v1,v2,v4 versioned health Git stub ManagedApis",
         )
 }
 
@@ -1674,15 +1675,15 @@ pub fn versioned_health_v3_alternate_apis(
 
     let api = match storage {
         Storage::Concrete => ManagedApi::from(config),
-        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+        Storage::GitStub => ManagedApi::from(config).with_git_stub_storage(),
     };
     ManagedApis::new(vec![api])
         .context("failed to create v3-alternate versioned health ManagedApis")
 }
 
-/// Create a versioned health API with the alternate v3 and git ref storage.
-pub fn versioned_health_v3_alternate_git_ref_apis() -> Result<ManagedApis> {
-    versioned_health_v3_alternate_apis(Storage::GitRef)
+/// Create a versioned health API with the alternate v3 and Git stub storage.
+pub fn versioned_health_v3_alternate_git_stub_apis() -> Result<ManagedApis> {
+    versioned_health_v3_alternate_apis(Storage::GitStub)
 }
 
 /// Create a versioned health API with v1, v2, v3, v4 where v4 uses the extended
@@ -1712,16 +1713,16 @@ pub fn versioned_health_v1_v2_v3_v4alt_apis(
 
     let api = match storage {
         Storage::Concrete => ManagedApi::from(config),
-        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+        Storage::GitStub => ManagedApi::from(config).with_git_stub_storage(),
     };
     ManagedApis::new(vec![api]).context(
         "failed to create v1,v2,v3,v4-alt versioned health ManagedApis",
     )
 }
 
-/// Create a versioned health API with v1, v2, v3, v4alt and git ref storage.
-pub fn versioned_health_v1_v2_v3_v4alt_git_ref_apis() -> Result<ManagedApis> {
-    versioned_health_v1_v2_v3_v4alt_apis(Storage::GitRef)
+/// Create a versioned health API with v1, v2, v3, v4alt and Git stub storage.
+pub fn versioned_health_v1_v2_v3_v4alt_git_stub_apis() -> Result<ManagedApis> {
+    versioned_health_v1_v2_v3_v4alt_apis(Storage::GitStub)
 }
 
 /// Create a versioned health API with the second alternate v3 (different content
@@ -1751,15 +1752,15 @@ pub fn versioned_health_v3_alternate2_apis(
 
     let api = match storage {
         Storage::Concrete => ManagedApi::from(config),
-        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+        Storage::GitStub => ManagedApi::from(config).with_git_stub_storage(),
     };
     ManagedApis::new(vec![api])
         .context("failed to create v3-alternate2 versioned health ManagedApis")
 }
 
-/// Create a versioned health API with the second alternate v3 and git ref storage.
-pub fn versioned_health_v3_alternate2_git_ref_apis() -> Result<ManagedApis> {
-    versioned_health_v3_alternate2_apis(Storage::GitRef)
+/// Create a versioned health API with the second alternate v3 and Git stub storage.
+pub fn versioned_health_v3_alternate2_git_stub_apis() -> Result<ManagedApis> {
+    versioned_health_v3_alternate2_apis(Storage::GitStub)
 }
 
 /// Create a versioned health API with v1, v2, v3, v4 where v4 uses the second
@@ -1788,14 +1789,14 @@ pub fn versioned_health_v1_v2_v3_v4alt2_apis(
 
     let api = match storage {
         Storage::Concrete => ManagedApi::from(config),
-        Storage::GitRef => ManagedApi::from(config).with_git_ref_storage(),
+        Storage::GitStub => ManagedApi::from(config).with_git_stub_storage(),
     };
     ManagedApis::new(vec![api]).context(
         "failed to create v1,v2,v3,v4-alt2 versioned health ManagedApis",
     )
 }
 
-/// Create a versioned health API with v1, v2, v3, v4alt2 and git ref storage.
-pub fn versioned_health_v1_v2_v3_v4alt2_git_ref_apis() -> Result<ManagedApis> {
-    versioned_health_v1_v2_v3_v4alt2_apis(Storage::GitRef)
+/// Create a versioned health API with v1, v2, v3, v4alt2 and Git stub storage.
+pub fn versioned_health_v1_v2_v3_v4alt2_git_stub_apis() -> Result<ManagedApis> {
+    versioned_health_v1_v2_v3_v4alt2_apis(Storage::GitStub)
 }

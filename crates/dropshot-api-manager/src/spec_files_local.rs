@@ -6,7 +6,6 @@
 use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
-    git::{GitCommitHash, GitRef},
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
         SpecFileInfo,
@@ -15,6 +14,8 @@ use crate::{
 use anyhow::{Context, anyhow};
 use camino::Utf8Path;
 use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
+use git_stub::{GitCommitHash, GitStub};
+use git_stub_vcs::Vcs;
 use std::{collections::BTreeMap, ops::Deref};
 
 /// A local file that exists but couldn't be parsed.
@@ -47,9 +48,9 @@ pub enum LocalApiSpecFile {
     Valid {
         /// The parsed OpenAPI document.
         spec: Box<ApiSpecFile>,
-        /// Commit hash parsed from the `.gitref` file, if this file was
+        /// Commit hash parsed from the `.gitstub` file, if this file was
         /// loaded from one. `None` for regular JSON files.
-        git_ref_commit: Option<GitCommitHash>,
+        git_stub_commit: Option<GitCommitHash>,
     },
     /// A file that exists but couldn't be parsed.
     Unparseable(LocalApiUnparseable),
@@ -74,11 +75,11 @@ impl LocalApiSpecFile {
         }
     }
 
-    /// Returns the commit hash from a `.gitref` file, if this file was loaded
-    /// from one.
-    pub fn git_ref_commit(&self) -> Option<&GitCommitHash> {
+    /// Returns the commit hash from a `.gitstub` file, if this file was
+    /// loaded from one.
+    pub fn git_stub_commit(&self) -> Option<&GitCommitHash> {
         match self {
-            Self::Valid { git_ref_commit, .. } => git_ref_commit.as_ref(),
+            Self::Valid { git_stub_commit, .. } => git_stub_commit.as_ref(),
             Self::Unparseable(_) => None,
         }
     }
@@ -114,7 +115,7 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
     fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
         self.push(LocalApiSpecFile::Valid {
             spec: Box::new(item),
-            git_ref_commit: None,
+            git_stub_commit: None,
         });
         Ok(())
     }
@@ -122,7 +123,7 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
     fn make_item(raw: ApiSpecFile) -> Self {
         vec![LocalApiSpecFile::Valid {
             spec: Box::new(raw),
-            git_ref_commit: None,
+            git_stub_commit: None,
         }]
     }
 
@@ -141,11 +142,11 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
         self.push(LocalApiSpecFile::Unparseable(unparseable));
     }
 
-    fn set_git_ref_commit(&mut self, commit: GitCommitHash) {
-        if let Some(LocalApiSpecFile::Valid { git_ref_commit, .. }) =
+    fn set_git_stub_commit(&mut self, commit: GitCommitHash) {
+        if let Some(LocalApiSpecFile::Valid { git_stub_commit, .. }) =
             self.last_mut()
         {
-            *git_ref_commit = Some(commit);
+            *git_stub_commit = Some(commit);
         }
     }
 }
@@ -186,7 +187,7 @@ impl LocalFiles {
     /// value, but you should still check the `errors` field on the returned
     /// [`LocalFiles`].
     ///
-    /// The `repo_root` parameter is needed to resolve `.gitref` files, which
+    /// The `repo_root` parameter is needed to resolve `.gitstub` files, which
     /// store a reference to an OpenAPI document rather than the document
     /// itself.
     pub fn load_from_directory(
@@ -216,7 +217,7 @@ impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
 /// * for each versioned API, a directory called `api-ident` that contains:
 ///     * any number of files called `api-ident-SEMVER-HASH.json`
 ///       (e.g., dns-server-1.0.0-eb52aeeb.json)
-///     * any number of git ref files called `api-ident-SEMVER-HASH.json.gitref`
+///     * any number of Git stubs called `api-ident-SEMVER-HASH.json.gitstub`
 ///       that contain a `commit:path` reference to the actual content
 ///     * one symlink called `api-ident-latest.json` that points to a file in
 ///       the same directory
@@ -224,12 +225,12 @@ impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
 /// Here's an example:
 ///
 /// ```text
-/// wicketd.json                                     # file for lockstep API
-/// dns-server/                                      # directory for versioned API
-/// dns-server/dns-server-1.0.0-eb2aeeb.json         # file for versioned API
-/// dns-server/dns-server-2.0.0-fba287a.json.gitref  # git ref for versioned API
-/// dns-server/dns-server-3.0.0-298ea47.json         # file for versioned API
-/// dns-server/dns-server-latest.json                # symlink
+/// wicketd.json                                      # file for lockstep API
+/// dns-server/                                       # directory for versioned API
+/// dns-server/dns-server-1.0.0-eb2aeeb.json          # file for versioned API
+/// dns-server/dns-server-2.0.0-fba287a.json.gitstub  # Git stub for versioned API
+/// dns-server/dns-server-3.0.0-298ea47.json          # file for versioned API
+/// dns-server/dns-server-latest.json                 # symlink
 /// ```
 // This function is always used for the "local" files. It can sometimes be
 // used for both generated and blessed files, if the user asks to load those
@@ -364,36 +365,37 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
             continue;
         }
 
-        // Handle .gitref files: these contain a `commit:path` reference to the
-        // actual content in git.
-        if file_name.ends_with(".json.gitref") {
+        // Handle .gitstub files: these contain a `commit:path` reference to
+        // the actual content in git.
+        if file_name.ends_with(".json.gitstub") {
             let Some(spec_file_name) =
-                api_files.versioned_git_ref_file_name(&ident, file_name)
+                api_files.versioned_git_stub_file_name(&ident, file_name)
             else {
                 continue;
             };
 
-            let git_ref_contents = match fs_err::read_to_string(entry.path()) {
+            let git_stub_contents = match fs_err::read_to_string(entry.path()) {
                 Ok(content) => content,
                 Err(error) => {
                     api_files.load_error(anyhow!(error).context(format!(
-                        "failed to read git ref file {:?}",
+                        "failed to read Git stub {:?}",
                         entry.path()
                     )));
                     continue;
                 }
             };
 
-            // Parse the git ref. If parsing fails or the file needs rewriting,
-            // mark it as unparseable so it will be deleted and regenerated.
-            let git_ref = match git_ref_contents.parse::<GitRef>() {
-                Ok(git_ref) => git_ref,
+            // Parse the Git stub. If parsing fails or the file needs
+            // rewriting, mark it as unparseable so it will be deleted and
+            // regenerated.
+            let git_stub = match git_stub_contents.parse::<GitStub>() {
+                Ok(git_stub) => git_stub,
                 Err(error) => {
                     api_files.load_unparseable(
                         spec_file_name,
-                        git_ref_contents.into_bytes(),
+                        git_stub_contents.into_bytes(),
                         anyhow!(error).context(format!(
-                            "git ref file {:?} could not be parsed",
+                            "Git stub {:?} could not be parsed",
                             entry.path()
                         )),
                     );
@@ -402,46 +404,59 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
             };
 
             // Check if the file needs to be rewritten to canonical format.
-            // If so, treat it as unparseable so it gets deleted and regenerated.
-            if GitRef::needs_rewrite(&git_ref_contents) {
+            // If so, treat it as unparseable so it gets deleted and
+            // regenerated.
+            if git_stub.needs_rewrite() {
                 api_files.load_unparseable(
                     spec_file_name,
-                    git_ref_contents.into_bytes(),
+                    git_stub_contents.into_bytes(),
                     anyhow!(
-                        "git ref file {:?} needs to be rewritten to canonical \
-                         format (forward slashes, trailing newline)",
+                        "Git stub {:?} needs to be rewritten to \
+                         canonical format (forward slashes, trailing \
+                         newline)",
                         entry.path()
                     ),
                 );
                 continue;
             }
 
-            // If the git ref is syntactically valid but can't be resolved
+            // If the Git stub is syntactically valid but can't be resolved
             // (e.g., the commit or path no longer exists after a rebase or
             // force-push), treat it as unparseable so generate can delete
             // and recreate it.
-            let contents = match git_ref.read_contents(repo_root) {
-                Ok(contents) => contents,
+            let vcs = match Vcs::git() {
+                Ok(vcs) => vcs,
                 Err(error) => {
-                    api_files.load_unparseable(
-                        spec_file_name,
-                        git_ref_contents.into_bytes(),
-                        error.context(format!(
-                            "git ref file {:?} could not be resolved",
-                            entry.path()
-                        )),
-                    );
+                    api_files.load_error(anyhow!(error).context(format!(
+                        "failed to initialize Git VCS for stub file {:?}",
+                        entry.path()
+                    )));
                     continue;
                 }
             };
+            let contents =
+                match vcs.read_git_stub_contents(&git_stub, repo_root) {
+                    Ok(contents) => contents,
+                    Err(error) => {
+                        api_files.load_unparseable(
+                            spec_file_name,
+                            git_stub_contents.into_bytes(),
+                            anyhow!(error).context(format!(
+                                "Git stub {:?} could not be resolved",
+                                entry.path()
+                            )),
+                        );
+                        continue;
+                    }
+                };
 
             // Extract the version before spec_file_name is moved into
             // load_contents.
             let version = spec_file_name.version().cloned();
-            let commit = git_ref.commit;
+            let commit = git_stub.commit();
             api_files.load_contents(spec_file_name, contents);
             if let Some(version) = version {
-                api_files.set_git_ref_commit(&ident, &version, commit);
+                api_files.set_git_stub_commit(&ident, &version, commit);
             }
             continue;
         }

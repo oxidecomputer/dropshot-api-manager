@@ -6,10 +6,10 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::{GitCommitHash, GitRef, GitRevision},
+    git::GitRevision,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
-    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
+    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitStub},
     spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
     spec_files_generic::{ApiFiles, UnparseableFile},
     spec_files_local::{LocalApiSpecFile, LocalFiles},
@@ -22,6 +22,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
 };
+use git_stub::{GitCommitHash, GitStub};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{Debug, Display},
@@ -303,19 +304,19 @@ pub enum Problem<'a> {
 
     #[error(
         "Blessed non-latest version is stored as a full JSON file. This can \
-         be converted to a git ref. This tool can perform the conversion for \
+         be converted to a Git stub. This tool can perform the conversion for \
          you."
     )]
-    BlessedVersionShouldBeGitRef {
+    BlessedVersionShouldBeGitStub {
         local_file: &'a LocalApiSpecFile,
-        git_ref: GitRef,
+        git_stub: GitStub,
     },
 
     #[error(
-        "Blessed version is stored as a git ref file, but should be stored as \
+        "Blessed version is stored as a Git stub, but should be stored as \
          JSON. This tool can perform the conversion for you."
     )]
-    GitRefShouldBeJson {
+    GitStubShouldBeJson {
         local_file: &'a LocalApiSpecFile,
         blessed: &'a BlessedApiSpecFile,
     },
@@ -328,31 +329,31 @@ pub enum Problem<'a> {
     BlessedVersionCorruptedLocal {
         local_file: &'a LocalApiSpecFile,
         blessed: &'a BlessedApiSpecFile,
-        /// If Some, regenerate as a git ref instead of JSON.
-        git_ref: Option<GitRef>,
+        /// If Some, regenerate as a Git stub instead of JSON.
+        git_stub: Option<GitStub>,
     },
 
     #[error(
-        "Duplicate local file found: both JSON and git ref versions exist for \
+        "Duplicate local file found: both JSON and Git stub versions exist for \
          this API version. This tool can remove the redundant file for you."
     )]
     DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
 
     #[error(
-        "Git ref file has an outdated commit reference that is no longer \
+        "Git stub has an outdated commit reference that is no longer \
          an ancestor of the merge base. This can happen after a rebase or \
-         force-push. This tool can update the git ref for you."
+         force-push. This tool can update the Git stub for you."
     )]
-    GitRefCommitStale { local_file: &'a LocalApiSpecFile, git_ref: GitRef },
+    GitStubCommitStale { local_file: &'a LocalApiSpecFile, git_stub: GitStub },
 
     #[error(
         "The first commit for this blessed version could not be determined. This \
          may indicate a corrupted git repository or other git-related issue. Git \
-         ref storage requires complete git history access"
+         stub storage requires complete git history access"
          // Note: omitting a trailing period after "access" because we show ":
          // <source>".
     )]
-    GitRefFirstCommitUnknown {
+    GitStubFirstCommitUnknown {
         spec_file_name: VersionedApiSpecFileName,
         #[source]
         source: anyhow::Error,
@@ -419,20 +420,20 @@ impl<'a> Problem<'a> {
             | Problem::LatestLinkMissing { api_ident, link } => {
                 Some(Fix::UpdateSymlink { api_ident, link })
             }
-            Problem::BlessedVersionShouldBeGitRef { local_file, git_ref } => {
-                Some(Fix::ConvertToGitRef { local_file, git_ref })
+            Problem::BlessedVersionShouldBeGitStub { local_file, git_stub } => {
+                Some(Fix::ConvertToGitStub { local_file, git_stub })
             }
-            Problem::GitRefShouldBeJson { local_file, blessed } => {
+            Problem::GitStubShouldBeJson { local_file, blessed } => {
                 Some(Fix::ConvertToJson { local_file, blessed })
             }
             Problem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
-                git_ref,
+                git_stub,
             } => Some(Fix::RegenerateFromBlessed {
                 local_file,
                 blessed,
-                git_ref: git_ref.as_ref(),
+                git_stub: git_stub.as_ref(),
             }),
             Problem::DuplicateLocalFile { local_file } => {
                 Some(Fix::DeleteFiles {
@@ -441,10 +442,10 @@ impl<'a> Problem<'a> {
                     ]),
                 })
             }
-            Problem::GitRefCommitStale { local_file, git_ref } => {
-                Some(Fix::UpdateGitRef { local_file, git_ref })
+            Problem::GitStubCommitStale { local_file, git_stub } => {
+                Some(Fix::UpdateGitStub { local_file, git_stub })
             }
-            Problem::GitRefFirstCommitUnknown { .. } => None,
+            Problem::GitStubFirstCommitUnknown { .. } => None,
             Problem::UnparseableLocalFile { unparseable_file } => {
                 Some(Fix::DeleteUnparseableFile {
                     path: unparseable_file.path.clone(),
@@ -473,12 +474,12 @@ pub enum Fix<'a> {
         api_ident: &'a ApiIdent,
         link: &'a VersionedApiSpecFileName,
     },
-    /// Convert a full JSON file to a git ref file.
-    ConvertToGitRef {
+    /// Convert a full JSON file to a Git stub.
+    ConvertToGitStub {
         local_file: &'a LocalApiSpecFile,
-        git_ref: &'a GitRef,
+        git_stub: &'a GitStub,
     },
-    /// Convert a git ref file back to a full JSON file.
+    /// Convert a Git stub back to a full JSON file.
     ConvertToJson {
         local_file: &'a LocalApiSpecFile,
         blessed: &'a BlessedApiSpecFile,
@@ -487,14 +488,14 @@ pub enum Fix<'a> {
     RegenerateFromBlessed {
         local_file: &'a LocalApiSpecFile,
         blessed: &'a BlessedApiSpecFile,
-        /// If Some, regenerate as a git ref instead of JSON.
-        git_ref: Option<&'a GitRef>,
+        /// If Some, regenerate as a Git stub instead of JSON.
+        git_stub: Option<&'a GitStub>,
     },
-    /// Update a git ref file whose commit hash has become stale (e.g.,
+    /// Update a Git stub whose commit hash has become stale (e.g.,
     /// after a rebase).
-    UpdateGitRef {
+    UpdateGitStub {
         local_file: &'a LocalApiSpecFile,
-        git_ref: &'a GitRef,
+        git_stub: &'a GitStub,
     },
     /// Delete an unparseable file (e.g., one with merge conflict markers).
     DeleteUnparseableFile {
@@ -547,25 +548,25 @@ impl Display for Fix<'_> {
                     link.json_basename()
                 )?;
             }
-            Fix::ConvertToGitRef { local_file, .. } => {
+            Fix::ConvertToGitStub { local_file, .. } => {
                 writeln!(
                     f,
-                    "convert {} to git ref",
+                    "convert {} to Git stub",
                     local_file.spec_file_name().path()
                 )?;
             }
             Fix::ConvertToJson { local_file, .. } => {
                 writeln!(
                     f,
-                    "convert {} from git ref to JSON",
+                    "convert {} from Git stub to JSON",
                     local_file.spec_file_name().path()
                 )?;
             }
-            Fix::RegenerateFromBlessed { local_file, git_ref, .. } => {
-                if git_ref.is_some() {
+            Fix::RegenerateFromBlessed { local_file, git_stub, .. } => {
+                if git_stub.is_some() {
                     writeln!(
                         f,
-                        "regenerate {} from blessed content as git ref",
+                        "regenerate {} from blessed content as Git stub",
                         local_file.spec_file_name().path()
                     )?;
                 } else {
@@ -576,12 +577,12 @@ impl Display for Fix<'_> {
                     )?;
                 }
             }
-            Fix::UpdateGitRef { local_file, git_ref } => {
+            Fix::UpdateGitStub { local_file, git_stub } => {
                 writeln!(
                     f,
-                    "update git ref {} to commit {}",
+                    "update Git stub {} to commit {}",
                     local_file.spec_file_name().path(),
-                    git_ref.commit,
+                    git_stub.commit(),
                 )?;
             }
             Fix::DeleteUnparseableFile { path } => {
@@ -609,10 +610,10 @@ impl Fix<'_> {
                 paths.insert((*path).to_owned());
             }
             Fix::UpdateSymlink { .. } => {}
-            Fix::ConvertToGitRef { local_file, .. } => {
-                // Writes to the .gitref path, not the JSON path.
+            Fix::ConvertToGitStub { local_file, .. } => {
+                // Writes to the .gitstub path, not the JSON path.
                 paths.insert(
-                    local_file.spec_file_name().to_git_ref_filename().path(),
+                    local_file.spec_file_name().to_git_stub_filename().path(),
                 );
             }
             Fix::ConvertToJson { local_file, .. } => {
@@ -621,13 +622,13 @@ impl Fix<'_> {
                     local_file.spec_file_name().to_json_filename().path(),
                 );
             }
-            Fix::RegenerateFromBlessed { local_file, git_ref, .. } => {
-                if git_ref.is_some() {
-                    // Writes to a .gitref file.
+            Fix::RegenerateFromBlessed { local_file, git_stub, .. } => {
+                if git_stub.is_some() {
+                    // Writes to a .gitstub file.
                     paths.insert(
                         local_file
                             .spec_file_name()
-                            .to_git_ref_filename()
+                            .to_git_stub_filename()
                             .path(),
                     );
                 } else {
@@ -635,8 +636,8 @@ impl Fix<'_> {
                     paths.insert(local_file.spec_file_name().path().to_owned());
                 }
             }
-            Fix::UpdateGitRef { local_file, .. } => {
-                // Overwrites the existing .gitref file in place.
+            Fix::UpdateGitStub { local_file, .. } => {
+                // Overwrites the existing .gitstub file in place.
                 paths.insert(local_file.spec_file_name().path().to_owned());
             }
             Fix::DeleteUnparseableFile { .. } => {}
@@ -701,7 +702,7 @@ impl Fix<'_> {
                     .join(api_ident.versioned_api_latest_symlink());
                 // We want the link to contain a relative path to a file in the
                 // same directory so that it's correct no matter where it's
-                // resolved from. If the link target is a gitref, convert it to
+                // resolved from. If the link target is a gitstub, convert it to
                 // the JSON filename (the symlink should always point to JSON).
                 let target = link.json_basename();
                 match fs_err::remove_file(&path) {
@@ -714,33 +715,36 @@ impl Fix<'_> {
                 symlink_file(&target, &path)?;
                 Ok(vec![format!("wrote link {} -> {}", path, target)])
             }
-            Fix::ConvertToGitRef { local_file, git_ref } => {
+            Fix::ConvertToGitStub { local_file, git_stub } => {
                 let json_path = root.join(local_file.spec_file_name().path());
 
-                let git_ref_basename =
-                    local_file.spec_file_name().git_ref_basename();
-                let git_ref_path = json_path
+                let git_stub_basename =
+                    local_file.spec_file_name().git_stub_basename();
+                let git_stub_path = json_path
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
-                    .join(&git_ref_basename);
+                    .join(&git_stub_basename);
 
-                // Write the git ref file in canonical format (forward slashes,
+                // Write the Git stub in canonical format (forward slashes,
                 // trailing newline).
                 let overwrite_status = overwrite_file(
-                    &git_ref_path,
-                    git_ref.to_file_contents().as_bytes(),
+                    &git_stub_path,
+                    git_stub.to_file_contents().as_bytes(),
                 )?;
 
                 // Remove the original JSON file.
                 fs_err::remove_file(&json_path)?;
 
                 Ok(vec![
-                    format!("converted {} to git ref", json_path),
-                    format!("created {}: {:?}", git_ref_path, overwrite_status),
+                    format!("converted {} to Git stub", json_path),
+                    format!(
+                        "created {}: {:?}",
+                        git_stub_path, overwrite_status
+                    ),
                 ])
             }
             Fix::ConvertToJson { local_file, blessed } => {
-                let git_ref_path =
+                let git_stub_path =
                     root.join(local_file.spec_file_name().path());
 
                 // Use the blessed file's contents since it's guaranteed to be
@@ -748,21 +752,24 @@ impl Fix<'_> {
                 let contents = blessed.contents();
 
                 let json_basename = local_file.spec_file_name().json_basename();
-                let json_path = git_ref_path
+                let json_path = git_stub_path
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(json_basename);
 
                 let overwrite_status = overwrite_file(&json_path, contents)?;
 
-                fs_err::remove_file(&git_ref_path)?;
+                fs_err::remove_file(&git_stub_path)?;
 
                 Ok(vec![
-                    format!("converted {} from git ref to JSON", git_ref_path),
+                    format!(
+                        "converted {} from Git stub to JSON",
+                        git_stub_path
+                    ),
                     format!("created {}: {:?}", json_path, overwrite_status),
                 ])
             }
-            Fix::RegenerateFromBlessed { local_file, blessed, git_ref } => {
+            Fix::RegenerateFromBlessed { local_file, blessed, git_stub } => {
                 let local_path = root.join(local_file.spec_file_name().path());
 
                 // Remove the corrupted file.
@@ -772,26 +779,26 @@ impl Fix<'_> {
                     Err(e) => return Err(e.into()),
                 }
 
-                if let Some(git_ref) = git_ref {
-                    // Write as a git ref file.
-                    let git_ref_basename =
-                        local_file.spec_file_name().git_ref_basename();
-                    let git_ref_path = local_path
+                if let Some(git_stub) = git_stub {
+                    // Write as a Git stub.
+                    let git_stub_basename =
+                        local_file.spec_file_name().git_stub_basename();
+                    let git_stub_path = local_path
                         .parent()
                         .ok_or_else(|| anyhow!("cannot get parent directory"))?
-                        .join(&git_ref_basename);
+                        .join(&git_stub_basename);
 
                     // Write in canonical format (forward slashes, trailing newline).
                     let overwrite_status = overwrite_file(
-                        &git_ref_path,
-                        git_ref.to_file_contents().as_bytes(),
+                        &git_stub_path,
+                        git_stub.to_file_contents().as_bytes(),
                     )?;
 
                     Ok(vec![
                         format!("removed corrupted file {}", local_path),
                         format!(
-                            "created git ref {}: {:?}",
-                            git_ref_path, overwrite_status
+                            "created Git stub {}: {:?}",
+                            git_stub_path, overwrite_status
                         ),
                     ])
                 } else {
@@ -804,16 +811,16 @@ impl Fix<'_> {
                     )])
                 }
             }
-            Fix::UpdateGitRef { local_file, git_ref } => {
-                let git_ref_path =
+            Fix::UpdateGitStub { local_file, git_stub } => {
+                let git_stub_path =
                     root.join(local_file.spec_file_name().path());
                 let overwrite_status = overwrite_file(
-                    &git_ref_path,
-                    git_ref.to_file_contents().as_bytes(),
+                    &git_stub_path,
+                    git_stub.to_file_contents().as_bytes(),
                 )?;
                 Ok(vec![format!(
-                    "updated git ref {}: {:?}",
-                    git_ref_path, overwrite_status
+                    "updated Git stub {}: {:?}",
+                    git_stub_path, overwrite_status
                 )])
             }
             Fix::DeleteUnparseableFile { path } => {
@@ -935,7 +942,7 @@ impl<'a> Resolved<'a> {
                         env,
                         api,
                         apis.validation(),
-                        apis.uses_git_ref_storage(api),
+                        apis.uses_git_stub_storage(api),
                         blessed,
                         api_blessed,
                         api_generated,
@@ -950,7 +957,7 @@ impl<'a> Resolved<'a> {
         //
         // Only report unparseable files whose paths won't be overwritten by a
         // fix. We check the actual fixes (not just generated paths) because
-        // some fixes write git refs instead of JSON files.
+        // some fixes write Git stubs instead of JSON files.
         let mut paths_written: HashSet<Utf8PathBuf> = HashSet::new();
         for api_resolved in api_results.values() {
             for resolution in api_resolved.by_version.values() {
@@ -1072,7 +1079,7 @@ fn resolve_api<'a>(
     env: &'a ResolvedEnv,
     api: &'a ManagedApi,
     validation: Option<&DynValidationFn>,
-    use_git_ref_storage: bool,
+    use_git_stub_storage: bool,
     all_blessed: &'a BlessedFiles,
     api_blessed: Option<&'a ApiFiles<BlessedApiSpecFile>>,
     api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
@@ -1104,13 +1111,14 @@ fn resolve_api<'a>(
                 (LatestFirstCommit::NotBlessed, None)
             } else {
                 // The latest version is blessed. Try to find its first commit.
-                match all_blessed.git_ref(api.ident(), latest_version) {
+                match all_blessed.git_stub(api.ident(), latest_version) {
                     Some(gr) => match gr
-                        .to_git_ref(&env.repo_root, all_blessed.merge_base())
+                        .to_git_stub(&env.repo_root, all_blessed.merge_base())
                     {
-                        Ok(git_ref) => {
-                            (LatestFirstCommit::Blessed(git_ref.commit), None)
-                        }
+                        Ok(git_stub) => (
+                            LatestFirstCommit::Blessed(git_stub.commit()),
+                            None,
+                        ),
                         Err(error) => {
                             // Capture the error to report it for the latest
                             // version.
@@ -1165,17 +1173,17 @@ fn resolve_api<'a>(
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
 
-                // Look up the git ref for this version.
-                let git_ref = all_blessed.git_ref(api.ident(), &version);
+                // Look up the Git stub for this version.
+                let git_stub = all_blessed.git_stub(api.ident(), &version);
 
                 let resolution = resolve_api_version(
                     env,
                     api,
                     validation,
-                    use_git_ref_storage,
+                    use_git_stub_storage,
                     ApiVersion { version: &version, is_latest, is_blessed },
                     blessed,
-                    git_ref,
+                    git_stub,
                     generated,
                     local,
                     latest_first_commit,
@@ -1190,7 +1198,7 @@ fn resolve_api<'a>(
         // version, add the error to the latest version's resolution.
         if let Some((Some(spec_file_name), error)) = latest_first_commit_error {
             if let Some(resolution) = by_version.get_mut(latest_version) {
-                resolution.add_problem(Problem::GitRefFirstCommitUnknown {
+                resolution.add_problem(Problem::GitStubFirstCommitUnknown {
                     spec_file_name,
                     source: error,
                 });
@@ -1440,10 +1448,10 @@ fn resolve_api_version<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
-    use_git_ref_storage: bool,
+    use_git_stub_storage: bool,
     version: ApiVersion<'_>,
     blessed: Option<&'a BlessedApiSpecFile>,
-    git_ref: Option<&'a BlessedGitRef>,
+    git_stub: Option<&'a BlessedGitStub>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
     latest_first_commit: LatestFirstCommit,
@@ -1454,10 +1462,10 @@ fn resolve_api_version<'a>(
             env,
             api,
             validation,
-            use_git_ref_storage,
+            use_git_stub_storage,
             version,
             blessed,
-            git_ref,
+            git_stub,
             generated,
             local,
             latest_first_commit,
@@ -1474,10 +1482,10 @@ fn resolve_api_version_blessed<'a>(
     env: &'_ ResolvedEnv,
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
-    use_git_ref_storage: bool,
+    use_git_stub_storage: bool,
     version: ApiVersion<'_>,
     blessed: &'a BlessedApiSpecFile,
-    git_ref: Option<&'a BlessedGitRef>,
+    git_stub: Option<&'a BlessedGitStub>,
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
     latest_first_commit: LatestFirstCommit,
@@ -1583,13 +1591,13 @@ fn resolve_api_version_blessed<'a>(
     // hash.
     let compute_storage_format =
         |problems: &mut Vec<Problem<'a>>| -> VersionStorageFormat {
-            match git_ref {
-                Some(r) => match r.to_git_ref(&env.repo_root, merge_base) {
+            match git_stub {
+                Some(r) => match r.to_git_stub(&env.repo_root, merge_base) {
                     Ok(current) => {
                         storage_format_for_blessed(latest_first_commit, current)
                     }
                     Err(error) => {
-                        problems.push(Problem::GitRefFirstCommitUnknown {
+                        problems.push(Problem::GitStubFirstCommitUnknown {
                             spec_file_name: blessed
                                 .versioned_spec_file_name()
                                 .clone(),
@@ -1607,17 +1615,17 @@ fn resolve_api_version_blessed<'a>(
         problems.push(Problem::BlessedVersionMissingLocal {
             spec_file_name: blessed.versioned_spec_file_name().clone(),
         });
-    } else if !use_git_ref_storage || is_latest {
-        // Fast path: git ref storage disabled or this is the latest version.
+    } else if !use_git_stub_storage || is_latest {
+        // Fast path: Git stub storage disabled or this is the latest version.
         // We know we always want JSON in this case, so we can avoid computing
-        // git refs here.
+        // Git stubs here.
 
         // Report corrupted local files that need regeneration from blessed.
         for local_file in &corrupted {
             problems.push(Problem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
-                git_ref: None,
+                git_stub: None,
             });
         }
 
@@ -1625,19 +1633,19 @@ fn resolve_api_version_blessed<'a>(
             // Only corrupted files match - they'll be regenerated. Still need
             // to mark non-matching files as extra.
         } else if matching.len() > 1 {
-            // We might have both api.json and api.json.gitref for the same
-            // version. Mark the redundant file (always the gitref file in this
+            // We might have both api.json and api.json.gitstub for the same
+            // version. Mark the redundant file (always the gitstub file in this
             // case) for deletion.
             for local_file in matching {
-                if local_file.spec_file_name().is_git_ref() {
+                if local_file.spec_file_name().is_git_stub() {
                     problems.push(Problem::DuplicateLocalFile { local_file });
                 }
             }
         } else {
             let local_file = matching[0];
-            if local_file.spec_file_name().is_git_ref() {
+            if local_file.spec_file_name().is_git_stub() {
                 problems
-                    .push(Problem::GitRefShouldBeJson { local_file, blessed });
+                    .push(Problem::GitStubShouldBeJson { local_file, blessed });
             }
         }
 
@@ -1651,15 +1659,15 @@ fn resolve_api_version_blessed<'a>(
             }
         }));
     } else {
-        // Slow path: git ref storage enabled and not latest. Compute what
+        // Slow path: Git stub storage enabled and not latest. Compute what
         // storage format this version should use.
         let storage_format = compute_storage_format(&mut problems);
 
         // Report corrupted local files that need regeneration from blessed
         // versions.
         for local_file in &corrupted {
-            let git_ref = match &storage_format {
-                VersionStorageFormat::GitRef(g) => Some(g.clone()),
+            let git_stub = match &storage_format {
+                VersionStorageFormat::GitStub(g) => Some(g.clone()),
                 VersionStorageFormat::Json | VersionStorageFormat::Error => {
                     None
                 }
@@ -1667,25 +1675,25 @@ fn resolve_api_version_blessed<'a>(
             problems.push(Problem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
-                git_ref,
+                git_stub,
             });
         }
 
-        // Check whether a local git ref file has a stale commit hash
+        // Check whether a local Git stub has a stale commit hash
         // compared to what the blessed source expects. This is shared
         // between the single-match and duplicate-files branches below.
-        let check_git_ref_staleness =
+        let check_git_stub_staleness =
             |local_file: &'a LocalApiSpecFile,
-             expected_git_ref: &GitRef,
+             expected_git_stub: &GitStub,
              problems: &mut Vec<Problem<'a>>| {
-                // Non-gitref files (JSON) don't have a commit to check.
-                let Some(local_commit) = local_file.git_ref_commit() else {
+                // Non-gitstub files (JSON) don't have a commit to check.
+                let Some(local_commit) = local_file.git_stub_commit() else {
                     return;
                 };
-                if *local_commit != expected_git_ref.commit {
-                    problems.push(Problem::GitRefCommitStale {
+                if *local_commit != expected_git_stub.commit() {
+                    problems.push(Problem::GitStubCommitStale {
                         local_file,
-                        git_ref: expected_git_ref.clone(),
+                        git_stub: expected_git_stub.clone(),
                     });
                 }
             };
@@ -1694,26 +1702,29 @@ fn resolve_api_version_blessed<'a>(
             // Only corrupted files match - they'll be regenerated. Still need
             // to mark non-matching files as extra.
         } else if matching.len() > 1 {
-            // We might have both api.json and api.json.gitref for the same
+            // We might have both api.json and api.json.gitstub for the same
             // version. Mark the redundant file for deletion, and check the
             // non-redundant file for staleness.
             for local_file in matching {
                 match (
                     &storage_format,
-                    local_file.spec_file_name().is_git_ref(),
+                    local_file.spec_file_name().is_git_stub(),
                 ) {
-                    // Should be git ref but have JSON, or should be JSON but
-                    // have git ref: this file is redundant.
-                    (VersionStorageFormat::GitRef(_), false)
+                    // Should be Git stub but have JSON, or should be JSON but
+                    // have Git stub: this file is redundant.
+                    (VersionStorageFormat::GitStub(_), false)
                     | (VersionStorageFormat::Json, true) => {
                         problems
                             .push(Problem::DuplicateLocalFile { local_file });
                     }
-                    // Format matches and is a git ref: check for staleness.
-                    (VersionStorageFormat::GitRef(expected_git_ref), true) => {
-                        check_git_ref_staleness(
+                    // Format matches and is a Git stub: check for staleness.
+                    (
+                        VersionStorageFormat::GitStub(expected_git_stub),
+                        true,
+                    ) => {
+                        check_git_stub_staleness(
                             local_file,
-                            expected_git_ref,
+                            expected_git_stub,
                             &mut problems,
                         );
                     }
@@ -1725,27 +1736,27 @@ fn resolve_api_version_blessed<'a>(
         } else {
             let local_file = matching[0];
 
-            match (&storage_format, local_file.spec_file_name().is_git_ref()) {
-                (VersionStorageFormat::GitRef(git_ref), false) => {
-                    // Should be git ref but is JSON: convert to git ref.
-                    problems.push(Problem::BlessedVersionShouldBeGitRef {
+            match (&storage_format, local_file.spec_file_name().is_git_stub()) {
+                (VersionStorageFormat::GitStub(git_stub), false) => {
+                    // Should be Git stub but is JSON: convert to Git stub.
+                    problems.push(Problem::BlessedVersionShouldBeGitStub {
                         local_file,
-                        git_ref: git_ref.clone(),
+                        git_stub: git_stub.clone(),
                     });
                 }
                 (VersionStorageFormat::Json, true) => {
-                    // Should be JSON but is git ref: convert to JSON.
-                    problems.push(Problem::GitRefShouldBeJson {
+                    // Should be JSON but is Git stub: convert to JSON.
+                    problems.push(Problem::GitStubShouldBeJson {
                         local_file,
                         blessed,
                     });
                 }
-                (VersionStorageFormat::GitRef(expected_git_ref), true) => {
-                    // Format is correct (git ref). Check if the commit
-                    // hash inside the local gitref file still matches.
-                    check_git_ref_staleness(
+                (VersionStorageFormat::GitStub(expected_git_stub), true) => {
+                    // Format is correct (Git stub). Check if the commit
+                    // hash inside the local gitstub file still matches.
+                    check_git_stub_staleness(
                         local_file,
-                        expected_git_ref,
+                        expected_git_stub,
                         &mut problems,
                     );
                 }
@@ -1863,7 +1874,7 @@ fn validate_generated(
 
 /// Describes the first commit for the latest version.
 ///
-/// Used to decide whether to suggest git ref conversion for older versions.
+/// Used to decide whether to suggest Git stub conversion for older versions.
 #[derive(Clone, Copy, Debug)]
 enum LatestFirstCommit {
     NotBlessed,
@@ -1874,8 +1885,8 @@ enum LatestFirstCommit {
 /// Describes what storage format a blessed version should use.
 #[derive(Clone, Debug)]
 enum VersionStorageFormat {
-    /// The version should be stored as a git ref file.
-    GitRef(GitRef),
+    /// The version should be stored as a Git stub.
+    GitStub(GitStub),
     /// The version should be stored as a JSON file.
     Json,
     /// An error occurred while determining the storage format. The version
@@ -1883,34 +1894,34 @@ enum VersionStorageFormat {
     Error,
 }
 
-/// Returns the storage format for a blessed version, assuming git ref storage
-/// is enabled and the current version's potential git ref is known.
+/// Returns the storage format for a blessed version, assuming Git stub storage
+/// is enabled and the current version's potential Git stub is known.
 fn storage_format_for_blessed(
     latest: LatestFirstCommit,
-    current: GitRef,
+    current: GitStub,
 ) -> VersionStorageFormat {
     // This match statement captures the decision table:
     //
     //      status         |  storage format
     //                     |
-    //    NotBlessed       |    GitRef (always)
+    //    NotBlessed       |   GitStub (always)
     //   Blessed(same)     |       Json
-    // Blessed(different)  |      GitRef
+    // Blessed(different)  |     GitStub
     //    BlessedError     |      Error
     match latest {
         LatestFirstCommit::NotBlessed => {
             // The latest version is not blessed. This means that a new version
             // is being added, so we should always convert blessed versions to
-            // git refs.
-            VersionStorageFormat::GitRef(current)
+            // Git stubs.
+            VersionStorageFormat::GitStub(current)
         }
 
         LatestFirstCommit::Blessed(latest_first_commit) => {
             // The latest version is blessed. Only suggest conversions if the
             // version's first commit is different from the latest version's
             // first commit.
-            if current.commit != latest_first_commit {
-                VersionStorageFormat::GitRef(current)
+            if current.commit() != latest_first_commit {
+                VersionStorageFormat::GitStub(current)
             } else {
                 VersionStorageFormat::Json
             }
@@ -1942,7 +1953,7 @@ mod tests {
 
     #[test]
     fn test_storage_format_for_blessed() {
-        let current = git_ref(COMMIT_A);
+        let current = git_stub(COMMIT_A);
 
         assert!(
             matches!(
@@ -1950,9 +1961,9 @@ mod tests {
                     LatestFirstCommit::NotBlessed,
                     current.clone()
                 ),
-                VersionStorageFormat::GitRef(_)
+                VersionStorageFormat::GitStub(_)
             ),
-            "latest NotBlessed => always GitRef"
+            "latest NotBlessed => always GitStub"
         );
 
         let latest = LatestFirstCommit::Blessed(commit(COMMIT_A));
@@ -1968,9 +1979,9 @@ mod tests {
         assert!(
             matches!(
                 storage_format_for_blessed(latest, current.clone()),
-                VersionStorageFormat::GitRef(_)
+                VersionStorageFormat::GitStub(_)
             ),
-            "latest Blessed with different commit => GitRef"
+            "latest Blessed with different commit => GitStub"
         );
 
         assert!(
@@ -1993,8 +2004,8 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn git_ref(s: &str) -> GitRef {
+    fn git_stub(s: &str) -> GitStub {
         use camino::Utf8PathBuf;
-        GitRef { commit: commit(s), path: Utf8PathBuf::from("test/path.json") }
+        GitStub::new(commit(s), Utf8PathBuf::from("test/path.json")).unwrap()
     }
 }

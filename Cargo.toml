@@ -30,6 +30,8 @@ dropshot-api-manager = { path = "crates/dropshot-api-manager", version = "0.3.0"
 dropshot-api-manager-types = { path = "crates/dropshot-api-manager-types", version = "0.3.0" }
 e2e-example-apis = { path = "e2e-example/apis" }
 fs-err = "3.1.1"
+git-stub = "1.0.0"
+git-stub-vcs = "0.1.0"
 hex = "0.4.3"
 indent_write = "2.2.0"
 newtype_derive = "0.1.6"

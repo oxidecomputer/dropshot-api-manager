@@ -8,7 +8,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use camino_tempfile::Utf8TempDir;
 use camino_tempfile_ext::{fixture::ChildPath, prelude::*};
 use clap::Parser;
-use dropshot_api_manager::{Environment, GitRef, ManagedApis};
+use dropshot_api_manager::{Environment, ManagedApis};
+use git_stub::GitStub;
+use git_stub_vcs::Vcs;
 use std::{
     collections::BTreeSet,
     fs,
@@ -239,8 +241,8 @@ impl TestEnvironment {
     }
 
     /// Find the path of a versioned API document for a specific version,
-    /// relative to the workspace root. Only matches full JSON files, not git
-    /// ref files.
+    /// relative to the workspace root. Only matches full JSON files, not Git
+    /// stub files.
     pub fn find_versioned_document_path(
         &self,
         api_ident: &str,
@@ -255,7 +257,7 @@ impl TestEnvironment {
 
         let path = files.iter().find_map(|f| {
             let rel_path = rel_path_forward_slashes(f.as_ref());
-            // Only match .json files, not .json.gitref files.
+            // Only match .json files, not .json.gitstub files.
             (rel_path.starts_with(&pattern) && rel_path.ends_with(".json"))
                 .then(|| Utf8PathBuf::from(rel_path))
         });
@@ -330,81 +332,98 @@ impl TestEnvironment {
         self.read_file(&file_name)
     }
 
-    /// Check if a git ref file exists for a versioned API at a specific
+    /// Check if a Git stub exists for a versioned API at a specific
     /// version.
-    pub fn versioned_git_ref_exists(
+    pub fn versioned_git_stub_exists(
         &self,
         api_ident: &str,
         version: &str,
     ) -> Result<bool> {
-        let path = self.find_versioned_git_ref_path(api_ident, version)?;
+        let path = self.find_versioned_git_stub_path(api_ident, version)?;
         Ok(path.is_some())
     }
 
-    /// Find the path of a git ref file for a versioned API at a specific
+    /// Find the path of a Git stub for a versioned API at a specific
     /// version, relative to the workspace root.
-    pub fn find_versioned_git_ref_path(
+    pub fn find_versioned_git_stub_path(
         &self,
         api_ident: &str,
         version: &str,
     ) -> Result<Option<Utf8PathBuf>> {
         let files = self.list_document_files()?;
 
-        // Git ref files are stored like:
-        // documents/api/api-version-hash.json.gitref.
+        // Git stubs are stored like:
+        // documents/api/api-version-hash.json.gitstub.
         let pattern =
             format!("documents/{}/{}-{}-", api_ident, api_ident, version);
 
         let path = files.iter().find_map(|f| {
             let rel_path = rel_path_forward_slashes(f.as_ref());
             (rel_path.starts_with(&pattern)
-                && rel_path.ends_with(".json.gitref"))
+                && rel_path.ends_with(".json.gitstub"))
             .then(|| Utf8PathBuf::from(rel_path))
         });
         Ok(path)
     }
 
-    /// Read the content of a git ref file for a versioned API.
-    pub fn read_versioned_git_ref(
+    /// Read and parse a Git stub for a versioned API.
+    pub fn read_versioned_git_stub(
+        &self,
+        api_ident: &str,
+        version: &str,
+    ) -> Result<GitStub> {
+        let content = self.read_versioned_git_stub_raw(api_ident, version)?;
+        content.parse().with_context(|| {
+            format!("failed to parse Git stub for {} v{}", api_ident, version)
+        })
+    }
+
+    /// Read the raw content of a Git stub for a versioned API.
+    ///
+    /// This returns the raw file content as a string, without parsing it
+    /// into a [`GitStub`]. Useful for tests that need to inspect the raw
+    /// file format (e.g., checking for trailing newlines, forward slashes).
+    pub fn read_versioned_git_stub_raw(
         &self,
         api_ident: &str,
         version: &str,
     ) -> Result<String> {
         let path = self
-            .find_versioned_git_ref_path(api_ident, version)?
+            .find_versioned_git_stub_path(api_ident, version)?
             .with_context(|| {
-                format!(
-                    "did not find git ref file for {} v{}",
-                    api_ident, version
-                )
+                format!("did not find Git stub for {} v{}", api_ident, version)
             })?;
         self.read_file(&path)
     }
 
-    /// Check if a git ref file exists for a lockstep API.
-    /// (This should never happen - lockstep APIs don't use git refs.)
-    pub fn lockstep_git_ref_exists(&self, api_ident: &str) -> bool {
-        self.file_exists(format!("documents/{}.json.gitref", api_ident))
+    /// Check if a Git stub exists for a lockstep API.
+    /// (This should never happen -- lockstep APIs don't use Git stubs.)
+    pub fn lockstep_git_stub_exists(&self, api_ident: &str) -> bool {
+        self.file_exists(format!("documents/{}.json.gitstub", api_ident))
     }
 
-    /// Read the actual content referenced by a git ref file.
+    /// Read the actual content referenced by a Git stub.
     ///
-    /// This reads the git ref file, parses it to get the commit and path, then
-    /// uses git to retrieve the referenced content.
-    pub fn read_git_ref_content(
+    /// This reads the Git stub, parses it to get the commit and path,
+    /// then uses git to retrieve the referenced content.
+    pub fn read_git_stub_content(
         &self,
         api_ident: &str,
         version: &str,
     ) -> Result<String> {
-        let git_ref_content =
-            self.read_versioned_git_ref(api_ident, version)?;
-        let git_ref: GitRef = git_ref_content.parse().with_context(|| {
-            format!("failed to parse git ref for {} v{}", api_ident, version)
-        })?;
-        let content = git_ref.read_contents(&self.workspace_root)?;
+        let git_stub = self.read_versioned_git_stub(api_ident, version)?;
+        let content = Vcs::git()
+            .context("failed to create git VCS")?
+            .read_git_stub_contents(&git_stub, &self.workspace_root)
+            .with_context(|| {
+                format!(
+                    "failed to read Git stub contents for {} v{}",
+                    api_ident, version
+                )
+            })?;
         String::from_utf8(content).with_context(|| {
             format!(
-                "git ref content for {} v{} is not valid UTF-8",
+                "Git stub content for {} v{} is not valid UTF-8",
                 api_ident, version
             )
         })
@@ -603,7 +622,7 @@ impl TestEnvironment {
     /// Unlike `merge_branch_without_renames`, this method does not use `-X
     /// no-renames`, so Git's rename detection is active. This will cause
     /// rename/rename conflicts when both branches convert the same file to a
-    /// git ref and add different new versions.
+    /// Git stub and add different new versions.
     ///
     /// Returns `MergeResult::Clean` if the merge completed cleanly, or
     /// `MergeResult::Conflict` with the list of conflicted files if there were

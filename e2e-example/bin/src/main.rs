@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Binary for the OpenAPI manager examples.
 
@@ -78,17 +78,18 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
             api_description: versioned::versioned_api_mod::stub_api_description,
         }
         .into(),
-        // Exercise: try uncommenting with_git_ref_storage below. This will cause
-        // the Dropshot API manager to convert older JSON versions to git refs.
+        // Exercise: try uncommenting with_git_stub_storage below. This will
+        // cause the Dropshot API manager to convert older JSON versions to Git
+        // stubs.
         //
-        // .with_git_ref_storage(),
+        // .with_git_stub_storage(),
         //
         // ---
         //
-        // This API demonstrates git-ref storage for client generation.
-        // Git-ref storage is enabled just for this API.
+        // This API demonstrates Git stub storage for client generation.
+        // Git stub storage is enabled just for this API.
         ManagedApi::from(ManagedApiConfig {
-            ident: "versioned-git-ref",
+            ident: "versioned-git-stub",
             versions: Versions::Versioned {
                 supported_versions: versioned::supported_versions(),
             },
@@ -105,15 +106,16 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
             },
             api_description: versioned::versioned_api_mod::stub_api_description,
         })
-        .with_git_ref_storage(),
+        .with_git_stub_storage(),
     ];
 
     let apis = ManagedApis::new(apis)
         .context("error creating ManagedApis")?
-        // Exercise: try uncommenting with_git_ref_storage below. This will cause
-        // the Dropshot API manager to convert older JSON versions to git refs.
+        // Exercise: try uncommenting with_git_stub_storage below. This will
+        // cause the Dropshot API manager to convert older JSON versions to Git
+        // stubs.
         //
-        // .with_git_ref_storage()
+        // .with_git_stub_storage()
         //
         // A global validation function can be provided to the OpenAPI manager.
         // This function will be called for each API under consideration.

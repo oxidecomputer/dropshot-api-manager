@@ -28,7 +28,7 @@ fn main() {
         .unwrap_or_else(|_| "diff_filter_a".to_string());
     let fail_modes: Vec<&str> = fail_modes.split(',').collect();
 
-    // Fail on `git log --diff-filter=A` to test GitRefFirstCommitUnknown.
+    // Fail on `git log --diff-filter=A` to test GitStubFirstCommitUnknown.
     if fail_modes.contains(&"diff_filter_a")
         && args.iter().any(|arg| arg == "--diff-filter=A")
     {

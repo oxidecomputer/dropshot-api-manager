@@ -1152,7 +1152,7 @@ fn successive_changes_concrete_setup(
     let latest_symlink: Utf8PathBuf =
         "documents/versioned-health/versioned-health-latest.json".into();
 
-    // No git ref conversion, so only symlink conflicts on first step.
+    // No Git stub conversion, so only symlink conflicts on first step.
     let expected_first_conflicts: ExpectedConflicts =
         [(latest_symlink.clone(), ExpectedConflictKind::Symlink)]
             .into_iter()
@@ -1172,7 +1172,7 @@ fn successive_changes_concrete_setup(
     Ok((expected_first_conflicts, expected_second_conflicts))
 }
 
-/// Verifies final state: all versions as JSON, no git refs.
+/// Verifies final state: all versions as JSON, no Git stubs.
 fn successive_changes_concrete_verify(
     env: &TestEnvironment,
     final_apis: &dropshot_api_manager::ManagedApis,
@@ -1184,8 +1184,8 @@ fn successive_changes_concrete_verify(
             "{version} should be JSON"
         );
         assert!(
-            !env.versioned_git_ref_exists("versioned-health", version)?,
-            "{version} should not be a git ref"
+            !env.versioned_git_stub_exists("versioned-health", version)?,
+            "{version} should not be a Git stub"
         );
     }
 

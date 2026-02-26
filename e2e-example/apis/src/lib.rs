@@ -28,8 +28,8 @@ pub mod versioned {
         // Exercise: try uncommenting version 6 below. This will cause
         // the Dropshot API manager to generate a new OpenAPI document.
         // (6, SIX_DOT_OH),
-        // Version 5 causes versions 1-4 to be converted to Git ref storage.
-        (5, FIVE_DOT_OH),
+        // Version 5 causes versions 1-4 to be converted to Git stub storage.
+        // (5, FIVE_DOT_OH),
         // Version 4.0.0 adds an endpoint with query parameters, to test
         // detection of query parameter changes.
         (4, WITH_QUERY_PARAMS),

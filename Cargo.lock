@@ -459,6 +459,8 @@ dependencies = [
  "dropshot",
  "dropshot-api-manager-types",
  "fs-err",
+ "git-stub",
+ "git-stub-vcs",
  "hex",
  "indent_write",
  "newtype_derive",
@@ -726,6 +728,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-stub"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a42c6ab99e8c06cf862540c646368223b12225328d094fb0ed7755434376a1e"
+dependencies = [
+ "camino",
+ "hex",
+ "thiserror",
+]
+
+[[package]]
+name = "git-stub-vcs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "030ad7aaa1d066e8fb39ac2748f1a12b072eed4a4af8d2e073fc80ba74ab173c"
+dependencies = [
+ "atomicwrites",
+ "camino",
+ "fs-err",
+ "git-stub",
+ "thiserror",
+]
+
+[[package]]
 name = "globset"
 version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -982,6 +1008,8 @@ dependencies = [
  "dropshot",
  "dropshot-api-manager",
  "dropshot-api-manager-types",
+ "git-stub",
+ "git-stub-vcs",
  "openapiv3",
  "schemars",
  "semver 1.0.27",

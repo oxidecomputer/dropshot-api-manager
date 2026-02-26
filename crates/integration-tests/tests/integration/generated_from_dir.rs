@@ -69,23 +69,23 @@ fn test_generated_from_partial_dir_does_not_panic() -> Result<()> {
 
 /// When `--generated-from-dir` provides only some versions of a versioned
 /// API (e.g. the dir has v3 and v4 but not v1 or v2 which are stored as
-/// git refs locally), the tool should report failures for the missing
+/// Git stubs locally), the tool should report failures for the missing
 /// versions rather than panicking.
 #[test]
 fn test_generated_from_dir_partial_versions() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = versioned_health_git_ref_apis()?;
+    let apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
-    // Advance HEAD and add v4, triggering git ref conversion for older
+    // Advance HEAD and add v4, triggering Git stub conversion for older
     // blessed versions.
     env.make_unrelated_commit("advance")?;
-    let apis_v4 = versioned_health_with_v4_git_ref_apis()?;
+    let apis_v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&apis_v4)?;
 
     // Build a generated dir containing only the versions that still have
-    // full JSON files locally (v3, v4). Versions stored as git refs (v1,
+    // full JSON files locally (v3, v4). Versions stored as Git stubs (v1,
     // v2) won't be found by find_versioned_document_path, so the generated
     // dir will be incomplete.
     let gen_dir = env.workspace_root().join("gen-partial-versions");
