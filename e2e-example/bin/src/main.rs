@@ -92,10 +92,10 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
             versions: Versions::Versioned {
                 supported_versions: versioned::supported_versions(),
             },
-            title: "Versioned API with Git ref storage",
+            title: "Versioned API with Git stub storage",
             metadata: ManagedApiMetadata {
                 description: Some(
-                    "A versioned API demonstrating git-ref storage",
+                    "A versioned API demonstrating git stub storage",
                 ),
                 extra: serde_json::to_value(ApiExtra {
                     boundary: ApiBoundary::Internal,
