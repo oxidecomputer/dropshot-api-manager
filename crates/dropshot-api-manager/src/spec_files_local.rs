@@ -416,13 +416,21 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
                 continue;
             }
 
+            // If the git ref is syntactically valid but can't be resolved
+            // (e.g., the commit or path no longer exists after a rebase or
+            // force-push), treat it as unparseable so generate can delete
+            // and recreate it.
             let contents = match git_ref.read_contents(repo_root) {
                 Ok(contents) => contents,
                 Err(error) => {
-                    api_files.load_error(error.context(format!(
-                        "failed to read content for git ref {:?}",
-                        entry.path()
-                    )));
+                    api_files.load_unparseable(
+                        spec_file_name,
+                        git_ref_contents.into_bytes(),
+                        error.context(format!(
+                            "git ref file {:?} could not be resolved",
+                            entry.path()
+                        )),
+                    );
                     continue;
                 }
             };

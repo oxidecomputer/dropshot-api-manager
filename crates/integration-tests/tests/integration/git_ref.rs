@@ -1876,6 +1876,75 @@ fn test_invalid_commit_hash_git_ref_regenerated() -> Result<()> {
     Ok(())
 }
 
+/// Test that a git ref file pointing to a nonexistent commit/path is
+/// regenerated. This covers the case where a gitref is syntactically valid but
+/// semantically invalid (the commit or path no longer exists in git, e.g.,
+/// after a rebase or force-push).
+#[test]
+fn test_unresolvable_git_ref_regenerated() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash_full()?;
+
+    env.make_unrelated_commit("intermediate")?;
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref"
+    );
+
+    // Write a syntactically valid but semantically invalid gitref.
+    let v1_git_ref_path = env
+        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
+        .expect("v1 git ref should exist");
+    let nonexistent_commit = "aa".repeat(20);
+    let unresolvable_content =
+        format!("{nonexistent_commit}:documents/versioned-health/fake.json\n");
+    env.create_file(&v1_git_ref_path, &unresolvable_content)?;
+
+    // Check should report NeedsUpdate (not Failures).
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for unresolvable git ref, \
+         not a hard failure"
+    );
+
+    // Generate should fix the problem by deleting and recreating the gitref.
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 git ref should be regenerated"
+    );
+
+    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v1_commit, v1_v2_commit,
+        "regenerated v1 git ref should point to the original commit"
+    );
+
+    let v1_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
+    assert!(
+        v1_content.contains("\"openapi\""),
+        "regenerated git ref content should be valid OpenAPI"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
 /// Test the dependent branch workflow with git refs.
 ///
 /// See [`dependent_branch_setup`] for the test scenario.
