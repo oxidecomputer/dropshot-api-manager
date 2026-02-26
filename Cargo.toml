@@ -3,6 +3,7 @@ members = [
     "crates/*",
     "e2e-example/apis",
     "e2e-example/bin",
+    "e2e-example/client",
 ]
 resolver = "3"
 
@@ -39,6 +40,8 @@ openapi-lint = { git = "https://github.com/oxidecomputer/openapi-lint", branch =
 openapiv3 = "2.2.0"
 owo-colors = "4.2.3"
 paste = "1.0.15"
+progenitor = "0.13.0"
+reqwest = { version = "0.13.1", default-features = false, features = ["json"] }
 schemars = "0.8.22"
 semver = "1.0.27"
 serde = "1.0.224"
