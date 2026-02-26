@@ -3,7 +3,7 @@
 //! Example client generated from a Git stub file.
 //!
 //! This crate demonstrates the end-to-end workflow for generating progenitor
-//! clients from OpenAPI specs stored as Git stubs:
+//! clients from OpenAPI documents stored as Git stubs:
 //!
 //! 1. The build.rs uses `git-stub-vcs` to fetch the actual JSON content
 //!    from git history and write it to `OUT_DIR/git-stub-vcs/`.
