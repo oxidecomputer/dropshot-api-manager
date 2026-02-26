@@ -10,10 +10,75 @@ use camino_tempfile_ext::{fixture::ChildPath, prelude::*};
 use clap::Parser;
 use dropshot_api_manager::{Environment, GitRef, ManagedApis};
 use std::{
+    collections::BTreeSet,
     fs,
     io::Write,
-    process::{Command, ExitCode},
+    process::{Command, ExitCode, ExitStatus},
 };
+
+/// Result of attempting a git merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeResult {
+    /// The merge completed successfully with no conflicts.
+    Clean,
+    /// The merge resulted in conflicts that need to be resolved.
+    ///
+    /// Contains the set of conflicted file paths.
+    Conflict(BTreeSet<Utf8PathBuf>),
+}
+
+/// Result of attempting a git rebase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseResult {
+    /// The rebase completed successfully with no conflicts.
+    Clean,
+    /// The rebase resulted in conflicts that need to be resolved.
+    ///
+    /// Contains the set of conflicted file paths.
+    Conflict(BTreeSet<Utf8PathBuf>),
+}
+
+/// Result of attempting a jj merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JjMergeResult {
+    /// The merge completed successfully with no conflicts.
+    Clean,
+    /// The merge resulted in conflicts that need to be resolved.
+    ///
+    /// Contains the set of conflicted file paths.
+    Conflict(BTreeSet<Utf8PathBuf>),
+}
+
+/// Result of attempting a jj rebase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JjRebaseResult {
+    /// The rebase completed successfully with no conflicts.
+    Clean,
+    /// The rebase resulted in conflicts that need to be resolved.
+    ///
+    /// Contains the set of conflicted file paths.
+    Conflict(BTreeSet<Utf8PathBuf>),
+}
+
+/// Check if jj is available and the test should run.
+///
+/// Returns `Ok(true)` if jj is available.
+/// Returns `Ok(false)` if the `SKIP_JJ_TESTS` env var is set.
+/// Returns `Err` with a helpful message if jj is not found.
+pub fn check_jj_available() -> Result<bool> {
+    if std::env::var("SKIP_JJ_TESTS").is_ok() {
+        return Ok(false);
+    }
+
+    let jj = std::env::var("JJ").unwrap_or_else(|_| "jj".to_string());
+    match Command::new(&jj).arg("--version").output() {
+        Ok(o) if o.status.success() => Ok(true),
+        Ok(_) | Err(_) => Err(anyhow!(
+            "jj not found. Install jj (https://jj-vcs.dev/) or set \
+             SKIP_JJ_TESTS=1 to skip these tests"
+        )),
+    }
+}
 
 /// A temporary test environment that manages directories and cleanup.
 pub struct TestEnvironment {
@@ -505,27 +570,187 @@ impl TestEnvironment {
         })
     }
 
+    /// Create a new branch at the current HEAD.
+    pub fn create_branch(&self, name: &str) -> Result<()> {
+        Self::run_git_command(&self.workspace_root, &["branch", name])?;
+        Ok(())
+    }
+
+    /// Checkout a branch.
+    pub fn checkout_branch(&self, name: &str) -> Result<()> {
+        Self::run_git_command(&self.workspace_root, &["checkout", name])?;
+        Ok(())
+    }
+
+    /// Merge a branch into the current branch.
+    ///
+    /// Returns `Ok(())` on a clean merge, `Err` if there's a conflict or other
+    /// error.
+    ///
+    /// Uses `-X no-renames` to disable rename detection during merge. This
+    /// tests the scenario without rename/rename conflicts.
+    pub fn merge_branch_without_renames(&self, source: &str) -> Result<()> {
+        let message = format!("Merge branch '{}'", source);
+        Self::run_git_command(
+            &self.workspace_root,
+            &["merge", "-m", &message, "-X", "no-renames", source],
+        )?;
+        Ok(())
+    }
+
+    /// Attempt to merge a branch, returning whether conflicts occurred.
+    ///
+    /// Unlike `merge_branch_without_renames`, this method does not use `-X
+    /// no-renames`, so Git's rename detection is active. This will cause
+    /// rename/rename conflicts when both branches convert the same file to a
+    /// git ref and add different new versions.
+    ///
+    /// Returns `MergeResult::Clean` if the merge completed cleanly, or
+    /// `MergeResult::Conflict` with the list of conflicted files if there were
+    /// conflicts (the working directory will be in a conflicted state).
+    pub fn try_merge_branch(&self, source: &str) -> Result<MergeResult> {
+        let message = format!("Merge branch '{}'", source);
+
+        // Run the merge command.
+        let status = Self::run_git_command_unchecked(
+            &self.workspace_root,
+            &["merge", "-m", &message, source],
+        )?;
+
+        if status.success() {
+            return Ok(MergeResult::Clean);
+        }
+
+        // Use git ls-files --unmerged to check for conflicts. Output format:
+        // <mode> <object> <stage>\t<file>
+        // Each conflicted file appears multiple times (once per stage), so we
+        // deduplicate.
+        let unmerged = Self::run_git_command(
+            &self.workspace_root,
+            &["ls-files", "--unmerged"],
+        )?;
+
+        if unmerged.is_empty() {
+            Ok(MergeResult::Clean)
+        } else {
+            let conflicted_files: BTreeSet<Utf8PathBuf> = unmerged
+                .lines()
+                .filter_map(|line| {
+                    // Split on tab to get the file path (second part).
+                    line.split_once('\t')
+                        .map(|(_, path)| Utf8PathBuf::from(path))
+                })
+                .collect();
+            Ok(MergeResult::Conflict(conflicted_files))
+        }
+    }
+
+    /// Abort an in-progress merge.
+    pub fn abort_merge(&self) -> Result<()> {
+        Self::run_git_command(&self.workspace_root, &["merge", "--abort"])?;
+        Ok(())
+    }
+
+    /// Add all changes and complete a merge after conflicts have been
+    /// resolved.
+    pub fn complete_merge(&self) -> Result<()> {
+        Self::run_git_command(&self.workspace_root, &["add", "-A"])?;
+        Self::run_git_command(&self.workspace_root, &["commit", "--no-edit"])?;
+        Ok(())
+    }
+
+    /// Attempt to rebase the current branch onto a target branch.
+    ///
+    /// Returns `RebaseResult::Clean` if the rebase completed cleanly, or
+    /// `RebaseResult::Conflict` with the list of conflicted files if there
+    /// were conflicts (the working directory will be in a conflicted state).
+    pub fn try_rebase_onto(&self, target: &str) -> Result<RebaseResult> {
+        // Run the rebase command.
+        let status = Self::run_git_command_unchecked(
+            &self.workspace_root,
+            &["rebase", target],
+        )?;
+
+        if status.success() {
+            return Ok(RebaseResult::Clean);
+        }
+
+        // Use git ls-files --unmerged to check for conflicts.
+        let unmerged = Self::run_git_command(
+            &self.workspace_root,
+            &["ls-files", "--unmerged"],
+        )?;
+
+        if unmerged.is_empty() {
+            Ok(RebaseResult::Clean)
+        } else {
+            let conflicted_files: BTreeSet<Utf8PathBuf> = unmerged
+                .lines()
+                .filter_map(|line| {
+                    line.split_once('\t')
+                        .map(|(_, path)| Utf8PathBuf::from(path))
+                })
+                .collect();
+            Ok(RebaseResult::Conflict(conflicted_files))
+        }
+    }
+
+    /// Abort an in-progress rebase.
+    pub fn abort_rebase(&self) -> Result<()> {
+        Self::run_git_command(&self.workspace_root, &["rebase", "--abort"])?;
+        Ok(())
+    }
+
+    /// Add all changes and continue a rebase after conflicts have been
+    /// resolved.
+    pub fn continue_rebase(&self) -> Result<()> {
+        Self::run_git_command(&self.workspace_root, &["add", "-A"])?;
+        Self::run_git_command(&self.workspace_root, &["rebase", "--continue"])?;
+        Ok(())
+    }
+
     /// Helper to run git commands in a directory.
     fn run_git_command(cwd: &Utf8Path, args: &[&str]) -> Result<String> {
         let git =
             std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
         let output = Command::new(git)
             .current_dir(cwd)
+            // Prevent interactive prompts (e.g., during rebase --continue).
+            .env("EDITOR", "true")
             .args(args)
             .output()
             .context("failed to execute git command")?;
 
         if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow!(
-                "git command failed: git {}\nstderr: {}",
+                "git command failed: git {}\nstdout: {}\nstderr: {}",
                 args.join(" "),
+                stdout,
                 stderr
             ));
         }
 
         String::from_utf8(output.stdout)
             .context("git command output was not valid UTF-8")
+    }
+
+    /// Helper to run git commands that may fail, returning the exit status.
+    fn run_git_command_unchecked(
+        cwd: &Utf8Path,
+        args: &[&str],
+    ) -> Result<ExitStatus> {
+        let git =
+            std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
+        let output = Command::new(git)
+            .current_dir(cwd)
+            // Prevent interactive prompts (e.g., during rebase --continue).
+            .env("EDITOR", "true")
+            .args(args)
+            .output()
+            .context("failed to execute git command")?;
+        Ok(output.status)
     }
 
     /// List all files in the documents directory.
@@ -571,6 +796,149 @@ impl TestEnvironment {
             }
         }
         Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // jj (Jujutsu) methods
+    // -------------------------------------------------------------------------
+
+    /// Initialize jj in the existing git repository (colocated mode).
+    pub fn jj_init(&self) -> Result<()> {
+        self.run_jj_command(&["git", "init", "--colocate"])?;
+        Ok(())
+    }
+
+    /// Attempt to create a merge commit from two git branches using jj.
+    ///
+    /// Uses `jj new branch1 branch2 -m "message"` to create a merge commit.
+    /// Returns `JjMergeResult::Clean` if the merge has no conflicts, or
+    /// `JjMergeResult::Conflict` with the set of conflicted files.
+    pub fn jj_try_merge(
+        &self,
+        branch1: &str,
+        branch2: &str,
+        message: &str,
+    ) -> Result<JjMergeResult> {
+        // Create a merge commit with jj new.
+        self.run_jj_command(&["new", branch1, branch2, "-m", message])?;
+
+        // Check if the resulting commit has conflicts.
+        if self.jj_has_conflicts("@")? {
+            let conflicts = self.jj_get_conflicted_files(branch1, "@")?;
+            Ok(JjMergeResult::Conflict(conflicts))
+        } else {
+            Ok(JjMergeResult::Clean)
+        }
+    }
+
+    /// Attempt to rebase a git branch onto another using jj.
+    ///
+    /// Uses `jj rebase -s source -d dest` to rebase the source commit and its
+    /// descendants onto the destination. Returns `JjRebaseResult::Clean` if the
+    /// rebase has no conflicts, or `JjRebaseResult::Conflict` with the set of
+    /// conflicted files.
+    pub fn jj_try_rebase(
+        &self,
+        source: &str,
+        dest: &str,
+    ) -> Result<JjRebaseResult> {
+        // Rebase source and descendants onto dest.
+        self.run_jj_command(&["rebase", "-s", source, "-d", dest])?;
+
+        // Check if the rebased commit has conflicts.
+        if self.jj_has_conflicts(source)? {
+            let conflicts = self.jj_get_conflicted_files(dest, source)?;
+            Ok(JjRebaseResult::Conflict(conflicts))
+        } else {
+            Ok(JjRebaseResult::Clean)
+        }
+    }
+
+    /// Resolve jj conflicts by running generate and committing the resolution.
+    ///
+    /// After a merge or rebase creates conflicts, this method:
+    /// 1. Runs generate to create the correct files
+    /// 2. Commits the working copy to complete the merge/rebase
+    /// 3. Verifies the result has no conflicts
+    pub fn jj_resolve_conflicts(&self, apis: &ManagedApis) -> Result<()> {
+        self.generate_documents(apis)?;
+        self.run_jj_command(&["commit", "-m", "resolve conflicts"])?;
+
+        // Verify the parent commit (the resolved merge/rebase) has no conflicts.
+        if self.jj_has_conflicts("@-")? {
+            return Err(anyhow::anyhow!(
+                "jj conflict resolution failed: @- still has conflicts"
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Check if a jj revision has conflicts.
+    fn jj_has_conflicts(&self, rev: &str) -> Result<bool> {
+        let output = self.run_jj_command(&[
+            "log",
+            "-r",
+            rev,
+            "-T",
+            "conflict",
+            "--no-graph",
+        ])?;
+        Ok(output.trim() == "true")
+    }
+
+    /// Get the set of conflicted files using `jj diff --types`.
+    ///
+    /// Parses the output of `jj diff --from from --to to --types` and returns
+    /// files where the second character is 'C' (conflict).
+    fn jj_get_conflicted_files(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<BTreeSet<Utf8PathBuf>> {
+        let output = self
+            .run_jj_command(&["diff", "--from", from, "--to", to, "--types"])?;
+
+        let mut conflicts = BTreeSet::new();
+        for line in output.lines() {
+            // Format: "FC path/to/file" where F=file type, C=conflict.
+            let line = line.trim();
+            if line.len() >= 2 {
+                let chars: Vec<char> = line.chars().collect();
+                // Second character is 'C' for conflict.
+                if chars.get(1) == Some(&'C') {
+                    // Skip the type prefix and space to get the path.
+                    if let Some(path) = line.get(3..) {
+                        conflicts.insert(Utf8PathBuf::from(path));
+                    }
+                }
+            }
+        }
+        Ok(conflicts)
+    }
+
+    /// Helper to run jj commands in the workspace root.
+    fn run_jj_command(&self, args: &[&str]) -> Result<String> {
+        let jj = std::env::var("JJ").unwrap_or_else(|_| "jj".to_string());
+        let output = Command::new(&jj)
+            .current_dir(&self.workspace_root)
+            .args(args)
+            .output()
+            .context("failed to execute jj command")?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "jj command failed: jj {}\nstdout: {}\nstderr: {}",
+                args.join(" "),
+                stdout,
+                stderr
+            ));
+        }
+
+        String::from_utf8(output.stdout)
+            .context("jj command output was not valid UTF-8")
     }
 }
 

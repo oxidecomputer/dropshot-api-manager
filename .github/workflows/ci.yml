@@ -57,6 +57,9 @@ jobs:
         with:
           key: partition-${{ matrix.partition }}
       - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jj-cli
       - name: Build
         run: cargo build
       - name: Run tests

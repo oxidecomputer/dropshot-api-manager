@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Helpers for accessing data stored in git
 
@@ -90,13 +90,51 @@ pub enum CommitHashParseError {
     InvalidHex(hex::FromHexError),
 }
 
-/// Given a revision, return its merge base with HEAD
+/// Given a revision, return its merge base with the current working state.
+///
+/// If we're in the middle of a merge (MERGE_HEAD exists), we compute merge
+/// bases for both HEAD and MERGE_HEAD, then use whichever is the descendant
+/// (more recent). This handles both merge directions correctly:
+///
+/// - Merging main into branch: HEAD (p1) = branch, MERGE_HEAD (p2) = main.
+///   We want main's merge base (which is main itself, containing all blessed
+///   files).
+/// - Merging branch into main: HEAD (p1) = main, MERGE_HEAD (p2) = branch. We
+///   want main's merge base (main itself), not branch's merge base (the common
+///   ancestor before main's changes).
+///
+/// In the rare case where the two merge bases are independent (neither is an
+/// ancestor of the other), we fall back to HEAD's merge base.
 pub fn git_merge_base_head(
     repo_root: &Utf8Path,
     revision: &GitRevision,
 ) -> anyhow::Result<GitRevision> {
+    if git_merge_head_exists(repo_root) {
+        // We're in a merge. Compute merge bases for both HEAD and MERGE_HEAD.
+        let mb_head = git_merge_base(repo_root, "HEAD", revision)?;
+        let mb_merge_head = git_merge_base(repo_root, "MERGE_HEAD", revision)?;
+
+        // Use whichever merge base is the descendant (more recent). If mb_head
+        // is an ancestor of mb_merge_head, use mb_merge_head (it's newer).
+        // Otherwise, use mb_head (either it's newer, or they're parallel).
+        if git_is_ancestor(repo_root, &mb_head, &mb_merge_head)? {
+            Ok(mb_merge_head)
+        } else {
+            Ok(mb_head)
+        }
+    } else {
+        git_merge_base(repo_root, "HEAD", revision)
+    }
+}
+
+/// Compute the merge base between a reference and a revision.
+fn git_merge_base(
+    repo_root: &Utf8Path,
+    base_ref: &str,
+    revision: &GitRevision,
+) -> anyhow::Result<GitRevision> {
     let mut cmd = git_start(repo_root);
-    cmd.arg("merge-base").arg("--all").arg("HEAD").arg(revision.as_str());
+    cmd.arg("merge-base").arg("--all").arg(base_ref).arg(revision.as_str());
     let label = cmd_label(&cmd);
     let stdout = do_run(&mut cmd)?;
     let stdout = stdout.trim();
@@ -108,6 +146,33 @@ pub fn git_merge_base_head(
         );
     }
     Ok(GitRevision::from(stdout.to_owned()))
+}
+
+/// Check if `potential_ancestor` is an ancestor of `commit`.
+fn git_is_ancestor(
+    repo_root: &Utf8Path,
+    potential_ancestor: &GitRevision,
+    commit: &GitRevision,
+) -> anyhow::Result<bool> {
+    let mut cmd = git_start(repo_root);
+    cmd.args([
+        "merge-base",
+        "--is-ancestor",
+        potential_ancestor.as_str(),
+        commit.as_str(),
+    ]);
+    // --is-ancestor returns exit code 0 if true, 1 if false.
+    let status =
+        cmd.status().context("running git merge-base --is-ancestor")?;
+    Ok(status.success())
+}
+
+/// Returns true if MERGE_HEAD exists, indicating we're in the middle of a
+/// merge.
+fn git_merge_head_exists(repo_root: &Utf8Path) -> bool {
+    let mut cmd = git_start(repo_root);
+    cmd.args(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
+    matches!(cmd.status(), Ok(status) if status.success())
 }
 
 /// List files recursively under some path `path` in Git revision `revision`.
@@ -180,8 +245,13 @@ pub fn git_first_commit_for_file(
     // We intentionally don't use --follow because Git's rename detection can
     // incorrectly match unrelated files with similar content, causing it to
     // return the wrong commit.
+    //
+    // We use -m to split merge commits, so that files added in merge commits
+    // are properly detected. Without -m, git log may not show files that were
+    // added in merge commits.
     let mut cmd = git_start(repo_root);
     cmd.arg("log")
+        .arg("-m")
         .arg("--diff-filter=A")
         .arg("--format=%H")
         .arg(revision.as_str())

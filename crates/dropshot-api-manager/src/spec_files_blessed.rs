@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Newtype and collection to represent OpenAPI documents from the "blessed"
 //! source
@@ -12,11 +12,12 @@ use crate::{
     },
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
+        SpecFileInfo,
     },
 };
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use dropshot_api_manager_types::ApiIdent;
+use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
 use std::{collections::BTreeMap, ops::Deref};
 
 /// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents from
@@ -41,6 +42,7 @@ NewtypeFrom! { () pub struct BlessedApiSpecFile(ApiSpecFile); }
 
 impl ApiLoad for BlessedApiSpecFile {
     const MISCONFIGURATIONS_ALLOWED: bool = true;
+    type Unparseable = std::convert::Infallible;
 
     fn make_item(raw: ApiSpecFile) -> Self {
         BlessedApiSpecFile(raw)
@@ -55,13 +57,28 @@ impl ApiLoad for BlessedApiSpecFile {
             item.spec_file_name()
         );
     }
+
+    fn make_unparseable(
+        _name: ApiSpecFileName,
+        _contents: Vec<u8>,
+    ) -> Option<Self::Unparseable> {
+        None
+    }
+
+    fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
+        match unparseable {}
+    }
+
+    fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
+        match unparseable {}
+    }
 }
 
 impl AsRawFiles for BlessedApiSpecFile {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a ApiSpecFile> + 'a> {
-        Box::new(std::iter::once(self.deref()))
+    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
+        Box::new(std::iter::once(self.deref() as &dyn SpecFileInfo))
     }
 }
 
@@ -362,7 +379,8 @@ impl BlessedFiles {
             }
         }
 
-        Ok(BlessedFiles { files: api_files.into_map(), git_refs })
+        let files = api_files.into_map();
+        Ok(BlessedFiles { files, git_refs })
     }
 }
 

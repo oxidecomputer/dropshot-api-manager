@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Integration tests for lockstep APIs in dropshot-api-manager.
 //!
@@ -102,6 +102,59 @@ fn test_empty_api_set() -> Result<()> {
     // No documents should be generated.
     let files = env.list_document_files()?;
     assert!(files.is_empty());
+
+    Ok(())
+}
+
+/// Test that lockstep documents with conflict markers are handled gracefully.
+///
+/// When a lockstep document has conflict markers, the file becomes unparseable.
+/// The API manager should detect this and regenerate the document on the next
+/// generate run.
+#[test]
+fn test_unparseable_conflict_markers() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let apis = lockstep_health_apis()?;
+
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    let conflict_content = r#"<<<<<<< HEAD
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Health API",
+    "version": "1.0.0"
+  }
+}
+=======
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Health API Modified",
+    "version": "1.0.0"
+  }
+}
+>>>>>>> branch
+"#;
+    env.create_file("documents/health.json", conflict_content)?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&apis)?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    let document_content = env.read_lockstep_document("health")?;
+    let parsed: OpenAPI = serde_json::from_str(&document_content)
+        .expect("regenerated document is valid JSON");
+    assert_eq!(parsed.openapi, "3.0.3");
+    assert_eq!(parsed.info.title, "Health API");
 
     Ok(())
 }
