@@ -3,7 +3,9 @@
 //! Working with OpenAPI documents, whether generated, blessed, or local to this
 //! repository
 
-use crate::{apis::ManagedApis, environment::ErrorAccumulator};
+use crate::{
+    apis::ManagedApis, environment::ErrorAccumulator, git::GitCommitHash,
+};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
@@ -18,6 +20,16 @@ use std::{
     fmt::Debug,
 };
 use thiserror::Error;
+
+/// Key for looking up git ref data by API identity and version.
+///
+/// Used by both blessed and local file containers to index git ref
+/// information.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub(crate) struct GitRefKey {
+    pub(crate) ident: ApiIdent,
+    pub(crate) version: semver::Version,
+}
 
 /// Represents a local file that exists on disk but couldn't be parsed.
 ///
@@ -851,6 +863,25 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
+    /// Set the git ref commit on the most recently loaded item at (ident,
+    /// version).
+    ///
+    /// Called after `load_contents` for gitref files to attach the commit
+    /// hash to the loaded file. No-op if the item doesn't exist (e.g.,
+    /// `load_contents` failed) or the `ApiLoad` impl ignores it.
+    pub fn set_git_ref_commit(
+        &mut self,
+        ident: &ApiIdent,
+        version: &semver::Version,
+        commit: GitCommitHash,
+    ) {
+        if let Some(api_files) = self.spec_files.get_mut(ident) {
+            if let Some(item) = api_files.spec_files.get_mut(version) {
+                item.set_git_ref_commit(commit);
+            }
+        }
+    }
+
     /// Returns the underlying set of files loaded
     pub fn into_map(self) -> BTreeMap<ApiIdent, ApiFiles<T>> {
         self.spec_files
@@ -997,6 +1028,12 @@ pub trait ApiLoad {
 
     /// Add unparseable file data to an existing entry.
     fn extend_unparseable(&mut self, unparseable: Self::Unparseable);
+
+    /// Set the git ref commit hash on the most recently loaded item.
+    ///
+    /// The default implementation does nothing. Only
+    /// `Vec<LocalApiSpecFile>` overrides this.
+    fn set_git_ref_commit(&mut self, _commit: GitCommitHash) {}
 }
 
 /// Return the hash of an OpenAPI document file for the purposes of this tool

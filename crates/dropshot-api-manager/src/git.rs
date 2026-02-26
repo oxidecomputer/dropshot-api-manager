@@ -149,7 +149,7 @@ fn git_merge_base(
 }
 
 /// Check if `potential_ancestor` is an ancestor of `commit`.
-fn git_is_ancestor(
+pub(crate) fn git_is_ancestor(
     repo_root: &Utf8Path,
     potential_ancestor: &GitRevision,
     commit: &GitRevision,
@@ -161,10 +161,34 @@ fn git_is_ancestor(
         potential_ancestor.as_str(),
         commit.as_str(),
     ]);
+    let output =
+        cmd.output().context("running git merge-base --is-ancestor")?;
     // --is-ancestor returns exit code 0 if true, 1 if false.
-    let status =
-        cmd.status().context("running git merge-base --is-ancestor")?;
-    Ok(status.success())
+    // Other exit codes (e.g. 128 for invalid objects) indicate real errors.
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        Some(code) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(anyhow::anyhow!(
+                "git merge-base --is-ancestor exited with unexpected \
+                 code {code} (args: {} {}): {}",
+                potential_ancestor.as_str(),
+                commit.as_str(),
+                stderr.trim(),
+            ))
+        }
+        None => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(anyhow::anyhow!(
+                "git merge-base --is-ancestor terminated by signal \
+                 (args: {} {}): {}",
+                potential_ancestor.as_str(),
+                commit.as_str(),
+                stderr.trim(),
+            ))
+        }
+    }
 }
 
 /// Returns true if MERGE_HEAD exists, indicating we're in the middle of a
