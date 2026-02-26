@@ -256,6 +256,13 @@ pub enum Problem<'a> {
     },
 
     #[error(
+        "No generated OpenAPI document was found for this API. When using \
+         --generated-from-dir, the specified directory must contain \
+         documents for all configured APIs."
+    )]
+    GeneratedSourceMissing { api_ident: ApiIdent },
+
+    #[error(
         "Generated OpenAPI document for API {api_ident:?} version {version} \
          is not valid"
     )]
@@ -403,6 +410,7 @@ impl<'a> Problem<'a> {
                     generated,
                 })
             }
+            Problem::GeneratedSourceMissing { .. } => None,
             Problem::GeneratedValidationError { .. } => None,
             Problem::ExtraFileStale { path, check_stale, .. } => {
                 Some(Fix::UpdateExtraFile { path, check_stale })
@@ -892,8 +900,34 @@ impl<'a> Resolved<'a> {
             .map(|api| {
                 let ident = api.ident().clone();
                 let api_blessed = blessed.get(&ident);
-                // We should have generated an API for every supported version.
-                let api_generated = generated.get(&ident).unwrap();
+                let Some(api_generated) = generated.get(&ident) else {
+                    // No generated documents for this API. This can happen
+                    // when --generated-from-dir points to a directory that
+                    // doesn't contain documents for all configured APIs.
+                    // Report an unfixable problem for each version.
+                    let by_version = api
+                        .iter_versions_semver()
+                        .map(|version| {
+                            let kind = if api.is_lockstep() {
+                                ResolutionKind::Lockstep
+                            } else {
+                                ResolutionKind::NewLocally
+                            };
+                            (
+                                version.clone(),
+                                Resolution {
+                                    kind,
+                                    problems: vec![
+                                        Problem::GeneratedSourceMissing {
+                                            api_ident: ident.clone(),
+                                        },
+                                    ],
+                                },
+                            )
+                        })
+                        .collect();
+                    return (ident, ApiResolved { by_version, symlink: None });
+                };
                 let api_local = local.get(&ident);
                 (
                     api.ident().clone(),
@@ -1107,7 +1141,25 @@ fn resolve_api<'a>(
                 let blessed =
                     api_blessed.and_then(|b| b.versions().get(&version));
                 let is_blessed = Some(blessed.is_some());
-                let generated = api_generated.versions().get(&version).unwrap();
+                let Some(generated) = api_generated.versions().get(&version)
+                else {
+                    // This version is missing from the generated source
+                    // (e.g. --generated-from-dir didn't include it).
+                    let kind = if blessed.is_some() {
+                        ResolutionKind::Blessed
+                    } else {
+                        ResolutionKind::NewLocally
+                    };
+                    return (
+                        version,
+                        Resolution {
+                            kind,
+                            problems: vec![Problem::GeneratedSourceMissing {
+                                api_ident: api.ident().clone(),
+                            }],
+                        },
+                    );
+                };
                 let local = api_local
                     .and_then(|b| b.versions().get(&version))
                     .map(|v| v.as_slice())
@@ -1146,9 +1198,13 @@ fn resolve_api<'a>(
         }
 
         // Check the "latest" symlink.
-        let latest_generated = api_generated.latest_link().expect(
-            "\"generated\" source should always have a \"latest\" link",
-        );
+        let Some(latest_generated) = api_generated.latest_link() else {
+            // No "latest" link in the generated source (e.g.
+            // --generated-from-dir didn't include the latest version).
+            // The per-version problems above already capture the missing
+            // versions, so skip the symlink check.
+            return ApiResolved { by_version, symlink: None };
+        };
         let generated_version = latest_generated.version();
         let resolution =
             by_version.get(generated_version).unwrap_or_else(|| {
@@ -1316,10 +1372,16 @@ fn resolve_api_lockstep<'a>(
         })
         .unwrap();
 
-    let generated = api_generated
-        .versions()
-        .get(version)
-        .expect("generated OpenAPI document for lockstep API");
+    let Some(generated) = api_generated.versions().get(version) else {
+        // Missing from the generated source (e.g. --generated-from-dir
+        // didn't include this API's document).
+        return BTreeMap::from([(
+            version.clone(),
+            Resolution::new_lockstep(vec![Problem::GeneratedSourceMissing {
+                api_ident: api.ident().clone(),
+            }]),
+        )]);
+    };
 
     // We may or may not have found a local OpenAPI document for this API.
     let local = api_local
