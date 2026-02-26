@@ -186,15 +186,15 @@ impl<'a> ApiCompatPointer<'a> {
 
         // If one of the pointers (transformed into a prefix-free string by
         // adding a trailing `/`) is a parent of the other, return the child.
-        if let Some(suffix) = blessed_pointer.strip_prefix(generated_pointer) {
-            if suffix.starts_with('/') {
-                return ApiCompatPointer::Blessed(blessed_pointer);
-            }
+        if let Some(suffix) = blessed_pointer.strip_prefix(generated_pointer)
+            && suffix.starts_with('/')
+        {
+            return ApiCompatPointer::Blessed(blessed_pointer);
         }
-        if let Some(suffix) = generated_pointer.strip_prefix(blessed_pointer) {
-            if suffix.starts_with('/') {
-                return ApiCompatPointer::Generated(generated_pointer);
-            }
+        if let Some(suffix) = generated_pointer.strip_prefix(blessed_pointer)
+            && suffix.starts_with('/')
+        {
+            return ApiCompatPointer::Generated(generated_pointer);
         }
 
         // Neither pointer is a parent of the other, so we need to treat this as
