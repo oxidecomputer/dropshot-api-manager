@@ -395,7 +395,7 @@ impl ManagedApis {
     /// older versions.
     ///
     /// Individual APIs can override this setting using
-    /// [`ManagedApi::use_git_ref_storage`] or
+    /// [`ManagedApi::with_git_ref_storage`] or
     /// [`ManagedApi::disable_git_ref_storage`].
     pub fn with_git_ref_storage(mut self) -> Self {
         self.use_git_ref_storage = true;
