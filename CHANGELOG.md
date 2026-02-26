@@ -3,6 +3,18 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+- Support for Git stubs for versioned APIs, which enable Git's rename detection to work on blessed versions. For more information, see [oxidecomputer/git-stub](https://github.com/oxidecomputer/git-stub) and [RFD 634](https://rfd.shared.oxide.computer/rfd/0634).
+- The API manager now handles unparseable files (e.g., those with merge conflict markers) properly. This is a fix for a pre-existing issue: in some situations, merge conflicts could have occurred with generated files. However, the issue is exacerbated by Git stub support since that causes rename detection to trigger more often.
+
+  As of this version of dropshot-api-manager, all merge conflict situations can be addressed by running `cargo xtask openapi generate` or equivalent.
+
+### Fixed
+
+- For blessed versions, merge base detection now recognizes Git's `MERGE_HEAD`. It'll use whichever of `HEAD` or `MERGE_HEAD` is a descendant of the other (so it works with both first-parent and second-parent merges).
+- Fixes for several bugs found while building out a more robust test suite.
+
 ## [0.3.0] - 2025-12-19
 
 ### Added
