@@ -6,7 +6,7 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::{GitCommitHash, GitRef},
+    git::{GitCommitHash, GitRef, GitRevision},
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitRef},
@@ -256,6 +256,13 @@ pub enum Problem<'a> {
     },
 
     #[error(
+        "No generated OpenAPI document was found for this API. When using \
+         --generated-from-dir, the specified directory must contain \
+         documents for all configured APIs."
+    )]
+    GeneratedSourceMissing { api_ident: ApiIdent },
+
+    #[error(
         "Generated OpenAPI document for API {api_ident:?} version {version} \
          is not valid"
     )]
@@ -332,6 +339,13 @@ pub enum Problem<'a> {
     DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
 
     #[error(
+        "Git ref file has an outdated commit reference that is no longer \
+         an ancestor of the merge base. This can happen after a rebase or \
+         force-push. This tool can update the git ref for you."
+    )]
+    GitRefCommitStale { local_file: &'a LocalApiSpecFile, git_ref: GitRef },
+
+    #[error(
         "The first commit for this blessed version could not be determined. This \
          may indicate a corrupted git repository or other git-related issue. Git \
          ref storage requires complete git history access"
@@ -396,6 +410,7 @@ impl<'a> Problem<'a> {
                     generated,
                 })
             }
+            Problem::GeneratedSourceMissing { .. } => None,
             Problem::GeneratedValidationError { .. } => None,
             Problem::ExtraFileStale { path, check_stale, .. } => {
                 Some(Fix::UpdateExtraFile { path, check_stale })
@@ -425,6 +440,9 @@ impl<'a> Problem<'a> {
                         local_file.spec_file_name().clone(),
                     ]),
                 })
+            }
+            Problem::GitRefCommitStale { local_file, git_ref } => {
+                Some(Fix::UpdateGitRef { local_file, git_ref })
             }
             Problem::GitRefFirstCommitUnknown { .. } => None,
             Problem::UnparseableLocalFile { unparseable_file } => {
@@ -471,6 +489,12 @@ pub enum Fix<'a> {
         blessed: &'a BlessedApiSpecFile,
         /// If Some, regenerate as a git ref instead of JSON.
         git_ref: Option<&'a GitRef>,
+    },
+    /// Update a git ref file whose commit hash has become stale (e.g.,
+    /// after a rebase).
+    UpdateGitRef {
+        local_file: &'a LocalApiSpecFile,
+        git_ref: &'a GitRef,
     },
     /// Delete an unparseable file (e.g., one with merge conflict markers).
     DeleteUnparseableFile {
@@ -552,6 +576,14 @@ impl Display for Fix<'_> {
                     )?;
                 }
             }
+            Fix::UpdateGitRef { local_file, git_ref } => {
+                writeln!(
+                    f,
+                    "update git ref {} to commit {}",
+                    local_file.spec_file_name().path(),
+                    git_ref.commit,
+                )?;
+            }
             Fix::DeleteUnparseableFile { path } => {
                 writeln!(f, "delete unparseable file {path}")?;
             }
@@ -602,6 +634,10 @@ impl Fix<'_> {
                     // Overwrites the corrupted local file.
                     paths.insert(local_file.spec_file_name().path().to_owned());
                 }
+            }
+            Fix::UpdateGitRef { local_file, .. } => {
+                // Overwrites the existing .gitref file in place.
+                paths.insert(local_file.spec_file_name().path().to_owned());
             }
             Fix::DeleteUnparseableFile { .. } => {}
         }
@@ -768,6 +804,18 @@ impl Fix<'_> {
                     )])
                 }
             }
+            Fix::UpdateGitRef { local_file, git_ref } => {
+                let git_ref_path =
+                    root.join(local_file.spec_file_name().path());
+                let overwrite_status = overwrite_file(
+                    &git_ref_path,
+                    git_ref.to_file_contents().as_bytes(),
+                )?;
+                Ok(vec![format!(
+                    "updated git ref {}: {:?}",
+                    git_ref_path, overwrite_status
+                )])
+            }
             Fix::DeleteUnparseableFile { path } => {
                 let full_path = root.join(path);
                 fs_err::remove_file(&full_path)?;
@@ -852,8 +900,34 @@ impl<'a> Resolved<'a> {
             .map(|api| {
                 let ident = api.ident().clone();
                 let api_blessed = blessed.get(&ident);
-                // We should have generated an API for every supported version.
-                let api_generated = generated.get(&ident).unwrap();
+                let Some(api_generated) = generated.get(&ident) else {
+                    // No generated documents for this API. This can happen
+                    // when --generated-from-dir points to a directory that
+                    // doesn't contain documents for all configured APIs.
+                    // Report an unfixable problem for each version.
+                    let by_version = api
+                        .iter_versions_semver()
+                        .map(|version| {
+                            let kind = if api.is_lockstep() {
+                                ResolutionKind::Lockstep
+                            } else {
+                                ResolutionKind::NewLocally
+                            };
+                            (
+                                version.clone(),
+                                Resolution {
+                                    kind,
+                                    problems: vec![
+                                        Problem::GeneratedSourceMissing {
+                                            api_ident: ident.clone(),
+                                        },
+                                    ],
+                                },
+                            )
+                        })
+                        .collect();
+                    return (ident, ApiResolved { by_version, symlink: None });
+                };
                 let api_local = local.get(&ident);
                 (
                     api.ident().clone(),
@@ -1031,7 +1105,9 @@ fn resolve_api<'a>(
             } else {
                 // The latest version is blessed. Try to find its first commit.
                 match all_blessed.git_ref(api.ident(), latest_version) {
-                    Some(gr) => match gr.to_git_ref(&env.repo_root) {
+                    Some(gr) => match gr
+                        .to_git_ref(&env.repo_root, all_blessed.merge_base())
+                    {
                         Ok(git_ref) => {
                             (LatestFirstCommit::Blessed(git_ref.commit), None)
                         }
@@ -1065,7 +1141,25 @@ fn resolve_api<'a>(
                 let blessed =
                     api_blessed.and_then(|b| b.versions().get(&version));
                 let is_blessed = Some(blessed.is_some());
-                let generated = api_generated.versions().get(&version).unwrap();
+                let Some(generated) = api_generated.versions().get(&version)
+                else {
+                    // This version is missing from the generated source
+                    // (e.g. --generated-from-dir didn't include it).
+                    let kind = if blessed.is_some() {
+                        ResolutionKind::Blessed
+                    } else {
+                        ResolutionKind::NewLocally
+                    };
+                    return (
+                        version,
+                        Resolution {
+                            kind,
+                            problems: vec![Problem::GeneratedSourceMissing {
+                                api_ident: api.ident().clone(),
+                            }],
+                        },
+                    );
+                };
                 let local = api_local
                     .and_then(|b| b.versions().get(&version))
                     .map(|v| v.as_slice())
@@ -1085,6 +1179,7 @@ fn resolve_api<'a>(
                     generated,
                     local,
                     latest_first_commit,
+                    all_blessed.merge_base(),
                 );
 
                 (version, resolution)
@@ -1103,9 +1198,13 @@ fn resolve_api<'a>(
         }
 
         // Check the "latest" symlink.
-        let latest_generated = api_generated.latest_link().expect(
-            "\"generated\" source should always have a \"latest\" link",
-        );
+        let Some(latest_generated) = api_generated.latest_link() else {
+            // No "latest" link in the generated source (e.g.
+            // --generated-from-dir didn't include the latest version).
+            // The per-version problems above already capture the missing
+            // versions, so skip the symlink check.
+            return ApiResolved { by_version, symlink: None };
+        };
         let generated_version = latest_generated.version();
         let resolution =
             by_version.get(generated_version).unwrap_or_else(|| {
@@ -1273,10 +1372,16 @@ fn resolve_api_lockstep<'a>(
         })
         .unwrap();
 
-    let generated = api_generated
-        .versions()
-        .get(version)
-        .expect("generated OpenAPI document for lockstep API");
+    let Some(generated) = api_generated.versions().get(version) else {
+        // Missing from the generated source (e.g. --generated-from-dir
+        // didn't include this API's document).
+        return BTreeMap::from([(
+            version.clone(),
+            Resolution::new_lockstep(vec![Problem::GeneratedSourceMissing {
+                api_ident: api.ident().clone(),
+            }]),
+        )]);
+    };
 
     // We may or may not have found a local OpenAPI document for this API.
     let local = api_local
@@ -1342,6 +1447,7 @@ fn resolve_api_version<'a>(
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
     latest_first_commit: LatestFirstCommit,
+    merge_base: Option<&GitRevision>,
 ) -> Resolution<'a> {
     match blessed {
         Some(blessed) => resolve_api_version_blessed(
@@ -1355,6 +1461,7 @@ fn resolve_api_version<'a>(
             generated,
             local,
             latest_first_commit,
+            merge_base,
         ),
         None => resolve_api_version_local(
             env, api, validation, version, generated, local,
@@ -1374,6 +1481,7 @@ fn resolve_api_version_blessed<'a>(
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
     latest_first_commit: LatestFirstCommit,
+    merge_base: Option<&GitRevision>,
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
     let is_latest = version.is_latest;
@@ -1476,7 +1584,7 @@ fn resolve_api_version_blessed<'a>(
     let compute_storage_format =
         |problems: &mut Vec<Problem<'a>>| -> VersionStorageFormat {
             match git_ref {
-                Some(r) => match r.to_git_ref(&env.repo_root) {
+                Some(r) => match r.to_git_ref(&env.repo_root, merge_base) {
                     Ok(current) => {
                         storage_format_for_blessed(latest_first_commit, current)
                     }
@@ -1563,28 +1671,55 @@ fn resolve_api_version_blessed<'a>(
             });
         }
 
+        // Check whether a local git ref file has a stale commit hash
+        // compared to what the blessed source expects. This is shared
+        // between the single-match and duplicate-files branches below.
+        let check_git_ref_staleness =
+            |local_file: &'a LocalApiSpecFile,
+             expected_git_ref: &GitRef,
+             problems: &mut Vec<Problem<'a>>| {
+                // Non-gitref files (JSON) don't have a commit to check.
+                let Some(local_commit) = local_file.git_ref_commit() else {
+                    return;
+                };
+                if *local_commit != expected_git_ref.commit {
+                    problems.push(Problem::GitRefCommitStale {
+                        local_file,
+                        git_ref: expected_git_ref.clone(),
+                    });
+                }
+            };
+
         if matching.is_empty() {
             // Only corrupted files match - they'll be regenerated. Still need
             // to mark non-matching files as extra.
         } else if matching.len() > 1 {
             // We might have both api.json and api.json.gitref for the same
-            // version. Mark the redundant file for deletion.
+            // version. Mark the redundant file for deletion, and check the
+            // non-redundant file for staleness.
             for local_file in matching {
-                let redundant = match (
+                match (
                     &storage_format,
                     local_file.spec_file_name().is_git_ref(),
                 ) {
                     // Should be git ref but have JSON, or should be JSON but
                     // have git ref: this file is redundant.
                     (VersionStorageFormat::GitRef(_), false)
-                    | (VersionStorageFormat::Json, true) => true,
-                    // Format matches, or we had an error: not redundant.
-                    (VersionStorageFormat::GitRef(_), true)
-                    | (VersionStorageFormat::Json, false)
-                    | (VersionStorageFormat::Error, _) => false,
-                };
-                if redundant {
-                    problems.push(Problem::DuplicateLocalFile { local_file });
+                    | (VersionStorageFormat::Json, true) => {
+                        problems
+                            .push(Problem::DuplicateLocalFile { local_file });
+                    }
+                    // Format matches and is a git ref: check for staleness.
+                    (VersionStorageFormat::GitRef(expected_git_ref), true) => {
+                        check_git_ref_staleness(
+                            local_file,
+                            expected_git_ref,
+                            &mut problems,
+                        );
+                    }
+                    // Format matches and is JSON, or error: nothing to do.
+                    (VersionStorageFormat::Json, false)
+                    | (VersionStorageFormat::Error, _) => {}
                 }
             }
         } else {
@@ -1605,8 +1740,16 @@ fn resolve_api_version_blessed<'a>(
                         blessed,
                     });
                 }
-                (VersionStorageFormat::GitRef(_), true)
-                | (VersionStorageFormat::Json, false) => {
+                (VersionStorageFormat::GitRef(expected_git_ref), true) => {
+                    // Format is correct (git ref). Check if the commit
+                    // hash inside the local gitref file still matches.
+                    check_git_ref_staleness(
+                        local_file,
+                        expected_git_ref,
+                        &mut problems,
+                    );
+                }
+                (VersionStorageFormat::Json, false) => {
                     // Format matches preference: no conversion needed.
                 }
                 (VersionStorageFormat::Error, _) => {

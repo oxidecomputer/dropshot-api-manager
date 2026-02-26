@@ -6,7 +6,7 @@
 use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
-    git::GitRef,
+    git::{GitCommitHash, GitRef},
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
         SpecFileInfo,
@@ -15,7 +15,7 @@ use crate::{
 use anyhow::{Context, anyhow};
 use camino::Utf8Path;
 use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Deref};
 
 /// A local file that exists but couldn't be parsed.
 ///
@@ -44,7 +44,13 @@ pub struct LocalApiUnparseable {
 #[derive(Debug)]
 pub enum LocalApiSpecFile {
     /// A valid, successfully parsed OpenAPI document.
-    Valid(Box<ApiSpecFile>),
+    Valid {
+        /// The parsed OpenAPI document.
+        spec: Box<ApiSpecFile>,
+        /// Commit hash parsed from the `.gitref` file, if this file was
+        /// loaded from one. `None` for regular JSON files.
+        git_ref_commit: Option<GitCommitHash>,
+    },
     /// A file that exists but couldn't be parsed.
     Unparseable(LocalApiUnparseable),
 }
@@ -53,7 +59,7 @@ impl LocalApiSpecFile {
     /// Returns the spec file name.
     pub fn spec_file_name(&self) -> &ApiSpecFileName {
         match self {
-            Self::Valid(spec) => spec.spec_file_name(),
+            Self::Valid { spec, .. } => spec.spec_file_name(),
             Self::Unparseable(u) => &u.name,
         }
     }
@@ -63,8 +69,17 @@ impl LocalApiSpecFile {
     /// This works for both valid and unparseable files.
     pub fn contents(&self) -> &[u8] {
         match self {
-            Self::Valid(spec) => spec.contents(),
+            Self::Valid { spec, .. } => spec.contents(),
             Self::Unparseable(u) => &u.contents,
+        }
+    }
+
+    /// Returns the commit hash from a `.gitref` file, if this file was loaded
+    /// from one.
+    pub fn git_ref_commit(&self) -> Option<&GitCommitHash> {
+        match self {
+            Self::Valid { git_ref_commit, .. } => git_ref_commit.as_ref(),
+            Self::Unparseable(_) => None,
         }
     }
 
@@ -81,7 +96,7 @@ impl SpecFileInfo for LocalApiSpecFile {
 
     fn version(&self) -> Option<&semver::Version> {
         match self {
-            Self::Valid(spec) => Some(spec.version()),
+            Self::Valid { spec, .. } => Some(spec.version()),
             Self::Unparseable(_) => None,
         }
     }
@@ -97,12 +112,18 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
     type Unparseable = LocalApiUnparseable;
 
     fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
-        self.push(LocalApiSpecFile::Valid(Box::new(item)));
+        self.push(LocalApiSpecFile::Valid {
+            spec: Box::new(item),
+            git_ref_commit: None,
+        });
         Ok(())
     }
 
     fn make_item(raw: ApiSpecFile) -> Self {
-        vec![LocalApiSpecFile::Valid(Box::new(raw))]
+        vec![LocalApiSpecFile::Valid {
+            spec: Box::new(raw),
+            git_ref_commit: None,
+        }]
     }
 
     fn make_unparseable(
@@ -118,6 +139,14 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
 
     fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
         self.push(LocalApiSpecFile::Unparseable(unparseable));
+    }
+
+    fn set_git_ref_commit(&mut self, commit: GitCommitHash) {
+        if let Some(LocalApiSpecFile::Valid { git_ref_commit, .. }) =
+            self.last_mut()
+        {
+            *git_ref_commit = Some(commit);
+        }
     }
 }
 
@@ -137,12 +166,17 @@ impl AsRawFiles for Vec<LocalApiSpecFile> {
 /// For more on what's been validated at this point, see
 /// [`ApiSpecFilesBuilder`].
 #[derive(Debug, Default)]
-pub struct LocalFiles(BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>);
+pub struct LocalFiles {
+    /// The loaded local files.
+    files: BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>,
+}
 
-NewtypeDeref! {
-    () pub struct LocalFiles(
-        BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>
-    );
+impl Deref for LocalFiles {
+    type Target = BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.files
+    }
 }
 
 impl LocalFiles {
@@ -163,13 +197,13 @@ impl LocalFiles {
     ) -> anyhow::Result<LocalFiles> {
         let api_files =
             walk_local_directory(dir, apis, error_accumulator, repo_root)?;
-        Ok(Self::from(api_files))
+        Ok(LocalFiles { files: api_files.into_map() })
     }
 }
 
 impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
     fn from(api_files: ApiSpecFilesBuilder<Vec<LocalApiSpecFile>>) -> Self {
-        LocalFiles(api_files.into_map())
+        LocalFiles { files: api_files.into_map() }
     }
 }
 
@@ -382,18 +416,33 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
                 continue;
             }
 
+            // If the git ref is syntactically valid but can't be resolved
+            // (e.g., the commit or path no longer exists after a rebase or
+            // force-push), treat it as unparseable so generate can delete
+            // and recreate it.
             let contents = match git_ref.read_contents(repo_root) {
                 Ok(contents) => contents,
                 Err(error) => {
-                    api_files.load_error(error.context(format!(
-                        "failed to read content for git ref {:?}",
-                        entry.path()
-                    )));
+                    api_files.load_unparseable(
+                        spec_file_name,
+                        git_ref_contents.into_bytes(),
+                        error.context(format!(
+                            "git ref file {:?} could not be resolved",
+                            entry.path()
+                        )),
+                    );
                     continue;
                 }
             };
 
+            // Extract the version before spec_file_name is moved into
+            // load_contents.
+            let version = spec_file_name.version().cloned();
+            let commit = git_ref.commit;
             api_files.load_contents(spec_file_name, contents);
+            if let Some(version) = version {
+                api_files.set_git_ref_commit(&ident, &version, commit);
+            }
             continue;
         }
 

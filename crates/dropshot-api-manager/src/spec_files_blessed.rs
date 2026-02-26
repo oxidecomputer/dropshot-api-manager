@@ -8,11 +8,11 @@ use crate::{
     environment::ErrorAccumulator,
     git::{
         GitCommitHash, GitRef, GitRevision, git_first_commit_for_file,
-        git_ls_tree, git_merge_base_head, git_show_file,
+        git_is_ancestor, git_ls_tree, git_merge_base_head, git_show_file,
     },
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        SpecFileInfo,
+        GitRefKey, SpecFileInfo,
     },
 };
 use anyhow::{anyhow, bail};
@@ -163,11 +163,33 @@ pub enum BlessedGitRef {
 impl BlessedGitRef {
     /// Convert to a `GitRef` for reading content.
     ///
-    /// For `Known` variants, this is a simple conversion. For `Lazy` variants,
-    /// this calls `git log` to find the first commit that introduced the file.
-    pub fn to_git_ref(&self, repo_root: &Utf8Path) -> anyhow::Result<GitRef> {
+    /// For `Known` variants, this validates that the stored commit is an
+    /// ancestor of the merge base. If it is not (e.g., after a rebase or
+    /// force-push), the correct commit is recomputed via `git log`. For
+    /// `Lazy` variants, this always calls `git log` to find the first commit
+    /// that introduced the file.
+    ///
+    /// If `merge_base` is `None` (directory-based loading), `Known` commits
+    /// are trusted as-is.
+    pub fn to_git_ref(
+        &self,
+        repo_root: &Utf8Path,
+        merge_base: Option<&GitRevision>,
+    ) -> anyhow::Result<GitRef> {
         match self {
             BlessedGitRef::Known { commit, path } => {
+                if let Some(merge_base) = merge_base {
+                    // Check that the stored commit is still an ancestor
+                    // of the merge base. If not, the commit is stale
+                    // (e.g., after a rebase) and needs to be recomputed.
+                    let commit_rev = GitRevision::from(*commit);
+                    if !git_is_ancestor(repo_root, &commit_rev, merge_base)? {
+                        let commit = git_first_commit_for_file(
+                            repo_root, merge_base, path,
+                        )?;
+                        return Ok(GitRef { commit, path: path.clone() });
+                    }
+                }
                 Ok(GitRef { commit: *commit, path: path.clone() })
             }
             BlessedGitRef::Lazy { revision, path } => {
@@ -217,13 +239,6 @@ impl<'a> BlessedPathKind<'a> {
     }
 }
 
-/// Key for looking up git refs by API and version.
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-struct GitRefKey {
-    ident: ApiIdent,
-    version: semver::Version,
-}
-
 /// Container for OpenAPI documents from the "blessed" source (usually Git).
 ///
 /// **Be sure to check for load errors and warnings before using this
@@ -237,6 +252,11 @@ pub struct BlessedFiles {
     files: BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>,
     /// Git refs for each blessed file, keyed by (ident, version).
     git_refs: BTreeMap<GitRefKey, BlessedGitRef>,
+    /// The merge base used when loading blessed files from git.
+    ///
+    /// This is `Some` when loaded via `load_from_git_parent_branch` or
+    /// `load_from_git_revision`, and `None` when loaded from a directory.
+    merge_base: Option<GitRevision>,
 }
 
 impl Deref for BlessedFiles {
@@ -259,6 +279,14 @@ impl BlessedFiles {
     ) -> Option<&BlessedGitRef> {
         self.git_refs
             .get(&GitRefKey { ident: ident.clone(), version: version.clone() })
+    }
+
+    /// Returns the merge base used when loading blessed files from git.
+    ///
+    /// This is `Some` when loaded from git, and `None` when loaded from a
+    /// directory.
+    pub fn merge_base(&self) -> Option<&GitRevision> {
+        self.merge_base.as_ref()
     }
 }
 
@@ -432,13 +460,18 @@ impl BlessedFiles {
         }
 
         let files = api_files.into_map();
-        Ok(BlessedFiles { files, git_refs })
+        Ok(BlessedFiles { files, git_refs, merge_base: Some(commit.clone()) })
     }
 }
 
 impl<'a> From<ApiSpecFilesBuilder<'a, BlessedApiSpecFile>> for BlessedFiles {
     fn from(api_files: ApiSpecFilesBuilder<'a, BlessedApiSpecFile>) -> Self {
-        // When loading from a directory, we don't have git refs.
-        BlessedFiles { files: api_files.into_map(), git_refs: BTreeMap::new() }
+        // When loading from a directory, we don't have git refs or a merge
+        // base.
+        BlessedFiles {
+            files: api_files.into_map(),
+            git_refs: BTreeMap::new(),
+            merge_base: None,
+        }
     }
 }
