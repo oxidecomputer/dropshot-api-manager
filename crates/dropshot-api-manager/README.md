@@ -75,6 +75,7 @@ In addition, if you have versioned APIs (see below):
 
 * The OpenAPI manager must be run within a Git repository.
 * You must also ensure that `git` is available on the command line, or that the `GIT` environment variable is set to the location of the Git binary.
+* Shallow clones don't work; full Git history is required. See [_CI and shallow clones_](#ci-and-shallow-clones) below.
 
 #### API crates
 
@@ -245,6 +246,30 @@ See [guides/new-version.md](guides/new-version.md) for an overview and for detai
 
 As of this writing, every API has exactly one Rust client package and it's always generated from the latest version of the API.  Per RFD 532, this is sufficient for APIs that are server-side-only versioned.  For APIs that will be client-side versioned, you may need to create additional Rust packages that use Progenitor to generate clients based on older OpenAPI documents.  This has not been done before but is believed to be straightforward.
 
+## Git ref storage
+
+For versioned APIs, the Dropshot API manager can optionally store older API versions as *Git ref files* instead of full JSON files. A Git ref file is a small text file (with a `.gitref` extension) that points to the JSON content at a specific Git commit.
+
+### Benefits
+
+- **Meaningful diffs on GitHub.** New API versions appear as renames of the previous version, so GitHub shows what actually changed rather than thousands of added lines.
+- **Blame works across versions.** `git blame` on the latest version traces history back through previous versions.
+- **Smaller repository checkout on disk.** Git ref files are ~100 bytes each, replacing large JSON files in the working copy.
+
+For more background, see [RFD 634](https://rfd.shared.oxide.computer/rfd/0634).
+
+### Tradeoffs
+
+- **Requires Git history.** Shallow clones won't work, so CI must use `fetch-depth: 0`. See [_CI and shallow clones_](#ci-and-shallow-clones) below.
+- **Rename-rename conflicts.** Parallel branches adding versions to the same API produce merge conflicts. See [_Git ref merge conflicts_](#git-ref-merge-conflicts) below.
+- **Tools must dereference Git ref files.** Tools that need older API versions must know how to read Git ref files, though most workflows only use the `-latest.json` symlink.
+
+### Enabling Git ref storage
+
+To enable Git ref storage for an API, use the `.with_git_ref_storage()` builder method when configuring the API in your integration point. You can also call `.with_git_ref_storage()` on a combined `ManagedApi` to turn Git ref storage on by default. Use `.disable_git_ref_storage()` to opt an API out of default Git ref storage.
+
+For details on the file format and conversion rules, see [_Git ref storage details_](#git-ref-storage-details) below.
+
 ## More about versioned APIs
 
 The idea behind versioned APIs is:
@@ -311,6 +336,18 @@ You generally don't need to think about any of this to use the tool.  Like with 
 2. You defined a new version, but forgot to annotate the API endpoints with what version they were added or removed in.  Again, you'll get an error about having changed a blessed version and you'll need to follow the steps above to fix it.
 3. You merge with an upstream that adds new versions.
 
+### CI and shallow clones
+
+Versioned APIs require access to Git history: the tool loads blessed versions from the merge-base between `HEAD` and `main`, which requires that history to be available. Shallow clones (e.g., `git clone --depth 1`) typically lack the necessary history.
+
+For GitHub Actions, use a full clone:
+
+```yaml
+- uses: actions/checkout@v6
+  with:
+    fetch-depth: 0
+```
+
 ### Merging with upstream changes to versioned APIs
 
 When you merge with commits that added one or more versions to the same API that you also changed locally:
@@ -364,6 +401,82 @@ An existing lockstep API can be made versioned.  You would do this when transiti
 That should be it!  Now, when iterating on the API, you'll need to follow the procedure described above for versioned APIs (which is slightly more complicated than the one for lockstep APIs).
 
 In principle, this process could be reversed to convert an API from versioned to lockstep, but this almost certainly has runtime implications that would need to be considered.
+
+### Git ref storage details
+
+#### What changes on disk
+
+With Git ref storage enabled, the directory structure changes from:
+
+```
+openapi/sled-agent/
+├── sled-agent-1.0.0-2da304.json
+├── sled-agent-2.0.0-a3e161.json
+├── sled-agent-3.0.0-f44f77.json
+└── sled-agent-latest.json -> sled-agent-3.0.0-f44f77.json
+```
+
+To:
+
+```
+openapi/sled-agent/
+├── sled-agent-1.0.0-2da304.json.gitref
+├── sled-agent-2.0.0-a3e161.json.gitref
+├── sled-agent-3.0.0-f44f77.json
+└── sled-agent-latest.json -> sled-agent-3.0.0-f44f77.json
+```
+
+The latest version remains a full JSON file, and the `-latest.json` symlink continues to work. Older blessed versions become `.gitref` files.
+
+#### Git ref file format
+
+A `.gitref` file contains a single line:
+
+```
+99c3f3ef97f80d1401c54ce0c625af125d4faef3:openapi/sled-agent/sled-agent-2.0.0-a3e161.json
+```
+
+The format is `<commit-hash>:<path>`, where the commit hash is when that version was introduced.
+
+#### Reading Git ref file contents
+
+To view the contents of a Git ref file:
+
+```sh
+git show $(cat sled-agent-2.0.0-a3e161.json.gitref)
+```
+
+For Jujutsu:
+
+```sh
+IFS=: read -r commit path < sled-agent-2.0.0-a3e161.json.gitref
+jj file show -r "$commit" "root:$path"
+```
+
+#### When versions are converted
+
+The API manager automatically converts versions between JSON and Git ref formats. A version is stored as a Git ref when all of the following are true:
+
+- Git ref storage is enabled for the API.
+- The version is blessed (present in the upstream branch).
+- The version is not the latest.
+- The version was not introduced in the same commit as the latest version.
+
+When you add a new version locally, the previous latest version is converted to a Git ref. If you remove that new version, the conversion is reversed.
+
+#### Git ref merge conflicts
+
+With Git ref storage, Git detects new API versions as renames of the previous version. If parallel branches both add new versions, Git produces a rename-rename conflict.
+
+To resolve, run `cargo openapi generate` (or your equivalent alias). The tool regenerates the correct files from your resolved `api_versions!` macro.
+
+If you use Jujutsu, the `-latest.json` symlink becomes a regular file during conflicts. The API manager detects this and corrects it when you run `generate`.
+
+#### Progenitor and client generation
+
+Progenitor-generated clients should continue to reference the `-latest.json` symlink, which always points to a real JSON file. No changes are needed for typical client generation.
+
+If you need to generate a client for an older version stored as a Git ref, you will currently need to disable Git ref storage for that API.
 
 ## Contributing
 

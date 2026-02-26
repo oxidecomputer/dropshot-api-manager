@@ -78,6 +78,11 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
 
     let apis = ManagedApis::new(apis)
         .context("error creating ManagedApis")?
+        // Exercise: try uncommenting with_git_ref_storage below. This will cause
+        // the Dropshot API manager to convert older JSON versions to git refs.
+        //
+        // .with_git_ref_storage()
+        //
         // A global validation function can be provided to the OpenAPI manager.
         // This function will be called for each API under consideration.
         .with_validation(validate);

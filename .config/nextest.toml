@@ -1,2 +1,6 @@
+# Required for NEXTEST_BIN_EXE_ with hyphens in binary names replaced by
+# underscores.
+nextest-version = "0.9.113"
+
 [profile.ci]
 fail-fast = false

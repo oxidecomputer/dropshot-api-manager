@@ -1,0 +1,11 @@
+# Clippy configuration for dropshot-api-manager.
+
+# Ban non-atomic file writes. Use atomicwrites::AtomicFile instead to prevent
+# corruption on interruption.
+[[disallowed-methods]]
+path = "std::fs::write"
+reason = "use atomicwrites instead to prevent corruption on interruption"
+
+[[disallowed-methods]]
+path = "fs_err::write"
+reason = "use atomicwrites instead to prevent corruption on interruption"

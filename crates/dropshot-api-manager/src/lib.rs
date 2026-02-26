@@ -29,3 +29,4 @@ extern crate newtype_derive;
 pub use apis::*;
 pub use cmd::dispatch::{App, FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE};
 pub use environment::Environment;
+pub use git::{GitRef, GitRefParseError};

@@ -25,6 +25,9 @@ pub mod versioned {
     use serde::{Deserialize, Serialize};
 
     api_versions!([
+        // Exercise: try uncommenting version 4 below. This will cause
+        // the Dropshot API manager to generate a new OpenAPI document.
+        // (5, FIVE_DOT_OH),
         // Version 4.0.0 adds an endpoint with query parameters, to test
         // detection of query parameter changes.
         (4, WITH_QUERY_PARAMS),
