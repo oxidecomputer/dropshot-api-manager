@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{ManagedApiMetadata, Versions};
 use camino::Utf8PathBuf;
@@ -142,7 +142,7 @@ impl fmt::Display for LockstepApiSpecFileName {
 ///
 /// Versioned APIs can have multiple versions coexisting. The filename includes
 /// the version and a content hash: `{ident}/{ident}-{version}-{hash}.json` (or
-/// `.json.gitref` for git ref storage).
+/// `.json.gitstub` for Git stub storage).
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VersionedApiSpecFileName {
     ident: ApiIdent,
@@ -161,13 +161,13 @@ impl VersionedApiSpecFileName {
         Self { ident, version, hash, kind: VersionedApiSpecKind::Json }
     }
 
-    /// Creates a new versioned API spec filename (git ref format).
-    pub fn new_git_ref(
+    /// Creates a new versioned API spec filename (Git stub format).
+    pub fn new_git_stub(
         ident: ApiIdent,
         version: semver::Version,
         hash: String,
     ) -> Self {
-        Self { ident, version, hash, kind: VersionedApiSpecKind::GitRef }
+        Self { ident, version, hash, kind: VersionedApiSpecKind::GitStub }
     }
 
     /// Returns the API identifier.
@@ -185,14 +185,14 @@ impl VersionedApiSpecFileName {
         &self.hash
     }
 
-    /// Returns the storage kind (JSON or git ref).
+    /// Returns the storage kind (JSON or Git stub).
     pub fn kind(&self) -> VersionedApiSpecKind {
         self.kind
     }
 
-    /// Returns true if this is a git ref file.
-    pub fn is_git_ref(&self) -> bool {
-        self.kind == VersionedApiSpecKind::GitRef
+    /// Returns true if this is a Git stub.
+    pub fn is_git_stub(&self) -> bool {
+        self.kind == VersionedApiSpecKind::GitStub
     }
 
     /// Returns the path of this file relative to the root of the OpenAPI
@@ -207,9 +207,9 @@ impl VersionedApiSpecFileName {
             VersionedApiSpecKind::Json => {
                 format!("{}-{}-{}.json", self.ident, self.version, self.hash)
             }
-            VersionedApiSpecKind::GitRef => {
+            VersionedApiSpecKind::GitStub => {
                 format!(
-                    "{}-{}-{}.json.gitref",
+                    "{}-{}-{}.json.gitstub",
                     self.ident, self.version, self.hash
                 )
             }
@@ -228,37 +228,39 @@ impl VersionedApiSpecFileName {
         }
     }
 
-    /// Converts this filename to its git ref equivalent.
+    /// Converts this filename to its Git stub equivalent.
     ///
-    /// If already a git ref, returns a clone of self.
-    pub fn to_git_ref(&self) -> Self {
+    /// If already a Git stub, returns a clone of self.
+    pub fn to_git_stub(&self) -> Self {
         Self {
             ident: self.ident.clone(),
             version: self.version.clone(),
             hash: self.hash.clone(),
-            kind: VersionedApiSpecKind::GitRef,
+            kind: VersionedApiSpecKind::GitStub,
         }
     }
 
-    /// Returns the basename as a git ref filename.
+    /// Returns the basename as a Git stubname.
     ///
-    /// - If already a git ref, returns `basename()` directly.
-    /// - If JSON, returns `basename() + ".gitref"`.
-    pub fn git_ref_basename(&self) -> String {
+    /// - If already a Git stub, returns `basename()` directly.
+    /// - If JSON, returns `basename() + ".gitstub"`.
+    pub fn git_stub_basename(&self) -> String {
         match self.kind {
-            VersionedApiSpecKind::GitRef => self.basename(),
-            VersionedApiSpecKind::Json => format!("{}.gitref", self.basename()),
+            VersionedApiSpecKind::GitStub => self.basename(),
+            VersionedApiSpecKind::Json => {
+                format!("{}.gitstub", self.basename())
+            }
         }
     }
 
     /// Returns the basename as a JSON filename.
     ///
     /// - If already JSON, returns `basename()` directly.
-    /// - If git ref, returns the basename without `.gitref`.
+    /// - If Git stub, returns the basename without `.gitstub`.
     pub fn json_basename(&self) -> String {
         match self.kind {
             VersionedApiSpecKind::Json => self.basename(),
-            VersionedApiSpecKind::GitRef => {
+            VersionedApiSpecKind::GitStub => {
                 format!("{}-{}-{}.json", self.ident, self.version, self.hash)
             }
         }
@@ -276,12 +278,12 @@ impl fmt::Display for VersionedApiSpecFileName {
 pub enum VersionedApiSpecKind {
     /// The spec is stored as a JSON file containing the full OpenAPI document.
     Json,
-    /// The spec is stored as a git ref file.
+    /// The spec is stored as a Git stub.
     ///
-    /// Instead of storing the full JSON content, a `.gitref` file contains a
+    /// Instead of storing the full JSON content, a `.gitstub` file contains a
     /// reference in the format `commit:path` that can be used to retrieve the
     /// content via `git show`.
-    GitRef,
+    GitStub,
 }
 
 /// Describes the path to an OpenAPI document file, relative to some root where
@@ -342,11 +344,11 @@ impl ApiSpecFileName {
         }
     }
 
-    /// Returns true if this is a git ref file.
-    pub fn is_git_ref(&self) -> bool {
+    /// Returns true if this is a Git stub.
+    pub fn is_git_stub(&self) -> bool {
         match self {
             ApiSpecFileName::Lockstep(_) => false,
-            ApiSpecFileName::Versioned(v) => v.is_git_ref(),
+            ApiSpecFileName::Versioned(v) => v.is_git_stub(),
         }
     }
 
@@ -358,9 +360,9 @@ impl ApiSpecFileName {
         }
     }
 
-    /// Converts a git ref filename to its JSON equivalent.
+    /// Converts a Git stubname to its JSON equivalent.
     ///
-    /// For non-git ref files, returns a clone of self.
+    /// For non-Git stubs, returns a clone of self.
     pub fn to_json_filename(&self) -> ApiSpecFileName {
         match self {
             ApiSpecFileName::Lockstep(_) => self.clone(),
@@ -370,36 +372,36 @@ impl ApiSpecFileName {
         }
     }
 
-    /// Converts a JSON filename to its git ref equivalent.
+    /// Converts a JSON filename to its Git stub equivalent.
     ///
-    /// For git ref files, returns a clone of self.
+    /// For Git stubs, returns a clone of self.
     /// For lockstep files, returns a clone of self (lockstep files are not
-    /// converted to git refs).
-    pub fn to_git_ref_filename(&self) -> ApiSpecFileName {
+    /// converted to Git stubs).
+    pub fn to_git_stub_filename(&self) -> ApiSpecFileName {
         match self {
             ApiSpecFileName::Lockstep(_) => self.clone(),
             ApiSpecFileName::Versioned(v) => {
-                ApiSpecFileName::Versioned(v.to_git_ref())
+                ApiSpecFileName::Versioned(v.to_git_stub())
             }
         }
     }
 
-    /// Returns the basename for this file as a git ref.
+    /// Returns the basename for this file as a Git stub.
     ///
-    /// - If this is already a git ref, returns `basename()` directly.
-    /// - If this is a versioned JSON file, returns `basename() + ".gitref"`.
+    /// - If this is already a Git stub, returns `basename()` directly.
+    /// - If this is a versioned JSON file, returns `basename() + ".gitstub"`.
     /// - For lockstep, returns `basename()` (lockstep files are not converted
-    ///   to git refs).
-    pub fn git_ref_basename(&self) -> String {
+    ///   to Git stubs).
+    pub fn git_stub_basename(&self) -> String {
         match self {
             ApiSpecFileName::Lockstep(l) => l.basename(),
-            ApiSpecFileName::Versioned(v) => v.git_ref_basename(),
+            ApiSpecFileName::Versioned(v) => v.git_stub_basename(),
         }
     }
 
     /// Returns the basename for this file as a JSON file.
     ///
-    /// - If this is a git ref, returns the basename without the `.gitref`
+    /// - If this is a Git stub, returns the basename without the `.gitstub`
     ///   suffix.
     /// - Otherwise, returns `basename()` directly.
     pub fn json_basename(&self) -> String {

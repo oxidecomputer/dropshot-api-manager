@@ -3,9 +3,7 @@
 //! Working with OpenAPI documents, whether generated, blessed, or local to this
 //! repository
 
-use crate::{
-    apis::ManagedApis, environment::ErrorAccumulator, git::GitCommitHash,
-};
+use crate::{apis::ManagedApis, environment::ErrorAccumulator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
@@ -13,6 +11,7 @@ use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
     VersionedApiSpecFileName, VersionedApiSpecKind,
 };
+use git_stub::GitCommitHash;
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
 use std::{
@@ -21,12 +20,12 @@ use std::{
 };
 use thiserror::Error;
 
-/// Key for looking up git ref data by API identity and version.
+/// Key for looking up Git stub data by API identity and version.
 ///
-/// Used by both blessed and local file containers to index git ref
+/// Used by both blessed and local file containers to index Git stub
 /// information.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-pub(crate) struct GitRefKey {
+pub(crate) struct GitStubKey {
     pub(crate) ident: ApiIdent,
     pub(crate) version: semver::Version,
 }
@@ -121,27 +120,27 @@ fn parse_versioned_file_name(
 }
 
 /// Attempts to parse the given file basename as a `VersionedApiSpecFileName`
-/// with git ref storage.
+/// with Git stub storage.
 ///
-/// These look like: `ident-SEMVER-HASH.json.gitref`.
-fn parse_versioned_git_ref_file_name(
+/// These look like: `ident-SEMVER-HASH.json.gitstub`.
+fn parse_versioned_git_stub_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
 ) -> Result<VersionedApiSpecFileName, BadVersionedFileName> {
-    // The file name must end with .json.gitref.
-    let json_basename = basename.strip_suffix(".gitref").ok_or_else(|| {
+    // The file name must end with .json.gitstub.
+    let json_basename = basename.strip_suffix(".gitstub").ok_or_else(|| {
         BadVersionedFileName::UnexpectedName {
             ident: ApiIdent::from(ident.to_string()),
-            source: anyhow!("expected .json.gitref suffix"),
+            source: anyhow!("expected .json.gitstub suffix"),
         }
     })?;
 
     // Parse the underlying versioned name to get the version and hash.
     let versioned = parse_versioned_file_name(apis, ident, json_basename)?;
 
-    // Convert to git ref format.
-    Ok(versioned.to_git_ref())
+    // Convert to Git stub format.
+    Ok(versioned.to_git_stub())
 }
 
 /// Attempts to parse the given file basename as a `LockstepApiSpecFileName`.
@@ -306,8 +305,8 @@ impl ApiSpecFile {
                     ));
                 }
 
-                // Only check hash for JSON files. Git ref files use the git ref
-                // itself as the source of truth.
+                // Only check hash for JSON files. Git stubs use the Git
+                // stub itself as the source of truth.
                 if v.kind() == VersionedApiSpecKind::Json {
                     let expected_hash = hash_contents(&contents_buf);
                     if expected_hash != v.hash() {
@@ -583,17 +582,17 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
-    /// Returns an `ApiSpecFileName` for the given versioned git ref file.
+    /// Returns an `ApiSpecFileName` for the given versioned Git stub.
     ///
     /// On success, this does not load anything into `self`. Callers generally
     /// invoke `load_contents()` with the returned value after dereferencing the
-    /// git ref. On failure, warnings or errors will be recorded.
-    pub fn versioned_git_ref_file_name(
+    /// Git stub. On failure, warnings or errors will be recorded.
+    pub fn versioned_git_stub_file_name(
         &mut self,
         ident: &ApiIdent,
         basename: &str,
     ) -> Option<ApiSpecFileName> {
-        match parse_versioned_git_ref_file_name(self.apis, ident, basename) {
+        match parse_versioned_git_stub_file_name(self.apis, ident, basename) {
             Ok(file_name) => Some(file_name.into()),
             Err(
                 warning @ (BadVersionedFileName::NoSuchApi
@@ -601,21 +600,20 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
             ) if T::MISCONFIGURATIONS_ALLOWED => {
                 self.load_warning(
                     anyhow!(warning)
-                        .context(format!("skipping git ref file {}", basename)),
+                        .context(format!("skipping Git stub {}", basename)),
                 );
                 None
             }
             Err(warning @ BadVersionedFileName::UnexpectedName { .. }) => {
                 self.load_warning(
                     anyhow!(warning)
-                        .context(format!("skipping git ref file {}", basename)),
+                        .context(format!("skipping Git stub {}", basename)),
                 );
                 None
             }
             Err(error) => {
                 self.load_error(
-                    anyhow!(error)
-                        .context(format!("git ref file {}", basename)),
+                    anyhow!(error).context(format!("Git stub {}", basename)),
                 );
                 None
             }
@@ -748,7 +746,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// Record a file as unparseable without attempting to parse it.
     ///
     /// This is used for files that are known to be invalid before attempting
-    /// JSON parsing (e.g., git ref files with invalid format). The `reason`
+    /// JSON parsing (e.g., Git stubs with invalid format). The `reason`
     /// error is recorded as a warning.
     ///
     /// For contexts where unparseable files are allowed (local files), this
@@ -863,13 +861,13 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
-    /// Set the git ref commit on the most recently loaded item at (ident,
+    /// Set the Git stub commit on the most recently loaded item at (ident,
     /// version).
     ///
-    /// Called after `load_contents` for gitref files to attach the commit
+    /// Called after `load_contents` for Git stubs to attach the commit
     /// hash to the loaded file. No-op if the item doesn't exist (e.g.,
     /// `load_contents` failed) or the `ApiLoad` impl ignores it.
-    pub fn set_git_ref_commit(
+    pub fn set_git_stub_commit(
         &mut self,
         ident: &ApiIdent,
         version: &semver::Version,
@@ -877,7 +875,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     ) {
         if let Some(api_files) = self.spec_files.get_mut(ident) {
             if let Some(item) = api_files.spec_files.get_mut(version) {
-                item.set_git_ref_commit(commit);
+                item.set_git_stub_commit(commit);
             }
         }
     }
@@ -1029,11 +1027,11 @@ pub trait ApiLoad {
     /// Add unparseable file data to an existing entry.
     fn extend_unparseable(&mut self, unparseable: Self::Unparseable);
 
-    /// Set the git ref commit hash on the most recently loaded item.
+    /// Set the Git stub commit hash on the most recently loaded item.
     ///
     /// The default implementation does nothing. Only
     /// `Vec<LocalApiSpecFile>` overrides this.
-    fn set_git_ref_commit(&mut self, _commit: GitCommitHash) {}
+    fn set_git_stub_commit(&mut self, _commit: GitCommitHash) {}
 }
 
 /// Return the hash of an OpenAPI document file for the purposes of this tool
@@ -1170,17 +1168,17 @@ mod test {
     }
 
     #[test]
-    fn test_parse_name_versioned_git_ref_valid() {
+    fn test_parse_name_versioned_git_stub_valid() {
         let apis = all_apis().unwrap();
-        let name = parse_versioned_git_ref_file_name(
+        let name = parse_versioned_git_stub_file_name(
             &apis,
             "versioned",
-            "versioned-1.2.3-feedface.json.gitref",
+            "versioned-1.2.3-feedface.json.gitstub",
         )
         .unwrap();
         assert_eq!(
             name,
-            VersionedApiSpecFileName::new_git_ref(
+            VersionedApiSpecFileName::new_git_stub(
                 ApiIdent::from("versioned".to_owned()),
                 Version::new(1, 2, 3),
                 "feedface".to_owned(),
@@ -1189,11 +1187,11 @@ mod test {
     }
 
     #[test]
-    fn test_parse_name_versioned_git_ref_invalid() {
+    fn test_parse_name_versioned_git_stub_invalid() {
         let apis = all_apis().unwrap();
 
-        // Wrong suffix - missing .gitref.
-        let error = parse_versioned_git_ref_file_name(
+        // Wrong suffix - missing .gitstub.
+        let error = parse_versioned_git_stub_file_name(
             &apis,
             "versioned",
             "versioned-1.2.3-feedface.json",
@@ -1202,28 +1200,28 @@ mod test {
         assert_matches!(error, BadVersionedFileName::UnexpectedName { .. });
 
         // Unknown API.
-        let error = parse_versioned_git_ref_file_name(
+        let error = parse_versioned_git_stub_file_name(
             &apis,
             "unknown",
-            "unknown-1.2.3-feedface.json.gitref",
+            "unknown-1.2.3-feedface.json.gitstub",
         )
         .unwrap_err();
         assert_matches!(error, BadVersionedFileName::NoSuchApi);
 
         // Lockstep API (not versioned).
-        let error = parse_versioned_git_ref_file_name(
+        let error = parse_versioned_git_stub_file_name(
             &apis,
             "lockstep",
-            "lockstep-1.2.3-feedface.json.gitref",
+            "lockstep-1.2.3-feedface.json.gitstub",
         )
         .unwrap_err();
         assert_matches!(error, BadVersionedFileName::NotVersioned);
 
         // Bad version in the name.
-        let error = parse_versioned_git_ref_file_name(
+        let error = parse_versioned_git_stub_file_name(
             &apis,
             "versioned",
-            "versioned-badversion-feedface.json.gitref",
+            "versioned-badversion-feedface.json.gitstub",
         )
         .unwrap_err();
         assert_matches!(error, BadVersionedFileName::UnexpectedName { .. });

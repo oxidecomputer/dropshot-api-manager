@@ -54,7 +54,7 @@ Every Rust source file must start with:
 ### Type system patterns
 
 - **Newtypes** for domain types (e.g., `ApiIdent`, `GitRevision`, `GitCommitHash`, `ApiSpecFileName`)
-- **Builder patterns** for complex construction (e.g., `ManagedApi` with `with_extra_validation`, `with_git_ref_storage`)
+- **Builder patterns** for complex construction (e.g., `ManagedApi` with `with_extra_validation`, `with_git_stub_storage`)
 - **Type states** encoded in generics when state transitions matter
 - **Lifetimes** used extensively to avoid cloning (e.g., `Problem<'a>`, `Resolution<'a>`, `Fix<'a>`)
 - **Restricted visibility**: Use `pub(crate)` and `pub(super)` liberally
@@ -110,7 +110,7 @@ Since this repository uses nextest, which is process-per-test, it is safe to alt
 - Unit tests in the same file as the code they test.
 - Integration tests in the `integration-tests/` crate.
 - Test fixtures in `integration-tests/src/fixtures.rs`.
-  - This file provides model APIs for common test scenarios (lockstep, versioned, git-ref).
+  - This file provides model APIs for common test scenarios (lockstep, versioned, git-stub).
   - Prefer using these fixtures over implementing spot checks by hand.
 - Test utilities in `test_util` module within the main crate.
 
@@ -199,7 +199,7 @@ Problems are either **fixable** (tool can auto-correct) or **unfixable** (requir
 
 3. **Atomic file operations**—uses `atomicwrites` crate to prevent corruption on interruption.
 
-4. **Git integration**—blessed versions are loaded from Git history. Git ref storage optionally stores older versions as `.gitref` files containing commit references rather than full JSON.
+4. **Git integration**—blessed versions are loaded from Git history. Git stub storage optionally stores older versions as `.gitstub` files containing commit references rather than full JSON.
 
 5. **UTF-8 paths throughout**—uses `camino` crate (`Utf8Path`, `Utf8PathBuf`) for easier path handling.
 
@@ -341,7 +341,7 @@ Commits follow a conventional format with crate-specific scoping:
 ```
 
 Examples:
-- `[dropshot-api-manager] add git ref storage for older API versions`
+- `[dropshot-api-manager] add Git stub storage for older API versions`
 - `[dropshot-api-manager-types] version 0.3.0`
 - `[meta] prepare changelog`
 

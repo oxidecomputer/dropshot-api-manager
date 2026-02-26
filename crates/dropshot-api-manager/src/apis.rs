@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::validation::DynValidationFn;
 use anyhow::{Context, bail};
@@ -84,12 +84,12 @@ pub struct ManagedApi {
     /// Default: false (bytewise check is performed for latest version).
     allow_trivial_changes_for_latest: bool,
 
-    /// Per-API override for git ref storage.
+    /// Per-API override for Git stub storage.
     ///
     /// - `None`: use the global setting from `ManagedApis`.
-    /// - `Some(true)`: enable git ref storage for this API.
-    /// - `Some(false)`: disable git ref storage for this API.
-    use_git_ref_storage: Option<bool>,
+    /// - `Some(true)`: enable Git stub storage for this API.
+    /// - `Some(false)`: disable Git stub storage for this API.
+    use_git_stub_storage: Option<bool>,
 }
 
 impl fmt::Debug for ManagedApi {
@@ -102,7 +102,7 @@ impl fmt::Debug for ManagedApi {
             api_description: _,
             extra_validation,
             allow_trivial_changes_for_latest,
-            use_git_ref_storage,
+            use_git_stub_storage,
         } = self;
 
         f.debug_struct("ManagedApi")
@@ -119,7 +119,7 @@ impl fmt::Debug for ManagedApi {
                 "allow_trivial_changes_for_latest",
                 allow_trivial_changes_for_latest,
             )
-            .field("use_git_ref_storage", use_git_ref_storage)
+            .field("use_git_stub_storage", use_git_stub_storage)
             .finish()
     }
 }
@@ -141,7 +141,7 @@ impl From<ManagedApiConfig> for ManagedApi {
             api_description,
             extra_validation: None,
             allow_trivial_changes_for_latest: false,
-            use_git_ref_storage: None,
+            use_git_stub_storage: None,
         }
     }
 }
@@ -194,28 +194,28 @@ impl ManagedApi {
         self.allow_trivial_changes_for_latest
     }
 
-    /// Enables git ref storage for this API, overriding the global setting.
+    /// Enables Git stub storage for this API, overriding the global setting.
     ///
-    /// When enabled, non-latest blessed API versions are stored as `.gitref`
-    /// files containing a git reference instead of full JSON files.
-    pub fn with_git_ref_storage(mut self) -> Self {
-        self.use_git_ref_storage = Some(true);
+    /// When enabled, non-latest blessed API versions are stored as `.gitstub`
+    /// files containing a Git stub instead of full JSON files.
+    pub fn with_git_stub_storage(mut self) -> Self {
+        self.use_git_stub_storage = Some(true);
         self
     }
 
-    /// Disables git ref storage for this API, overriding the global setting.
-    pub fn disable_git_ref_storage(mut self) -> Self {
-        self.use_git_ref_storage = Some(false);
+    /// Disables Git stub storage for this API, overriding the global setting.
+    pub fn disable_git_stub_storage(mut self) -> Self {
+        self.use_git_stub_storage = Some(false);
         self
     }
 
-    /// Returns the git ref storage setting for this API.
+    /// Returns the Git stub storage setting for this API.
     ///
     /// - `None`: use the global setting.
-    /// - `Some(true)`: git ref storage is enabled for this API.
-    /// - `Some(false)`: git ref storage is disabled for this API.
-    pub fn uses_git_ref_storage(&self) -> Option<bool> {
-        self.use_git_ref_storage
+    /// - `Some(true)`: Git stub storage is enabled for this API.
+    /// - `Some(false)`: Git stub storage is disabled for this API.
+    pub fn uses_git_stub_storage(&self) -> Option<bool> {
+        self.use_git_stub_storage
     }
 
     /// Sets extra validation to perform on the OpenAPI document.
@@ -304,23 +304,24 @@ pub struct ManagedApis {
     unknown_apis: BTreeSet<ApiIdent>,
     validation: Option<Box<DynValidationFn>>,
 
-    /// If true, store non-latest blessed API versions as git ref files instead
+    /// If true, store non-latest blessed API versions as Git stubs instead
     /// of full JSON files. This saves disk space but requires git access to
     /// read the contents.
     ///
     /// The default is false.
-    use_git_ref_storage: bool,
+    use_git_stub_storage: bool,
 }
 
 impl fmt::Debug for ManagedApis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { apis, unknown_apis, validation, use_git_ref_storage } = self;
+        let Self { apis, unknown_apis, validation, use_git_stub_storage } =
+            self;
 
         f.debug_struct("ManagedApis")
             .field("apis", apis)
             .field("unknown_apis", unknown_apis)
             .field("validation", &validation.as_ref().map(|_| "..."))
-            .field("use_git_ref_storage", use_git_ref_storage)
+            .field("use_git_stub_storage", use_git_stub_storage)
             .finish()
     }
 }
@@ -349,7 +350,7 @@ impl ManagedApis {
             apis,
             unknown_apis: BTreeSet::new(),
             validation: None,
-            use_git_ref_storage: false,
+            use_git_stub_storage: false,
         })
     }
 
@@ -386,28 +387,28 @@ impl ManagedApis {
         self.validation.as_deref()
     }
 
-    /// Enables git ref storage for older blessed API versions.
+    /// Enables Git stub storage for older blessed API versions.
     ///
-    /// When enabled, non-latest blessed API versions are stored as `.gitref`
-    /// files containing a Git reference instead of full JSON files. This allows
+    /// When enabled, non-latest blessed API versions are stored as `.gitstub`
+    /// files containing a Git stub instead of full JSON files. This allows
     /// for Git (including the GitHub web UI) to detect changed OpenAPI
     /// documents as renames, but Git history is required to be present to read
     /// older versions.
     ///
     /// Individual APIs can override this setting using
-    /// [`ManagedApi::with_git_ref_storage`] or
-    /// [`ManagedApi::disable_git_ref_storage`].
-    pub fn with_git_ref_storage(mut self) -> Self {
-        self.use_git_ref_storage = true;
+    /// [`ManagedApi::with_git_stub_storage`] or
+    /// [`ManagedApi::disable_git_stub_storage`].
+    pub fn with_git_stub_storage(mut self) -> Self {
+        self.use_git_stub_storage = true;
         self
     }
 
-    /// Returns true if git ref storage is enabled for the given API.
+    /// Returns true if Git stub storage is enabled for the given API.
     ///
     /// This checks the per-API setting first, falling back to the global
     /// setting if not specified.
-    pub(crate) fn uses_git_ref_storage(&self, api: &ManagedApi) -> bool {
-        api.uses_git_ref_storage().unwrap_or(self.use_git_ref_storage)
+    pub(crate) fn uses_git_stub_storage(&self, api: &ManagedApi) -> bool {
+        api.uses_git_stub_storage().unwrap_or(self.use_git_stub_storage)
     }
 
     /// Returns the number of APIs managed by this instance.

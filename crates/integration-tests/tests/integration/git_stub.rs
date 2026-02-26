@@ -1,16 +1,16 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Tests for git ref storage of blessed API versions.
+//! Tests for Git stub storage of blessed API versions.
 //!
-//! When git ref storage is enabled, older (non-latest) blessed API versions are
-//! stored as `.gitref` files containing a git reference (`commit:path`) instead
+//! When Git stub storage is enabled, older (non-latest) blessed API versions are
+//! stored as `.gitstub` files containing a Git stub reference (`commit:path`) instead
 //! of full JSON files. The content is retrieved via `git cat-file blob` at
 //! runtime.
 
 use anyhow::Result;
 use camino::Utf8PathBuf;
 use dropshot_api_manager::{
-    GitRef, ManagedApis,
+    ManagedApis,
     test_util::{CheckResult, check_apis_up_to_date},
 };
 use integration_tests::{
@@ -18,17 +18,17 @@ use integration_tests::{
     jj_conflict_paths, *,
 };
 
-/// Test that git ref conversion happens when adding a new version, and that
+/// Test that Git stub conversion happens when adding a new version, and that
 /// the content is preserved correctly.
 ///
-/// When a new version is added to an API with git ref storage enabled, the
-/// older blessed versions should be converted from full JSON files to git ref
-/// files. The git refs should point to the first commit where each version was
+/// When a new version is added to an API with Git stub storage enabled, the
+/// older blessed versions should be converted from full JSON files to Git stub
+/// files. The Git stubs should point to the first commit where each version was
 /// introduced.
 #[test]
 fn test_conversion() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = versioned_health_git_ref_apis()?;
+    let apis = versioned_health_git_stub_apis()?;
 
     env.generate_documents(&apis)?;
     env.commit_documents()?;
@@ -49,16 +49,16 @@ fn test_conversion() -> Result<()> {
         "v3 should exist as JSON"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should not yet be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should not yet be a Git stub"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should not yet be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should not yet be a Git stub"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not yet be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not yet be a Git stub"
     );
 
     env.make_unrelated_commit("unrelated change 1")?;
@@ -69,9 +69,9 @@ fn test_conversion() -> Result<()> {
         "current commit should have advanced past the first commit"
     );
 
-    // v3 (the previous latest) should be converted to a git ref in the same
+    // v3 (the previous latest) should be converted to a Git stub in the same
     // operation that creates v4.
-    let extended_apis = versioned_health_with_v4_git_ref_apis()?;
+    let extended_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&extended_apis)?;
 
     assert!(
@@ -79,16 +79,16 @@ fn test_conversion() -> Result<()> {
         "v4 should not be committed yet"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should now be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should now be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should now be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should now be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should now be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should now be a Git stub"
     );
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -107,51 +107,45 @@ fn test_conversion() -> Result<()> {
         "v4 should exist as JSON"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub"
     );
 
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
-        let git_ref_content =
-            env.read_versioned_git_ref("versioned-health", version)?;
-        let commit = git_ref_content.trim().split(':').next().unwrap();
+        let git_stub =
+            env.read_versioned_git_stub("versioned-health", version)?;
         assert_eq!(
-            commit, first_commit,
-            "git ref for v{} should point to the first commit ({}) \
+            git_stub.commit().to_string(),
+            first_commit,
+            "Git stub for v{} should point to the first commit ({}) \
              (current commit: {})",
-            version, first_commit, current_commit
+            version,
+            first_commit,
+            current_commit
         );
     }
 
-    let git_ref_content =
-        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let git_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert!(
-        git_ref_content.contains(':'),
-        "git ref should contain a colon separator"
-    );
-    let git_ref = git_ref_content
-        .parse::<GitRef>()
-        .expect("git ref should parse correctly");
-    assert!(
-        git_ref
-            .path
+        git_stub
+            .path()
             .as_str()
             .starts_with("documents/versioned-health/versioned-health-1.0.0-"),
         "path {} should start with `documents/versioned-health/versioned-health-1.0.0-`",
-        git_ref.path.as_str(),
+        git_stub.path().as_str(),
     );
     assert_eq!(
-        git_ref.path.extension(),
+        git_stub.path().extension(),
         Some("json"),
         "path {} should have extension `json`",
-        git_ref.path.as_str(),
+        git_stub.path().as_str(),
     );
 
-    let git_ref_v1_content =
-        env.read_git_ref_content("versioned-health", "1.0.0")?;
+    let git_stub_v1_content =
+        env.read_git_stub_content("versioned-health", "1.0.0")?;
     assert_eq!(
-        original_v1, git_ref_v1_content,
-        "git ref content should match original"
+        original_v1, git_stub_v1_content,
+        "Git stub content should match original"
     );
 
     let result = check_apis_up_to_date(env.environment(), &extended_apis)?;
@@ -161,7 +155,7 @@ fn test_conversion() -> Result<()> {
 }
 
 /// Test that the latest version and versions sharing its first commit are not
-/// converted to git refs.
+/// converted to Git stubs.
 ///
 /// When multiple versions share the same first commit as the latest, no
 /// conversion should happen. We don't want check to fail immediately after
@@ -170,7 +164,7 @@ fn test_conversion() -> Result<()> {
 #[test]
 fn test_same_first_commit_no_conversion() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = versioned_health_git_ref_apis()?;
+    let apis = versioned_health_git_stub_apis()?;
 
     env.generate_documents(&apis)?;
     env.commit_documents()?;
@@ -189,8 +183,8 @@ fn test_same_first_commit_no_conversion() -> Result<()> {
         "v3 should still exist as JSON"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -201,20 +195,20 @@ fn test_same_first_commit_no_conversion() -> Result<()> {
         "v2 should remain as JSON (same first commit as latest)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should not be a Git stub"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should not be a Git stub"
     );
 
     Ok(())
 }
 
-/// Test that lockstep APIs are never converted to git ref files.
+/// Test that lockstep APIs are never converted to Git stubs.
 #[test]
-fn test_lockstep_never_converted_to_git_ref() -> Result<()> {
+fn test_lockstep_never_converted_to_git_stub() -> Result<()> {
     let env = TestEnvironment::new()?;
     let apis = lockstep_apis()?;
 
@@ -227,8 +221,8 @@ fn test_lockstep_never_converted_to_git_ref() -> Result<()> {
         "lockstep document should exist"
     );
     assert!(
-        !env.lockstep_git_ref_exists("health"),
-        "lockstep should never be a git ref"
+        !env.lockstep_git_stub_exists("health"),
+        "lockstep should never be a Git stub"
     );
 
     Ok(())
@@ -243,13 +237,13 @@ fn test_lockstep_never_converted_to_git_ref() -> Result<()> {
 fn test_mixed_first_commits_selective_conversion() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_no_git_ref = versioned_health_reduced_apis()?;
-    env.generate_documents(&v1_v2_no_git_ref)?;
+    let v1_v2_no_git_stub = versioned_health_reduced_apis()?;
+    env.generate_documents(&v1_v2_no_git_stub)?;
     env.commit_documents()?;
     let first_commit = env.get_current_commit_hash_full()?;
 
-    let v1_v2_v3_no_git_ref = versioned_health_apis()?;
-    env.generate_documents(&v1_v2_v3_no_git_ref)?;
+    let v1_v2_v3_no_git_stub = versioned_health_apis()?;
+    env.generate_documents(&v1_v2_v3_no_git_stub)?;
     env.commit_documents()?;
     let second_commit = env.get_current_commit_hash_full()?;
     assert_ne!(first_commit, second_commit);
@@ -259,48 +253,47 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
 
     // v3 is latest (from second_commit) while v1, v2 are from first_commit.
-    let v1_v2_v3_git_ref = versioned_health_git_ref_apis()?;
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_ref)?;
+    let v1_v2_v3_git_stub = versioned_health_git_stub_apis()?;
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_stub)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should suggest converting v1, v2 (different first commit)"
     );
 
-    env.generate_documents(&v1_v2_v3_git_ref)?;
+    env.generate_documents(&v1_v2_v3_git_stub)?;
 
-    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
-    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "2.0.0")?);
 
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_ref.trim().split(':').next().unwrap();
-    assert_eq!(v1_commit, first_commit);
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    assert_eq!(v1_stub.commit().to_string(), first_commit);
 
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
-    assert!(!env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+    assert!(!env.versioned_git_stub_exists("versioned-health", "3.0.0")?);
 
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_ref)?;
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_stub)?;
     assert_eq!(result, CheckResult::Success);
 
     Ok(())
 }
 
-/// Test that git refs work correctly after reloading from a different state.
+/// Test that Git stubs work correctly after reloading from a different state.
 ///
-/// This also tests that versions introduced in different commits have git refs
+/// This also tests that versions introduced in different commits have Git stubs
 /// pointing to their respective first commits.
 #[test]
-fn test_git_ref_check_after_conversion() -> Result<()> {
+fn test_git_stub_check_after_conversion() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.make_unrelated_commit("between v2 and v3")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
     let v3_commit = env.get_current_commit_hash_full()?;
@@ -308,7 +301,7 @@ fn test_git_ref_check_after_conversion() -> Result<()> {
 
     env.make_unrelated_commit("after v3")?;
 
-    let extended_apis = versioned_health_with_v4_git_ref_apis()?;
+    let extended_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&extended_apis)?;
     env.commit_documents()?;
 
@@ -316,54 +309,57 @@ fn test_git_ref_check_after_conversion() -> Result<()> {
     assert_eq!(result, CheckResult::Success);
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should be a Git stub"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "4.0.0")?,
         "v4 should be JSON"
     );
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_stub.commit().to_string();
     assert_eq!(
         v1_commit, v1_v2_commit,
-        "v1 git ref should point to the commit where v1 was first introduced"
+        "v1 Git stub should point to the commit where v1 was first introduced"
     );
 
-    let v2_git_ref = env.read_versioned_git_ref("versioned-health", "2.0.0")?;
-    let v2_commit = v2_git_ref.trim().split(':').next().unwrap();
+    let v2_git_stub =
+        env.read_versioned_git_stub("versioned-health", "2.0.0")?;
+    let v2_commit = v2_git_stub.commit().to_string();
     assert_eq!(
         v2_commit, v1_v2_commit,
-        "v2 git ref should point to the commit where v2 was first introduced"
+        "v2 Git stub should point to the commit where v2 was first introduced"
     );
 
-    let v3_git_ref = env.read_versioned_git_ref("versioned-health", "3.0.0")?;
-    let v3_commit_from_git_ref = v3_git_ref.trim().split(':').next().unwrap();
+    let v3_git_stub =
+        env.read_versioned_git_stub("versioned-health", "3.0.0")?;
+    let v3_commit_from_git_stub = v3_git_stub.commit().to_string();
     assert_eq!(
-        v3_commit_from_git_ref, v3_commit,
-        "v3 git ref should point to the commit where v3 was first introduced"
+        v3_commit_from_git_stub, v3_commit,
+        "v3 Git stub should point to the commit where v3 was first introduced"
     );
 
     assert_ne!(
-        v1_commit, v3_commit_from_git_ref,
+        v1_commit, v3_commit_from_git_stub,
         "v1 and v3 should point to different commits"
     );
 
     Ok(())
 }
 
-/// Test that without git ref storage enabled, no conversion happens.
+/// Test that without Git stub storage enabled, no conversion happens.
 #[test]
-fn test_no_conversion_without_git_ref_enabled() -> Result<()> {
+fn test_no_conversion_without_git_stub_enabled() -> Result<()> {
     let env = TestEnvironment::new()?;
     let apis = versioned_health_apis()?;
 
@@ -384,32 +380,32 @@ fn test_no_conversion_without_git_ref_enabled() -> Result<()> {
         "v3 should be JSON"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should not be a Git stub"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should not be a Git stub"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub"
     );
 
     Ok(())
 }
 
-/// Test that git ref files are converted back to JSON when git ref storage is
+/// Test that Git stubs are converted back to JSON when Git stub storage is
 /// disabled, with content preservation.
 ///
-/// This is the reverse of `test_conversion`. When a user disables git ref
-/// storage, existing git ref files should be converted back to full JSON files.
+/// This is the reverse of `test_conversion`. When a user disables Git stub
+/// storage, existing Git stubs should be converted back to full JSON files.
 #[test]
 fn test_convert_to_json_when_disabled() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let apis_with_git_ref = versioned_health_git_ref_apis()?;
-    env.generate_documents(&apis_with_git_ref)?;
+    let apis_with_git_stub = versioned_health_git_stub_apis()?;
+    env.generate_documents(&apis_with_git_stub)?;
     env.commit_documents()?;
 
     let original_v1 =
@@ -417,45 +413,45 @@ fn test_convert_to_json_when_disabled() -> Result<()> {
     let original_v2 =
         env.read_versioned_document("versioned-health", "2.0.0")?;
 
-    let extended_with_git_ref = versioned_health_with_v4_git_ref_apis()?;
-    env.generate_documents(&extended_with_git_ref)?;
+    let extended_with_git_stub = versioned_health_with_v4_git_stub_apis()?;
+    env.generate_documents(&extended_with_git_stub)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should be a Git stub"
     );
 
-    let extended_without_git_ref = versioned_health_with_v4_apis()?;
+    let extended_without_git_stub = versioned_health_with_v4_apis()?;
     let result =
-        check_apis_up_to_date(env.environment(), &extended_without_git_ref)?;
+        check_apis_up_to_date(env.environment(), &extended_without_git_stub)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should report needs update when git refs exist but git ref \
+        "check should report needs update when Git stubs exist but Git stub \
          storage is disabled"
     );
 
-    env.generate_documents(&extended_without_git_ref)?;
+    env.generate_documents(&extended_without_git_stub)?;
 
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref should be removed"
+        !env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 Git stub should be removed"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 git ref should be removed"
+        !env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 Git stub should be removed"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 git ref should be removed"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 Git stub should be removed"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -480,39 +476,39 @@ fn test_convert_to_json_when_disabled() -> Result<()> {
         env.read_versioned_document("versioned-health", "2.0.0")?;
     assert_eq!(
         original_v1, restored_v1,
-        "v1 content should match original after git ref-to-JSON conversion"
+        "v1 content should match original after Git stub-to-JSON conversion"
     );
     assert_eq!(
         original_v2, restored_v2,
-        "v2 content should match original after git ref-to-JSON conversion"
+        "v2 content should match original after Git stub-to-JSON conversion"
     );
 
     Ok(())
 }
 
-/// Test that duplicate git ref and JSON files are handled correctly.
+/// Test that duplicate Git stub and JSON files are handled correctly.
 ///
-/// When both git ref and JSON exist for the same version, the system should:
+/// When both Git stub and JSON exist for the same version, the system should:
 ///
-/// - With git ref enabled: delete the JSON (git ref preferred for non-latest)
-/// - With git ref disabled: delete the git ref (JSON preferred)
+/// - With Git stub enabled: delete the JSON (Git stub preferred for non-latest)
+/// - With Git stub disabled: delete the Git stub (JSON preferred)
 ///
 /// This can happen from interrupted conversions, manual file manipulation,
 /// or merge conflicts.
 #[test]
 fn test_duplicates() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let apis = versioned_health_git_ref_apis()?;
+    let apis = versioned_health_git_stub_apis()?;
 
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
-    let extended = versioned_health_with_v4_git_ref_apis()?;
+    let extended = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&extended)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -520,16 +516,17 @@ fn test_duplicates() -> Result<()> {
     );
 
     // Manually create a duplicate JSON file for v1.
-    let json_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
-    let git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("git ref should exist");
-    let json_path = git_ref_path.with_extension("");
+    let json_content =
+        env.read_git_stub_content("versioned-health", "1.0.0")?;
+    let git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("Git stub should exist");
+    let json_path = git_stub_path.with_extension("");
     env.create_file(&json_path, &json_content)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "git ref should still exist"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "Git stub should still exist"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -546,31 +543,31 @@ fn test_duplicates() -> Result<()> {
     env.generate_documents(&extended)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "git ref should still exist after generate"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "Git stub should still exist after generate"
     );
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
         "duplicate JSON should be deleted"
     );
 
-    // Now test with git refs disabled.
+    // Now test with Git stubs disabled.
     env.create_file(&json_path, &json_content)?;
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "git ref should exist"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "Git stub should exist"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
         "JSON should exist"
     );
 
-    let extended_no_git_ref = versioned_health_with_v4_apis()?;
-    env.generate_documents(&extended_no_git_ref)?;
+    let extended_no_git_stub = versioned_health_with_v4_apis()?;
+    env.generate_documents(&extended_no_git_stub)?;
 
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        ".gitref should be deleted"
+        !env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        ".gitstub should be deleted"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -580,7 +577,7 @@ fn test_duplicates() -> Result<()> {
     Ok(())
 }
 
-/// Test that git ref points to the most recent addition when a version is
+/// Test that Git stub points to the most recent addition when a version is
 /// removed and re-added.
 ///
 /// Consider the situation where:
@@ -589,9 +586,9 @@ fn test_duplicates() -> Result<()> {
 /// - commit 2 removes API v1 (by dropping it from the list of supported versions)
 /// - commit 3 re-adds API v1
 ///
-/// When git ref storage is enabled and v1 is converted to a git ref, the ref
+/// When Git stub storage is enabled and v1 is converted to a Git stub, the stub
 /// should point to commit 3 (the most recent addition), not commit 1 (the
-/// original addition). This ensures the git ref points to the current version
+/// original addition). This ensures the Git stub points to the current version
 /// of the file.
 #[test]
 fn test_remove_readd() -> Result<()> {
@@ -633,61 +630,64 @@ fn test_remove_readd() -> Result<()> {
     assert_ne!(commit_2, commit_3, "commits 2 and 3 should differ");
     assert_ne!(commit_1, commit_3, "commits 1 and 3 should differ");
 
-    let v4_with_git_ref = versioned_health_with_v4_git_ref_apis()?;
-    env.generate_documents(&v4_with_git_ref)?;
+    let v4_with_git_stub = versioned_health_with_v4_git_stub_apis()?;
+    env.generate_documents(&v4_with_git_stub)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be converted to a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be converted to a Git stub"
     );
 
-    // The git ref for v1 should point to commit 3 (the re-addition), not
+    // The Git stub for v1 should point to commit 3 (the re-addition), not
     // commit 1 (the original addition).
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_stub.commit().to_string();
 
     assert_eq!(
         v1_commit, commit_3,
-        "v1 git ref should point to the re-addition commit (commit 3: {}), \
+        "v1 Git stub should point to the re-addition commit (commit 3: {}), \
          not the original addition (commit 1: {})",
         commit_3, commit_1
     );
 
-    let v2_git_ref = env.read_versioned_git_ref("versioned-health", "2.0.0")?;
-    let v2_commit = v2_git_ref.trim().split(':').next().unwrap();
+    let v2_git_stub =
+        env.read_versioned_git_stub("versioned-health", "2.0.0")?;
+    let v2_commit = v2_git_stub.commit().to_string();
     assert_eq!(
         v2_commit, commit_1,
-        "v2 git ref should point to commit 1 (never removed)"
+        "v2 Git stub should point to commit 1 (never removed)"
     );
 
-    let v3_git_ref = env.read_versioned_git_ref("versioned-health", "3.0.0")?;
-    let v3_commit = v3_git_ref.trim().split(':').next().unwrap();
+    let v3_git_stub =
+        env.read_versioned_git_stub("versioned-health", "3.0.0")?;
+    let v3_commit = v3_git_stub.commit().to_string();
     assert_eq!(
         v3_commit, commit_1,
-        "v3 git ref should point to commit 1 (never removed)"
+        "v3 Git stub should point to commit 1 (never removed)"
     );
 
     Ok(())
 }
 
 /// Test that when the latest version is removed, the previous-latest version
-/// is converted from a git ref back to a JSON file.
+/// is converted from a Git stub back to a JSON file.
 #[test]
 fn test_latest_removed() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2 = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2 = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.make_unrelated_commit("between v2 and v3")?;
 
-    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
 
-    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
-    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "2.0.0")?);
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
 
     env.commit_documents()?;
@@ -696,10 +696,10 @@ fn test_latest_removed() -> Result<()> {
 
     env.make_unrelated_commit("between v3 and v4")?;
 
-    let v1_v2_v3_v4 = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4)?;
 
-    assert!(env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "3.0.0")?);
     assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
 
     env.commit_documents()?;
@@ -713,27 +713,27 @@ fn test_latest_removed() -> Result<()> {
         "v3 should be JSON (new latest after v4 removal)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref anymore"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub anymore"
     );
 
-    // v1, v2 should remain as git refs (different first commit from v3).
+    // v1, v2 should remain as Git stubs (different first commit from v3).
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should remain as a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should remain as a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should remain as a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should remain as a Git stub"
     );
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit_from_ref = v1_git_ref.trim().split(':').next().unwrap();
-    assert_eq!(v1_commit_from_ref, v1_v2_commit);
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    assert_eq!(v1_git_stub.commit().to_string(), v1_v2_commit);
 
-    let v2_git_ref = env.read_versioned_git_ref("versioned-health", "2.0.0")?;
-    let v2_commit_from_ref = v2_git_ref.trim().split(':').next().unwrap();
-    assert_eq!(v2_commit_from_ref, v1_v2_commit);
+    let v2_git_stub =
+        env.read_versioned_git_stub("versioned-health", "2.0.0")?;
+    assert_eq!(v2_git_stub.commit().to_string(), v1_v2_commit);
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3)?;
     assert_eq!(result, CheckResult::Success);
@@ -742,7 +742,7 @@ fn test_latest_removed() -> Result<()> {
 }
 
 /// Test that when the latest version is removed, versions that share the same
-/// first commit as the new latest are also converted from git refs to JSON.
+/// first commit as the new latest are also converted from Git stubs to JSON.
 #[test]
 fn test_latest_removed_same_commit() -> Result<()> {
     let env = TestEnvironment::new()?;
@@ -755,10 +755,10 @@ fn test_latest_removed_same_commit() -> Result<()> {
     env.make_unrelated_commit("between v1 and v2/v3")?;
 
     // Add v2, v3 in the same generate call (they share the same first commit).
-    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
 
-    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "1.0.0")?);
     assert!(env.versioned_local_document_exists("versioned-health", "2.0.0")?);
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
 
@@ -768,12 +768,12 @@ fn test_latest_removed_same_commit() -> Result<()> {
 
     env.make_unrelated_commit("between v3 and v4")?;
 
-    let v1_v2_v3_v4 = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4)?;
 
-    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
-    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
-    assert!(env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "3.0.0")?);
     assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
 
     env.commit_documents()?;
@@ -787,8 +787,8 @@ fn test_latest_removed_same_commit() -> Result<()> {
         "v3 should be JSON (new latest after v4 removal)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref anymore"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub anymore"
     );
 
     // v2 was introduced in the same commit as v3 (the new latest), so it should
@@ -798,19 +798,19 @@ fn test_latest_removed_same_commit() -> Result<()> {
         "v2 should be JSON (same first commit as new latest v3)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should not be a git ref anymore"
+        !env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should not be a Git stub anymore"
     );
 
-    // v1 should remain as a git ref (different first commit from v3).
+    // v1 should remain as a Git stub (different first commit from v3).
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should remain as a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should remain as a Git stub"
     );
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit_from_ref = v1_git_ref.trim().split(':').next().unwrap();
-    assert_eq!(v1_commit_from_ref, v1_commit);
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    assert_eq!(v1_git_stub.commit().to_string(), v1_commit);
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3)?;
     assert_eq!(result, CheckResult::Success);
@@ -826,7 +826,7 @@ fn test_latest_removed_same_commit() -> Result<()> {
 fn test_git_error_reports_problem() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let apis = versioned_health_git_ref_apis()?;
+    let apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
@@ -843,63 +843,63 @@ fn test_git_error_reports_problem() -> Result<()> {
         std::env::set_var("FAKE_GIT_FAIL", "diff_filter_a");
     }
 
-    let v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let v4_apis = versioned_health_with_v4_git_stub_apis()?;
     let result = check_apis_up_to_date(env.environment(), &v4_apis)?;
 
-    // Should report a failure due to the unfixable GitRefFirstCommitUnknown
+    // Should report a failure due to the unfixable GitStubFirstCommitUnknown
     // problem.
     assert_eq!(result, CheckResult::Failures);
 
     Ok(())
 }
 
-/// Test behavior when running in a shallow clone where git refs point to
+/// Test behavior when running in a shallow clone where Git stubs point to
 /// commits whose objects are not available.
 ///
 /// This simulates the scenario where:
 ///
-/// 1. Git ref storage is set up and committed to main.
+/// 1. Git stub storage is set up and committed to main.
 /// 2. CI does a shallow clone (`git clone --depth 1`).
-/// 3. CI runs `check` and the git refs can't be resolved because the commits
+/// 3. CI runs `check` and the Git stubs can't be resolved because the commits
 ///    they reference are outside the shallow boundary.
 #[test]
-fn test_shallow_clone_with_git_refs() -> Result<()> {
+fn test_shallow_clone_with_git_stubs() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
 
     env.make_unrelated_commit("intermediate")?;
 
-    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    let v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v4)?;
     env.commit_documents()?;
 
-    assert!(env.versioned_git_ref_exists("versioned-health", "1.0.0")?);
-    assert!(env.versioned_git_ref_exists("versioned-health", "2.0.0")?);
-    assert!(env.versioned_git_ref_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_git_stub_exists("versioned-health", "3.0.0")?);
 
     let shallow_env = env.shallow_clone(1)?;
 
     assert!(
-        shallow_env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "git ref file should exist in shallow clone"
+        shallow_env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "Git stub should exist in shallow clone"
     );
 
     // Check should fail early.
     let result = check_apis_up_to_date(shallow_env.environment(), &v4);
-    result.expect_err("check should fail in shallow clone with git refs");
+    result.expect_err("check should fail in shallow clone with Git stubs");
 
     Ok(())
 }
 
-/// Test that shallow clones work fine when git ref storage is not enabled.
+/// Test that shallow clones work fine when Git stub storage is not enabled.
 #[test]
-fn test_shallow_clone_without_git_refs() -> Result<()> {
+fn test_shallow_clone_without_git_stubs() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    // Use APIs without git ref storage.
+    // Use APIs without Git stub storage.
     let v1_v2_v3 = versioned_health_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
@@ -914,15 +914,15 @@ fn test_shallow_clone_without_git_refs() -> Result<()> {
         "v1 document should exist in shallow clone"
     );
 
-    // Check should succeed since we're not using git ref storage.
+    // Check should succeed since we're not using Git stub storage.
     let result = check_apis_up_to_date(shallow_env.environment(), &v1_v2_v3)?;
     assert_eq!(result, CheckResult::Success);
 
     Ok(())
 }
 
-/// Test that git ref files don't cause merge conflicts when two branches with
-/// different merge bases both convert the same API version to a git ref.
+/// Test that Git stubs don't cause merge conflicts when two branches with
+/// different merge bases both convert the same API version to a Git stub.
 ///
 /// See [`no_conflict_setup`] for the test scenario.
 #[test]
@@ -1008,7 +1008,7 @@ fn test_jj_no_rebase_conflict() -> Result<()> {
 
 /// Setup for [`test_no_merge_conflict`] and [`test_no_rebase_conflict`].
 ///
-/// Git ref files store `<commit-hash>:<path>` where `<commit-hash>` is "the
+/// Git stubs store `<commit-hash>:<path>` where `<commit-hash>` is "the
 /// first commit when the file was most recently introduced." This is a
 /// deterministic property of the file's history, independent of which branch
 /// you're on.
@@ -1018,20 +1018,20 @@ fn test_jj_no_rebase_conflict() -> Result<()> {
 ///     main: [initial] -- [v1,v2 added] -- [unrelated A] -- [unrelated B]
 ///                               |                 |
 ///                               |                 +-- branch_b: [add v3]
-///                               |                         (v1,v2 become git refs)
+///                               |                         (v1,v2 become Git stubs)
 ///                               |
 ///                               +-- branch_a: [add v3]
-///                                       (v1,v2 become git refs)
+///                                       (v1,v2 become Git stubs)
 /// ```
 ///
 /// Both branches add the same v3, so:
-/// - The v1 and v2 git refs should have identical content on both branches.
+/// - The v1 and v2 Git stubs should have identical content on both branches.
 /// - The merge/rebase should succeed without conflict.
 ///
 /// Returns the commit hash where v1/v2 were added. Leaves the environment on
 /// branch_b.
 fn no_conflict_setup(env: &TestEnvironment) -> Result<String> {
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
@@ -1044,56 +1044,56 @@ fn no_conflict_setup(env: &TestEnvironment) -> Result<String> {
     env.create_branch("branch_b")?;
 
     env.checkout_branch("branch_a")?;
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref on branch_a"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub on branch_a"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref on branch_a"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub on branch_a"
     );
 
-    let v1_ref_branch_a =
-        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v2_ref_branch_a =
-        env.read_versioned_git_ref("versioned-health", "2.0.0")?;
+    let v1_stub_branch_a =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    let v2_stub_branch_a =
+        env.read_versioned_git_stub("versioned-health", "2.0.0")?;
 
     env.checkout_branch("branch_b")?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref on branch_b"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub on branch_b"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref on branch_b"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub on branch_b"
     );
 
-    let v1_ref_branch_b =
-        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v2_ref_branch_b =
-        env.read_versioned_git_ref("versioned-health", "2.0.0")?;
+    let v1_stub_branch_b =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    let v2_stub_branch_b =
+        env.read_versioned_git_stub("versioned-health", "2.0.0")?;
 
-    // Git refs should be identical: both point to v1_v2_commit.
+    // Git stubs should be identical: both point to v1_v2_commit.
     assert_eq!(
-        v1_ref_branch_a, v1_ref_branch_b,
-        "v1 git refs should be identical on both branches"
+        v1_stub_branch_a, v1_stub_branch_b,
+        "v1 Git stubs should be identical on both branches"
     );
     assert_eq!(
-        v2_ref_branch_a, v2_ref_branch_b,
-        "v2 git refs should be identical on both branches"
+        v2_stub_branch_a, v2_stub_branch_b,
+        "v2 Git stubs should be identical on both branches"
     );
 
-    let v1_commit = v1_ref_branch_a.trim().split(':').next().unwrap();
     assert_eq!(
-        v1_commit, v1_v2_commit,
-        "git ref should point to the original commit"
+        v1_stub_branch_a.commit().to_string(),
+        v1_v2_commit,
+        "Git stub should point to the original commit"
     );
 
     Ok(v1_v2_commit)
@@ -1103,19 +1103,19 @@ fn no_conflict_setup(env: &TestEnvironment) -> Result<String> {
 /// [`test_no_rebase_conflict`].
 fn no_conflict_verify(env: &TestEnvironment, v1_v2_commit: &str) -> Result<()> {
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref should exist"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 Git stub should exist"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 git ref should exist"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 Git stub should exist"
     );
 
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_ref_commit, v1_v2_commit,
-        "v1 git ref should point to the original commit"
+        v1_stub.commit().to_string(),
+        v1_v2_commit,
+        "v1 Git stub should point to the original commit"
     );
 
     assert!(
@@ -1145,7 +1145,7 @@ fn test_rename_conflict_resolved_by_generate() -> Result<()> {
         "conflicted files should match expected"
     );
 
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
     env.complete_merge()?;
 
@@ -1173,7 +1173,7 @@ fn test_rebase_rename_conflict_resolved_by_generate() -> Result<()> {
         "conflicted files should match expected"
     );
 
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
     env.continue_rebase()?;
 
@@ -1209,7 +1209,7 @@ fn test_jj_symlink_conflict_v3_v4_merge() -> Result<()> {
         "jj should only conflict on symlink, not rename-related files"
     );
 
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.jj_resolve_conflicts(&v1_v2_v3_v4_apis)?;
 
     rename_conflict_v3_v4_verify(&env, &v1_v2_commit, &v1_v2_v3_v4_apis)
@@ -1239,7 +1239,7 @@ fn test_jj_symlink_conflict_v3_v4_rebase() -> Result<()> {
         "jj should only conflict on symlink, not rename-related files"
     );
 
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.jj_resolve_conflicts(&v1_v2_v3_v4_apis)?;
 
     rename_conflict_v3_v4_verify(&env, &v1_v2_commit, &v1_v2_v3_v4_apis)
@@ -1249,7 +1249,7 @@ fn test_jj_symlink_conflict_v3_v4_rebase() -> Result<()> {
 /// [`test_rebase_rename_conflict_resolved_by_generate`].
 ///
 /// When Git's rename detection is active, it can misinterpret the deletion of
-/// an old version (converted to git ref) and creation of a new version as a
+/// an old version (converted to Git stub) and creation of a new version as a
 /// "rename". If two branches both do this with different new versions, Git
 /// reports a rename/rename conflict.
 ///
@@ -1258,10 +1258,10 @@ fn test_jj_symlink_conflict_v3_v4_rebase() -> Result<()> {
 ///     main: [initial] -- [v1,v2 added] -- [unrelated A] -- [unrelated B]
 ///                               |                 |
 ///                               |                 +-- branch_b: [add v4]
-///                               |                         (v1,v2 become git refs)
+///                               |                         (v1,v2 become Git stubs)
 ///                               |
 ///                               +-- branch_a: [add v3]
-///                                       (v1,v2 become git refs)
+///                                       (v1,v2 become Git stubs)
 /// ```
 ///
 /// Git sees both branches "renaming" v2.json to different files (v3.json vs
@@ -1272,7 +1272,7 @@ fn test_jj_symlink_conflict_v3_v4_rebase() -> Result<()> {
 fn rename_conflict_v3_v4_setup(
     env: &TestEnvironment,
 ) -> Result<(String, ExpectedConflicts)> {
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
@@ -1283,13 +1283,13 @@ fn rename_conflict_v3_v4_setup(
     env.make_unrelated_commit("unrelated B")?;
     env.create_branch("branch_b")?;
 
-    // Capture paths before git ref conversion for conflict tracking.
+    // Capture paths before Git stub conversion for conflict tracking.
     let v2_json_path = env
         .find_versioned_document_path("versioned-health", "2.0.0")?
         .expect("v2 should exist as JSON before branching");
 
     env.checkout_branch("branch_a")?;
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     let v3_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
@@ -1297,7 +1297,7 @@ fn rename_conflict_v3_v4_setup(
     env.commit_documents()?;
 
     env.checkout_branch("branch_b")?;
-    let v1_v2_v4_apis = versioned_health_v1_v2_v4_git_ref_apis()?;
+    let v1_v2_v4_apis = versioned_health_v1_v2_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v4_apis)?;
     let v4_json_path = env
         .find_versioned_document_path("versioned-health", "4.0.0")?
@@ -1328,19 +1328,19 @@ fn rename_conflict_v3_v4_verify(
     v1_v2_v3_v4_apis: &ManagedApis,
 ) -> Result<()> {
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
     );
 
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_ref_commit, v1_v2_commit,
-        "v1 git ref should point to the original commit"
+        v1_stub.commit().to_string(),
+        v1_v2_commit,
+        "v1 Git stub should point to the original commit"
     );
 
     // v3 is locally added (not blessed), so it should be JSON.
@@ -1349,8 +1349,8 @@ fn rename_conflict_v3_v4_verify(
         "v3 should exist as JSON (locally added)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref (locally added, not blessed)"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub (locally added, not blessed)"
     );
 
     assert!(
@@ -1358,8 +1358,8 @@ fn rename_conflict_v3_v4_verify(
         "v4 should exist as JSON (latest)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub"
     );
 
     let result = check_apis_up_to_date(env.environment(), v1_v2_v3_v4_apis)?;
@@ -1392,7 +1392,7 @@ fn test_rename_conflict_blessed_versions() -> Result<()> {
     );
 
     // Resolution: make branch's alternate v3 into v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
     env.complete_merge()?;
 
@@ -1424,7 +1424,7 @@ fn test_rebase_rename_conflict_blessed_versions() -> Result<()> {
     );
 
     // Resolution: make branch's alternate v3 into v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
     env.continue_rebase()?;
 
@@ -1461,7 +1461,7 @@ fn test_jj_symlink_conflict_blessed_merge() -> Result<()> {
     );
 
     // Resolution: make branch's alternate v3 into v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.jj_resolve_conflicts(&v1_v2_v3_v4alt_apis)?;
 
     rename_conflict_blessed_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt_apis)
@@ -1493,7 +1493,7 @@ fn test_jj_symlink_conflict_blessed_rebase() -> Result<()> {
     );
 
     // Resolution: make branch's alternate v3 into v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.jj_resolve_conflicts(&v1_v2_v3_v4alt_apis)?;
 
     rename_conflict_blessed_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt_apis)
@@ -1529,7 +1529,7 @@ fn test_rename_conflict_blessed_versions_main_first() -> Result<()> {
     );
 
     // Resolution: make branch's alternate v3 into v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
     env.complete_merge()?;
 
@@ -1547,7 +1547,7 @@ fn test_rename_conflict_blessed_versions_main_first() -> Result<()> {
 /// This simulates a realistic scenario where:
 /// 1. main adds v3 (standard version)
 /// 2. branch adds v3 with different content (alternate version)
-/// 3. Both branches convert v2 to git ref when adding v3
+/// 3. Both branches convert v2 to Git stub when adding v3
 /// 4. Merge/rebase causes a conflict on v3 files (different hashes due to
 ///    different content)
 /// 5. Resolution: the branch's v3-alternate becomes v4, main's v3 stays as v3
@@ -1570,20 +1570,20 @@ fn test_rename_conflict_blessed_versions_main_first() -> Result<()> {
 fn rename_conflict_blessed_setup(
     env: &TestEnvironment,
 ) -> Result<(String, ExpectedConflicts)> {
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.create_branch("branch_b")?;
 
-    // Capture paths before git ref conversion for conflict tracking.
+    // Capture paths before Git stub conversion for conflict tracking.
     let v2_json_path = env
         .find_versioned_document_path("versioned-health", "2.0.0")?
         .expect("v2 should exist as JSON before generating v3");
 
     // On main: add v3 (standard).
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     let v3_json_path_main = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
@@ -1592,7 +1592,7 @@ fn rename_conflict_blessed_setup(
 
     // On branch_b: add v3-alternate (different content, different hash).
     env.checkout_branch("branch_b")?;
-    let v3_alt_apis = versioned_health_v3_alternate_git_ref_apis()?;
+    let v3_alt_apis = versioned_health_v3_alternate_git_stub_apis()?;
     env.generate_documents(&v3_alt_apis)?;
     let v3_json_path_b = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
@@ -1623,25 +1623,25 @@ fn rename_conflict_blessed_verify(
     v1_v2_v3_v4alt_apis: &ManagedApis,
 ) -> Result<()> {
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
     );
 
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_ref_commit, v1_v2_commit,
-        "v1 git ref should point to the original commit"
+        v1_stub.commit().to_string(),
+        v1_v2_commit,
+        "v1 Git stub should point to the original commit"
     );
 
     // v3 is blessed (from main) and not latest.
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should be a git ref (blessed from main, not latest)"
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should be a Git stub (blessed from main, not latest)"
     );
 
     assert!(
@@ -1649,8 +1649,8 @@ fn rename_conflict_blessed_verify(
         "v4 should exist as JSON (latest)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref"
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub"
     );
 
     let result = check_apis_up_to_date(env.environment(), v1_v2_v3_v4alt_apis)?;
@@ -1659,63 +1659,64 @@ fn rename_conflict_blessed_verify(
     Ok(())
 }
 
-/// Test that unparseable git ref files (e.g., with conflict markers) are
+/// Test that unparseable Git stubs (e.g., with conflict markers) are
 /// detected and regenerated.
 #[test]
-fn test_unparseable_git_ref_regenerated() -> Result<()> {
+fn test_unparseable_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.make_unrelated_commit("intermediate")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
 
-    let v1_git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("v1 git ref should exist");
+    let v1_git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("v1 Git stub should exist");
     let corrupted_content = "<<<<<<< HEAD\n\
 abc123:documents/versioned-health/old.json\n\
 =======\n\
 def456:documents/versioned-health/new.json\n\
 >>>>>>> branch\n";
-    env.create_file(&v1_git_ref_path, corrupted_content)?;
+    env.create_file(&v1_git_stub_path, corrupted_content)?;
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should report needs update for unparseable git ref"
+        "check should report needs update for unparseable Git stub"
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref should be regenerated"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 Git stub should be regenerated"
     );
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_commit, v1_v2_commit,
-        "regenerated v1 git ref should point to the original commit"
+        v1_git_stub.commit().to_string(),
+        v1_v2_commit,
+        "regenerated v1 Git stub should point to the original commit"
     );
 
-    let v1_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
+    let v1_content = env.read_git_stub_content("versioned-health", "1.0.0")?;
     assert!(
         v1_content.contains("\"openapi\""),
-        "regenerated git ref content should be valid OpenAPI"
+        "regenerated Git stub content should be valid OpenAPI"
     );
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
@@ -1724,64 +1725,67 @@ def456:documents/versioned-health/new.json\n\
     Ok(())
 }
 
-/// Test that git ref files with non-canonical format (backslashes, missing
+/// Test that Git stubs with non-canonical format (backslashes, missing
 /// trailing newline) are regenerated.
 #[test]
-fn test_non_canonical_git_ref_regenerated() -> Result<()> {
+fn test_non_canonical_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.make_unrelated_commit("intermediate")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
 
-    let v1_git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("v1 git ref should exist");
-    let original_content = env.read_file(&v1_git_ref_path)?;
+    let v1_git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("v1 Git stub should exist");
+    let original_content = env.read_file(&v1_git_stub_path)?;
     let original_content = original_content.trim();
 
     let (commit, path) = original_content
         .split_once(':')
-        .expect("git ref should have commit:path format");
+        .expect("Git stub should have commit:path format");
     let non_canonical_path = path.replace('/', "\\");
     let non_canonical_content = format!("{}:{}", commit, non_canonical_path);
-    env.create_file(&v1_git_ref_path, &non_canonical_content)?;
+    env.create_file(&v1_git_stub_path, &non_canonical_content)?;
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should report needs update for non-canonical git ref"
+        "check should report needs update for non-canonical Git stub"
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_git_stub_raw =
+        env.read_versioned_git_stub_raw("versioned-health", "1.0.0")?;
     assert!(
-        v1_git_ref.ends_with('\n'),
-        "regenerated git ref should have trailing newline"
+        v1_git_stub_raw.ends_with('\n'),
+        "regenerated Git stub should have trailing newline"
     );
     assert!(
-        !v1_git_ref.contains('\\'),
-        "regenerated git ref should use forward slashes"
+        !v1_git_stub_raw.contains('\\'),
+        "regenerated Git stub should use forward slashes"
     );
 
-    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_commit, v1_v2_commit,
-        "regenerated v1 git ref should point to the original commit"
+        v1_git_stub.commit().to_string(),
+        v1_v2_commit,
+        "regenerated v1 Git stub should point to the original commit"
     );
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
@@ -1790,39 +1794,40 @@ fn test_non_canonical_git_ref_regenerated() -> Result<()> {
     Ok(())
 }
 
-/// Test that an empty git ref file is detected and regenerated.
+/// Test that an empty Git stub is detected and regenerated.
 #[test]
-fn test_empty_git_ref_regenerated() -> Result<()> {
+fn test_empty_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
 
     env.make_unrelated_commit("intermediate")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
-    let v1_git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("v1 git ref should exist");
-    env.create_file(&v1_git_ref_path, "")?;
+    let v1_git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("v1 Git stub should exist");
+    env.create_file(&v1_git_stub_path, "")?;
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should report needs update for empty git ref"
+        "check should report needs update for empty Git stub"
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_git_stub_raw =
+        env.read_versioned_git_stub_raw("versioned-health", "1.0.0")?;
     assert!(
-        v1_git_ref.contains(':'),
-        "regenerated git ref should have commit:path format"
+        v1_git_stub_raw.contains(':'),
+        "regenerated Git stub should have commit:path format"
     );
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
@@ -1831,27 +1836,27 @@ fn test_empty_git_ref_regenerated() -> Result<()> {
     Ok(())
 }
 
-/// Test that a git ref file with an invalid commit hash is regenerated.
+/// Test that a Git stub with an invalid commit hash is regenerated.
 #[test]
-fn test_invalid_commit_hash_git_ref_regenerated() -> Result<()> {
+fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
 
     env.make_unrelated_commit("intermediate")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
-    let v1_git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("v1 git ref should exist");
+    let v1_git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("v1 Git stub should exist");
     let invalid_content =
         "not-a-valid-hash:documents/versioned-health/file.json\n";
-    env.create_file(&v1_git_ref_path, invalid_content)?;
+    env.create_file(&v1_git_stub_path, invalid_content)?;
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
@@ -1862,12 +1867,13 @@ fn test_invalid_commit_hash_git_ref_regenerated() -> Result<()> {
 
     env.generate_documents(&v1_v2_v3_apis)?;
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    let v1_commit = v1_git_stub.commit().to_string();
     assert_eq!(
         v1_commit.len(),
         40,
-        "regenerated git ref should have valid SHA-1 commit hash"
+        "regenerated Git stub should have valid SHA-1 commit hash"
     );
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
@@ -1876,67 +1882,68 @@ fn test_invalid_commit_hash_git_ref_regenerated() -> Result<()> {
     Ok(())
 }
 
-/// Test that a git ref file pointing to a nonexistent commit/path is
-/// regenerated. This covers the case where a gitref is syntactically valid but
+/// Test that a Git stub pointing to a nonexistent commit/path is
+/// regenerated. This covers the case where a gitstub is syntactically valid but
 /// semantically invalid (the commit or path no longer exists in git, e.g.,
 /// after a rebase or force-push).
 #[test]
-fn test_unresolvable_git_ref_regenerated() -> Result<()> {
+fn test_unresolvable_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.make_unrelated_commit("intermediate")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
 
-    // Write a syntactically valid but semantically invalid gitref.
-    let v1_git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("v1 git ref should exist");
+    // Write a syntactically valid but semantically invalid gitstub.
+    let v1_git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("v1 Git stub should exist");
     let nonexistent_commit = "aa".repeat(20);
     let unresolvable_content =
         format!("{nonexistent_commit}:documents/versioned-health/fake.json\n");
-    env.create_file(&v1_git_ref_path, &unresolvable_content)?;
+    env.create_file(&v1_git_stub_path, &unresolvable_content)?;
 
     // Check should report NeedsUpdate (not Failures).
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should report needs update for unresolvable git ref, \
+        "check should report needs update for unresolvable Git stub, \
          not a hard failure"
     );
 
-    // Generate should fix the problem by deleting and recreating the gitref.
+    // Generate should fix the problem by deleting and recreating the gitstub.
     env.generate_documents(&v1_v2_v3_apis)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref should be regenerated"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 Git stub should be regenerated"
     );
 
-    let v1_git_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_git_ref.trim().split(':').next().unwrap();
+    let v1_git_stub =
+        env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_commit, v1_v2_commit,
-        "regenerated v1 git ref should point to the original commit"
+        v1_git_stub.commit().to_string(),
+        v1_v2_commit,
+        "regenerated v1 Git stub should point to the original commit"
     );
 
-    let v1_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
+    let v1_content = env.read_git_stub_content("versioned-health", "1.0.0")?;
     assert!(
         v1_content.contains("\"openapi\""),
-        "regenerated git ref content should be valid OpenAPI"
+        "regenerated Git stub content should be valid OpenAPI"
     );
 
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
@@ -1945,7 +1952,7 @@ fn test_unresolvable_git_ref_regenerated() -> Result<()> {
     Ok(())
 }
 
-/// Test the dependent branch workflow with git refs.
+/// Test the dependent branch workflow with Git stubs.
 ///
 /// See [`dependent_branch_setup`] for the test scenario.
 #[test]
@@ -1972,8 +1979,8 @@ fn test_dependent_branch_merge() -> Result<()> {
     // After the merge, v3 and v4 are both still JSON (no generate run yet).
     dependent_branch_after_merge_before_generate_verify(&env)?;
 
-    // Run generate to convert v3 to a git ref (now that v3 is blessed).
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    // Run generate to convert v3 to a Git stub (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
 
     dependent_branch_after_generate_verify(
@@ -2011,8 +2018,8 @@ fn test_dependent_branch_rebase() -> Result<()> {
     // After the rebase, v3 and v4 are both still JSON (no generate run yet).
     dependent_branch_after_merge_before_generate_verify(&env)?;
 
-    // Run generate to convert v3 to a git ref (now that v3 is blessed).
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    // Run generate to convert v3 to a Git stub (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
 
     dependent_branch_after_generate_verify(
@@ -2060,8 +2067,8 @@ fn test_jj_dependent_branch_merge() -> Result<()> {
     // After the merge, v3 and v4 are both still JSON (no generate run yet).
     dependent_branch_after_merge_before_generate_verify(&env)?;
 
-    // Run generate to convert v3 to a git ref (now that v3 is blessed).
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    // Run generate to convert v3 to a Git stub (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
 
     dependent_branch_after_generate_verify(
@@ -2106,8 +2113,8 @@ fn test_jj_dependent_branch_rebase() -> Result<()> {
     // After the rebase, v3 and v4 are both still JSON (no generate run yet).
     dependent_branch_after_merge_before_generate_verify(&env)?;
 
-    // Run generate to convert v3 to a git ref (now that v3 is blessed).
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    // Run generate to convert v3 to a Git stub (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
 
     dependent_branch_after_generate_verify(
@@ -2121,8 +2128,8 @@ fn test_jj_dependent_branch_rebase() -> Result<()> {
 ///
 /// This simulates a scenario where:
 /// 1. main has v1 and v2 committed
-/// 2. branch_a (off main) adds v3; v1 and v2 become git refs
-/// 3. branch_b (off branch_a) adds v4; v3 should NOT become a git ref because
+/// 2. branch_a (off main) adds v3; v1 and v2 become Git stubs
+/// 3. branch_b (off branch_a) adds v4; v3 should NOT become a Git stub because
 ///    v3 is not yet blessed (not on main)
 ///
 /// ```text
@@ -2130,13 +2137,13 @@ fn test_jj_dependent_branch_rebase() -> Result<()> {
 ///     main: [initial] -- [v1,v2 added]
 ///                               |
 ///                               +-- branch_a: [add v3]
-///                                       (v1,v2 become git refs)
+///                                       (v1,v2 become Git stubs)
 ///                                              |
 ///                                              +-- branch_b: [add v4]
 ///                                                      (v3 stays JSON - not blessed!)
 /// ```
 ///
-/// The key assertion is that on branch_b, v3 should NOT become a git ref
+/// The key assertion is that on branch_b, v3 should NOT become a Git stub
 /// because v3's first commit is not on main. This tests condition 2 from the
 /// RFD: "The API is blessed (i.e. present in main)."
 ///
@@ -2144,7 +2151,7 @@ fn test_jj_dependent_branch_rebase() -> Result<()> {
 /// branch_b.
 fn dependent_branch_setup(env: &TestEnvironment) -> Result<String> {
     // Step 1: Create v1, v2 on main.
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
@@ -2153,25 +2160,25 @@ fn dependent_branch_setup(env: &TestEnvironment) -> Result<String> {
     env.create_branch("branch_a")?;
     env.checkout_branch("branch_a")?;
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
 
-    // Verify: v1 and v2 should now be git refs, v3 is JSON.
+    // Verify: v1 and v2 should now be Git stubs, v3 is JSON.
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref on branch_a"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub on branch_a"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref on branch_a"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub on branch_a"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "3.0.0")?,
         "v3 should exist as JSON on branch_a"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref on branch_a"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub on branch_a"
     );
 
     env.commit_documents()?;
@@ -2180,33 +2187,33 @@ fn dependent_branch_setup(env: &TestEnvironment) -> Result<String> {
     env.create_branch("branch_b")?;
     env.checkout_branch("branch_b")?;
 
-    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4_apis)?;
 
-    // v3 should not become a git ref because v3 is not blessed yet.
+    // v3 should not become a Git stub because v3 is not blessed yet.
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref on branch_b"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub on branch_b"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref on branch_b"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub on branch_b"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "3.0.0")?,
         "v3 should exist as JSON on branch_b (not blessed yet)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should NOT be a git ref on branch_b (not blessed yet)"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should NOT be a Git stub on branch_b (not blessed yet)"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "4.0.0")?,
         "v4 should exist as JSON on branch_b"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref (it's the latest)"
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub (it's the latest)"
     );
 
     env.commit_documents()?;
@@ -2220,34 +2227,34 @@ fn dependent_branch_after_a_merged_verify(
     v1_v2_commit: &str,
 ) -> Result<()> {
     // After merging branch_a into main:
-    // - v1 and v2 should be git refs (they were converted on branch_a).
+    // - v1 and v2 should be Git stubs (they were converted on branch_a).
     // - v3 should be JSON (it's the latest on main now).
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref on main after merging branch_a"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub on main after merging branch_a"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref on main after merging branch_a"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub on main after merging branch_a"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "3.0.0")?,
         "v3 should exist as JSON on main (it's the latest)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not be a git ref on main (it's the latest)"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a Git stub on main (it's the latest)"
     );
 
-    // Verify git refs point to the correct commit.
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_ref.trim().split(':').next().unwrap();
+    // Verify Git stubs point to the correct commit.
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_commit, v1_v2_commit,
-        "v1 git ref should point to the original v1/v2 commit"
+        v1_stub.commit().to_string(),
+        v1_v2_commit,
+        "v1 Git stub should point to the original v1/v2 commit"
     );
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(result, CheckResult::Success);
 
@@ -2257,34 +2264,34 @@ fn dependent_branch_after_a_merged_verify(
 /// Verify the state after merging main into branch_b, before running generate.
 ///
 /// At this point:
-/// - v1 and v2 are git refs (they were converted on branch_a).
+/// - v1 and v2 are Git stubs (they were converted on branch_a).
 /// - v3 and v4 are both JSON (v3 came from main, v4 is local).
 fn dependent_branch_after_merge_before_generate_verify(
     env: &TestEnvironment,
 ) -> Result<()> {
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref after merge"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub after merge"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref after merge"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub after merge"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "3.0.0")?,
         "v3 should exist as JSON after merge (blessed from main)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should not yet be a git ref (generate not run yet)"
+        !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should not yet be a Git stub (generate not run yet)"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "4.0.0")?,
         "v4 should exist as JSON after merge"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref (it's the latest)"
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub (it's the latest)"
     );
 
     Ok(())
@@ -2293,8 +2300,8 @@ fn dependent_branch_after_merge_before_generate_verify(
 /// Verify the state after running generate on branch_b.
 ///
 /// After generate:
-/// - v1 and v2 are git refs.
-/// - v3 should now be a git ref (it's blessed from main and not latest).
+/// - v1 and v2 are Git stubs.
+/// - v3 should now be a Git stub (it's blessed from main and not latest).
 /// - v4 should be JSON (it's the latest).
 fn dependent_branch_after_generate_verify(
     env: &TestEnvironment,
@@ -2302,36 +2309,36 @@ fn dependent_branch_after_generate_verify(
     v1_v2_v3_v4_apis: &ManagedApis,
 ) -> Result<()> {
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
-        "v2 should be a git ref"
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
     );
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
-        "v3 should now be a git ref (blessed from main, not latest)"
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should now be a Git stub (blessed from main, not latest)"
     );
     assert!(
         !env.versioned_local_document_exists("versioned-health", "3.0.0")?,
-        "v3 JSON should be removed after conversion to git ref"
+        "v3 JSON should be removed after conversion to Git stub"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "4.0.0")?,
         "v4 should exist as JSON (latest)"
     );
     assert!(
-        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
-        "v4 should not be a git ref (it's the latest)"
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub (it's the latest)"
     );
 
-    // Verify git refs point to the correct commits.
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_commit = v1_ref.trim().split(':').next().unwrap();
+    // Verify Git stubs point to the correct commits.
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        v1_commit, v1_v2_commit,
-        "v1 git ref should point to the original v1/v2 commit"
+        v1_stub.commit().to_string(),
+        v1_v2_commit,
+        "v1 Git stub should point to the original v1/v2 commit"
     );
 
     let result = check_apis_up_to_date(env.environment(), v1_v2_v3_v4_apis)?;
@@ -2340,7 +2347,7 @@ fn dependent_branch_after_generate_verify(
     Ok(())
 }
 
-/// Test successive commits modifying the same non-blessed version with git ref
+/// Test successive commits modifying the same non-blessed version with Git stub
 /// storage.
 ///
 /// See [`successive_changes_setup`] for the scenario.
@@ -2357,7 +2364,7 @@ fn test_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
     assert_eq!(conflicted_files, all_conflict_paths(&expected_first_conflicts));
 
     // Resolution: promote feature's alt-1 to v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
 
     let continue_result = env.try_continue_rebase()?;
@@ -2371,7 +2378,8 @@ fn test_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
     );
 
     // Resolution: update v4 to alt-2 content.
-    let v1_v2_v3_v4alt2_apis = versioned_health_v1_v2_v3_v4alt2_git_ref_apis()?;
+    let v1_v2_v3_v4alt2_apis =
+        versioned_health_v1_v2_v3_v4alt2_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_v4alt2_apis)?;
 
     env.continue_rebase()?;
@@ -2402,14 +2410,15 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
     assert_eq!(first_conflicts, jj_conflict_paths(&expected_first_conflicts));
 
     // Resolution: promote feature's alt-1 to v4, keep main's v3.
-    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+    let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
     env.jj_resolve_commit("feature-", &v1_v2_v3_v4alt_apis)?;
 
     let second_conflicts = env.jj_get_revision_conflicts("feature")?;
     assert_eq!(second_conflicts, jj_conflict_paths(&expected_second_conflicts));
 
     // Resolution: update v4 to alt-2 content.
-    let v1_v2_v3_v4alt2_apis = versioned_health_v1_v2_v3_v4alt2_git_ref_apis()?;
+    let v1_v2_v3_v4alt2_apis =
+        versioned_health_v1_v2_v3_v4alt2_git_stub_apis()?;
     env.jj_resolve_commit("feature", &v1_v2_v3_v4alt2_apis)?;
 
     successive_changes_verify(&env, &v1_v2_commit, &v1_v2_v3_v4alt2_apis)
@@ -2419,26 +2428,26 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
 ///
 /// ```text
 /// main: [v1,v2] -- [add v3 standard]
-///            \         (v1,v2 -> gitref)
+///            \         (v1,v2 -> gitstub)
 ///             feature: [add v3 alt-1] -- [v3 alt-1 -> alt-2]
-///                          (v1,v2 -> gitref)
+///                          (v1,v2 -> gitstub)
 /// ```
 fn successive_changes_setup(
     env: &TestEnvironment,
 ) -> Result<(String, ExpectedConflicts, ExpectedConflicts)> {
-    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
     let v1_v2_commit = env.get_current_commit_hash_full()?;
 
     env.create_branch("feature")?;
 
-    // Capture the v2 path before git ref conversion.
+    // Capture the v2 path before Git stub conversion.
     let v2_json_path = env
         .find_versioned_document_path("versioned-health", "2.0.0")?
         .expect("v2 should exist as JSON");
 
-    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     let v3_standard_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
@@ -2446,14 +2455,14 @@ fn successive_changes_setup(
     env.commit_documents()?;
 
     env.checkout_branch("feature")?;
-    let v3_alt1_apis = versioned_health_v3_alternate_git_ref_apis()?;
+    let v3_alt1_apis = versioned_health_v3_alternate_git_stub_apis()?;
     env.generate_documents(&v3_alt1_apis)?;
     let v3_alt1_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
         .expect("v3 alt-1 should exist");
     env.commit_documents()?;
 
-    let v3_alt2_apis = versioned_health_v3_alternate2_git_ref_apis()?;
+    let v3_alt2_apis = versioned_health_v3_alternate2_git_stub_apis()?;
     env.generate_documents(&v3_alt2_apis)?;
     let v3_alt2_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
@@ -2463,7 +2472,7 @@ fn successive_changes_setup(
     // Pre-compute the v4 path: resolution will promote alt-1 to v4.
     let v4_json_path = {
         let temp_env = TestEnvironment::new()?;
-        let v4_apis = versioned_health_v1_v2_v3_v4alt_git_ref_apis()?;
+        let v4_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
         temp_env.generate_documents(&v4_apis)?;
         temp_env
             .find_versioned_document_path("versioned-health", "4.0.0")?
@@ -2498,7 +2507,7 @@ fn successive_changes_setup(
     Ok((v1_v2_commit, expected_first_conflicts, expected_second_conflicts))
 }
 
-/// Verifies final state: v1-v3 as git refs, v4 as JSON (latest).
+/// Verifies final state: v1-v3 as Git stubs, v4 as JSON (latest).
 fn successive_changes_verify(
     env: &TestEnvironment,
     v1_v2_commit: &str,
@@ -2506,19 +2515,18 @@ fn successive_changes_verify(
 ) -> Result<()> {
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
         assert!(
-            env.versioned_git_ref_exists("versioned-health", version)?,
-            "{version} should be a git ref"
+            env.versioned_git_stub_exists("versioned-health", version)?,
+            "{version} should be a Git stub"
         );
     }
 
-    // v1/v2 git refs should point to the original commit.
-    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let v1_ref_commit = v1_ref.trim().split(':').next().unwrap();
-    assert_eq!(v1_ref_commit, v1_v2_commit);
+    // v1/v2 Git stubs should point to the original commit.
+    let v1_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
+    assert_eq!(v1_stub.commit().to_string(), v1_v2_commit);
 
-    // v4 is latest, so it's JSON not git ref.
+    // v4 is latest, so it's JSON not Git stub.
     assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
-    assert!(!env.versioned_git_ref_exists("versioned-health", "4.0.0")?);
+    assert!(!env.versioned_git_stub_exists("versioned-health", "4.0.0")?);
 
     let result = check_apis_up_to_date(env.environment(), final_apis)?;
     assert_eq!(result, CheckResult::Success);
@@ -2526,23 +2534,23 @@ fn successive_changes_verify(
     Ok(())
 }
 
-/// Test that stale git ref commit hashes are detected and fixed.
+/// Test that stale Git stub commit hashes are detected and fixed.
 ///
-/// After a rebase or force-push, the commit hash stored in a `.gitref` file
+/// After a rebase or force-push, the commit hash stored in a `.gitstub` file
 /// may refer to a commit that is no longer an ancestor of the merge base.
-/// The tool should detect this and update the git ref to the correct commit.
+/// The tool should detect this and update the Git stub to the correct commit.
 ///
 /// This test simulates this by creating a divergent branch with a commit that
 /// has the same files as main. The divergent commit exists in the object
 /// store (so `git cat-file blob` works), but is not an ancestor of HEAD.
-/// Overwriting the gitref files to point to this divergent commit simulates
+/// Overwriting the gitstub files to point to this divergent commit simulates
 /// what happens after a rebase.
 #[test]
-fn test_stale_git_ref_commit() -> Result<()> {
+fn test_stale_git_stub_commit() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Step 1: generate v1-v3 and commit them.
-    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
     let original_commit = env.get_current_commit_hash_full()?;
@@ -2561,23 +2569,23 @@ fn test_stale_git_ref_commit() -> Result<()> {
     // now NOT an ancestor of main's HEAD.
     env.make_unrelated_commit("advance main")?;
 
-    // Step 4: add v4 so that v1-v3 get converted to git refs.
-    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    // Step 4: add v4 so that v1-v3 get converted to Git stubs.
+    let v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v4)?;
     env.commit_documents()?;
 
-    // Verify that v1-v3 are git refs pointing to the original commit.
+    // Verify that v1-v3 are Git stubs pointing to the original commit.
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
         assert!(
-            env.versioned_git_ref_exists("versioned-health", version)?,
-            "v{version} should be a git ref"
+            env.versioned_git_stub_exists("versioned-health", version)?,
+            "v{version} should be a Git stub"
         );
-        let git_ref_content =
-            env.read_versioned_git_ref("versioned-health", version)?;
-        let commit = git_ref_content.trim().split(':').next().unwrap();
+        let git_stub =
+            env.read_versioned_git_stub("versioned-health", version)?;
         assert_eq!(
-            commit, original_commit,
-            "v{version} git ref should point to the original commit"
+            git_stub.commit().to_string(),
+            original_commit,
+            "v{version} Git stub should point to the original commit"
         );
     }
 
@@ -2588,24 +2596,24 @@ fn test_stale_git_ref_commit() -> Result<()> {
         "check should pass before tampering"
     );
 
-    // Step 5: overwrite the git ref files to point to the divergent commit.
+    // Step 5: overwrite the Git stubs to point to the divergent commit.
     // This simulates what happens after a rebase: the commit hash is real
     // and the content is accessible, but the commit is not an ancestor of
     // the merge base.
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
-        let git_ref_path = env
-            .find_versioned_git_ref_path("versioned-health", version)?
-            .expect("git ref should exist");
-        let git_ref_content =
-            env.read_versioned_git_ref("versioned-health", version)?;
+        let git_stub_path = env
+            .find_versioned_git_stub_path("versioned-health", version)?
+            .expect("Git stub should exist");
+        let git_stub_content =
+            env.read_versioned_git_stub_raw("versioned-health", version)?;
         // Replace the commit hash but keep the path.
-        let path_part = git_ref_content
+        let path_part = git_stub_content
             .trim()
             .split_once(':')
-            .expect("git ref should contain ':'")
+            .expect("Git stub should contain ':'")
             .1;
         let stale_content = format!("{}:{}\n", divergent_commit, path_part);
-        env.create_file(&git_ref_path, &stale_content)?;
+        env.create_file(&git_stub_path, &stale_content)?;
     }
 
     // Step 6: check should detect the stale commits.
@@ -2613,20 +2621,20 @@ fn test_stale_git_ref_commit() -> Result<()> {
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
-        "check should detect stale git ref commits"
+        "check should detect stale Git stub commits"
     );
 
-    // Step 7: generate should fix the stale git refs.
+    // Step 7: generate should fix the stale Git stubs.
     env.generate_documents(&v4)?;
 
-    // Verify the git refs now point to the correct commit.
+    // Verify the Git stubs now point to the correct commit.
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
-        let git_ref_content =
-            env.read_versioned_git_ref("versioned-health", version)?;
-        let commit = git_ref_content.trim().split(':').next().unwrap();
+        let git_stub =
+            env.read_versioned_git_stub("versioned-health", version)?;
         assert_eq!(
-            commit, original_commit,
-            "v{version} git ref should be updated to the correct commit"
+            git_stub.commit().to_string(),
+            original_commit,
+            "v{version} Git stub should be updated to the correct commit"
         );
     }
 
@@ -2635,23 +2643,23 @@ fn test_stale_git_ref_commit() -> Result<()> {
     assert_eq!(
         result,
         CheckResult::Success,
-        "check should pass after fixing stale git refs"
+        "check should pass after fixing stale Git stubs"
     );
 
     Ok(())
 }
 
-/// Test that stale git ref commits are fixed even when duplicate files exist.
+/// Test that stale Git stub commits are fixed even when duplicate files exist.
 ///
-/// When both a `.json` and `.json.gitref` exist for the same version (e.g.,
-/// from an interrupted conversion), AND the gitref's commit is stale, both
+/// When both a `.json` and `.json.gitstub` exist for the same version (e.g.,
+/// from an interrupted conversion), AND the gitstub's commit is stale, both
 /// problems should be fixed in a single `generate` invocation.
 #[test]
-fn test_stale_git_ref_commit_with_duplicate() -> Result<()> {
+fn test_stale_git_stub_commit_with_duplicate() -> Result<()> {
     let env = TestEnvironment::new()?;
 
     // Set up v1-v3, then create a divergent branch for the stale commit.
-    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
     let original_commit = env.get_current_commit_hash_full()?;
@@ -2664,37 +2672,38 @@ fn test_stale_git_ref_commit_with_duplicate() -> Result<()> {
 
     env.make_unrelated_commit("advance main")?;
 
-    // Add v4 so v1-v3 become git refs.
-    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    // Add v4 so v1-v3 become Git stubs.
+    let v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v4)?;
     env.commit_documents()?;
 
     let result = check_apis_up_to_date(env.environment(), &v4)?;
     assert_eq!(result, CheckResult::Success);
 
-    // Tamper with v1's gitref to point to the divergent commit (stale).
-    let git_ref_path = env
-        .find_versioned_git_ref_path("versioned-health", "1.0.0")?
-        .expect("v1 git ref should exist");
-    let git_ref_content =
-        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let path_part = git_ref_content
+    // Tamper with v1's gitstub to point to the divergent commit (stale).
+    let git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .expect("v1 Git stub should exist");
+    let git_stub_content =
+        env.read_versioned_git_stub_raw("versioned-health", "1.0.0")?;
+    let path_part = git_stub_content
         .trim()
         .split_once(':')
-        .expect("git ref should contain ':'")
+        .expect("Git stub should contain ':'")
         .1;
     let stale_content = format!("{}:{}\n", divergent_commit, path_part);
-    env.create_file(&git_ref_path, &stale_content)?;
+    env.create_file(&git_stub_path, &stale_content)?;
 
     // Also create a duplicate JSON file for v1 (simulating an interrupted
     // conversion).
-    let json_content = env.read_git_ref_content("versioned-health", "1.0.0")?;
-    let json_path = git_ref_path.with_extension("");
+    let json_content =
+        env.read_git_stub_content("versioned-health", "1.0.0")?;
+    let json_path = git_stub_path.with_extension("");
     env.create_file(&json_path, &json_content)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref should exist"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 Git stub should exist"
     );
     assert!(
         env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -2714,21 +2723,20 @@ fn test_stale_git_ref_commit_with_duplicate() -> Result<()> {
     env.generate_documents(&v4)?;
 
     assert!(
-        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
-        "v1 git ref should still exist"
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 Git stub should still exist"
     );
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
         "v1 duplicate JSON should be removed"
     );
 
-    // The git ref should now point to the correct commit.
-    let git_ref_content =
-        env.read_versioned_git_ref("versioned-health", "1.0.0")?;
-    let commit = git_ref_content.trim().split(':').next().unwrap();
+    // The Git stub should now point to the correct commit.
+    let git_stub = env.read_versioned_git_stub("versioned-health", "1.0.0")?;
     assert_eq!(
-        commit, original_commit,
-        "v1 git ref should be updated to the correct commit"
+        git_stub.commit().to_string(),
+        original_commit,
+        "v1 Git stub should be updated to the correct commit"
     );
 
     // Check should pass without needing a second generate.
@@ -2746,25 +2754,25 @@ fn test_stale_git_ref_commit_with_duplicate() -> Result<()> {
 /// gracefully.
 ///
 /// When `git merge-base --is-ancestor` fails (e.g., due to a corrupt or
-/// inaccessible object store), `BlessedGitRef::to_git_ref` should propagate
-/// the error as an unfixable `GitRefFirstCommitUnknown` problem rather than
+/// inaccessible object store), `BlessedGitStub::to_git_stub` should propagate
+/// the error as an unfixable `GitStubFirstCommitUnknown` problem rather than
 /// panicking.
 ///
-/// This exercises the `BlessedGitRef::Known` path where `git_is_ancestor`
+/// This exercises the `BlessedGitStub::Known` path where `git_is_ancestor`
 /// errors, as opposed to the existing `test_git_error_reports_problem` which
-/// exercises the `BlessedGitRef::Lazy` path where `git_first_commit_for_file`
+/// exercises the `BlessedGitStub::Lazy` path where `git_first_commit_for_file`
 /// errors.
 #[test]
-fn test_stale_git_ref_is_ancestor_error() -> Result<()> {
+fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
     let env = TestEnvironment::new()?;
 
-    // Set up v1-v3, commit, then add v4 so v1-v3 become git refs (Known
+    // Set up v1-v3, commit, then add v4 so v1-v3 become Git stubs (Known
     // variants).
-    let v1_v2_v3 = versioned_health_git_ref_apis()?;
+    let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
 
-    let v4 = versioned_health_with_v4_git_ref_apis()?;
+    let v4 = versioned_health_with_v4_git_stub_apis()?;
     env.generate_documents(&v4)?;
     env.commit_documents()?;
 
@@ -2774,7 +2782,7 @@ fn test_stale_git_ref_is_ancestor_error() -> Result<()> {
 
     // Now swap in fake-git that fails on --is-ancestor. This causes
     // git_is_ancestor to return an error, which propagates through
-    // BlessedGitRef::to_git_ref as an Err.
+    // BlessedGitStub::to_git_stub as an Err.
     let fake_git = std::env::var("NEXTEST_BIN_EXE_fake_git")
         .expect("NEXTEST_BIN_EXE_fake_git should be set by nextest");
     let original_git = std::env::var("GIT").ok();
@@ -2790,8 +2798,8 @@ fn test_stale_git_ref_is_ancestor_error() -> Result<()> {
     let result = check_apis_up_to_date(env.environment(), &v4)?;
 
     // Should report failures: the git_is_ancestor error propagates as an
-    // unfixable GitRefFirstCommitUnknown problem for the non-latest blessed
-    // versions (v1-v3) that have BlessedGitRef::Known variants.
+    // unfixable GitStubFirstCommitUnknown problem for the non-latest blessed
+    // versions (v1-v3) that have BlessedGitStub::Known variants.
     assert_eq!(
         result,
         CheckResult::Failures,

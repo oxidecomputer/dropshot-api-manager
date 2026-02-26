@@ -246,29 +246,29 @@ See [guides/new-version.md](guides/new-version.md) for an overview and for detai
 
 As of this writing, every API has exactly one Rust client package and it's always generated from the latest version of the API.  Per RFD 532, this is sufficient for APIs that are server-side-only versioned.  For APIs that will be client-side versioned, you may need to create additional Rust packages that use Progenitor to generate clients based on older OpenAPI documents.  This has not been done before but is believed to be straightforward.
 
-## Git ref storage
+## Git stub storage
 
-For versioned APIs, the Dropshot API manager can optionally store older API versions as *Git ref files* instead of full JSON files. A Git ref file is a small text file (with a `.gitref` extension) that points to the JSON content at a specific Git commit.
+For versioned APIs, the Dropshot API manager can optionally store older API versions as *Git stubs* instead of full JSON files. A Git stub is a small text file (with a `.gitstub` extension) that points to the JSON content at a specific Git commit.
 
 ### Benefits
 
 - **Meaningful diffs on GitHub.** New API versions appear as renames of the previous version, so GitHub shows what actually changed rather than thousands of added lines.
 - **Blame works across versions.** `git blame` on the latest version traces history back through previous versions.
-- **Smaller repository checkout on disk.** Git ref files are ~100 bytes each, replacing large JSON files in the working copy.
+- **Smaller repository checkout on disk.** Git stubs are ~100 bytes each, replacing large JSON files in the working copy.
 
 For more background, see [RFD 634](https://rfd.shared.oxide.computer/rfd/0634).
 
 ### Tradeoffs
 
 - **Requires Git history.** Shallow clones won't work, so CI must use `fetch-depth: 0`. See [_CI and shallow clones_](#ci-and-shallow-clones) below.
-- **Rename-rename conflicts.** Parallel branches adding versions to the same API produce merge conflicts. See [_Git ref merge conflicts_](#git-ref-merge-conflicts) below.
-- **Tools must dereference Git ref files.** Tools that need older API versions must know how to read Git ref files, though most workflows only use the `-latest.json` symlink.
+- **Rename-rename conflicts.** Parallel branches adding versions to the same API produce merge conflicts. See [_Git stub merge conflicts_](#git-stub-merge-conflicts) below.
+- **Tools must dereference Git stubs.** Tools that need older API versions must know how to read Git stubs, though most workflows only use the `-latest.json` symlink.
 
-### Enabling Git ref storage
+### Enabling Git stub storage
 
-To enable Git ref storage for an API, use the `.with_git_ref_storage()` builder method when configuring the API in your integration point. You can also call `.with_git_ref_storage()` on a combined `ManagedApi` to turn Git ref storage on by default. Use `.disable_git_ref_storage()` to opt an API out of default Git ref storage.
+To enable Git stub storage for an API, use the `.with_git_stub_storage()` builder method when configuring the API in your integration point. You can also call `.with_git_stub_storage()` on a combined `ManagedApi` to turn Git stub storage on by default. Use `.disable_git_stub_storage()` to opt an API out of default Git stub storage.
 
-For details on the file format and conversion rules, see [_Git ref storage details_](#git-ref-storage-details) below.
+For details on the file format and conversion rules, see [_Git stub storage details_](#git-stub-storage-details) below.
 
 ## More about versioned APIs
 
@@ -402,11 +402,11 @@ That should be it!  Now, when iterating on the API, you'll need to follow the pr
 
 In principle, this process could be reversed to convert an API from versioned to lockstep, but this almost certainly has runtime implications that would need to be considered.
 
-### Git ref storage details
+### Git stub storage details
 
 #### What changes on disk
 
-With Git ref storage enabled, the directory structure changes from:
+With Git stub storage enabled, the directory structure changes from:
 
 ```
 openapi/sled-agent/
@@ -420,17 +420,17 @@ To:
 
 ```
 openapi/sled-agent/
-├── sled-agent-1.0.0-2da304.json.gitref
-├── sled-agent-2.0.0-a3e161.json.gitref
+├── sled-agent-1.0.0-2da304.json.gitstub
+├── sled-agent-2.0.0-a3e161.json.gitstub
 ├── sled-agent-3.0.0-f44f77.json
 └── sled-agent-latest.json -> sled-agent-3.0.0-f44f77.json
 ```
 
-The latest version remains a full JSON file, and the `-latest.json` symlink continues to work. Older blessed versions become `.gitref` files.
+The latest version remains a full JSON file, and the `-latest.json` symlink continues to work. Older blessed versions become `.gitstub` files.
 
-#### Git ref file format
+#### Git stub format
 
-A `.gitref` file contains a single line:
+A `.gitstub` file contains a single line:
 
 ```
 99c3f3ef97f80d1401c54ce0c625af125d4faef3:openapi/sled-agent/sled-agent-2.0.0-a3e161.json
@@ -438,35 +438,35 @@ A `.gitref` file contains a single line:
 
 The format is `<commit-hash>:<path>`, where the commit hash is when that version was introduced.
 
-#### Reading Git ref file contents
+#### Reading Git stub contents
 
-To view the contents of a Git ref file:
+To view the contents of a Git stub:
 
 ```sh
-git show $(cat sled-agent-2.0.0-a3e161.json.gitref)
+git show $(cat sled-agent-2.0.0-a3e161.json.gitstub)
 ```
 
 For Jujutsu:
 
 ```sh
-IFS=: read -r commit path < sled-agent-2.0.0-a3e161.json.gitref
+IFS=: read -r commit path < sled-agent-2.0.0-a3e161.json.gitstub
 jj file show -r "$commit" "root:$path"
 ```
 
 #### When versions are converted
 
-The API manager automatically converts versions between JSON and Git ref formats. A version is stored as a Git ref when all of the following are true:
+The API manager automatically converts versions between JSON and Git stub formats. A version is stored as a Git stub when all of the following are true:
 
-- Git ref storage is enabled for the API.
+- Git stub storage is enabled for the API.
 - The version is blessed (present in the upstream branch).
 - The version is not the latest.
 - The version was not introduced in the same commit as the latest version.
 
-When you add a new version locally, the previous latest version is converted to a Git ref. If you remove that new version, the conversion is reversed.
+When you add a new version locally, the previous latest version is converted to a Git stub. If you remove that new version, the conversion is reversed.
 
-#### Git ref merge conflicts
+#### Git stub merge conflicts
 
-With Git ref storage, Git detects new API versions as renames of the previous version. If parallel branches both add new versions, Git produces a rename-rename conflict.
+With Git stub storage, Git detects new API versions as renames of the previous version. If parallel branches both add new versions, Git produces a rename-rename conflict.
 
 To resolve, run `cargo openapi generate` (or your equivalent alias). The tool regenerates the correct files from your resolved `api_versions!` macro.
 
@@ -476,7 +476,7 @@ If you use Jujutsu, the `-latest.json` symlink becomes a regular file during con
 
 Progenitor-generated clients should continue to reference the `-latest.json` symlink, which always points to a real JSON file. No changes are needed for typical client generation.
 
-If you need to generate a client for an older version stored as a Git ref, you will currently need to disable Git ref storage for that API.
+If you need to generate a client for an older version stored as a Git stub, you will currently need to disable Git stub storage for that API.
 
 ## Contributing
 

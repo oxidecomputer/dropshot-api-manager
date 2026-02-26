@@ -311,7 +311,7 @@ pub enum LocalSource {
 impl LocalSource {
     /// Load the local OpenAPI documents.
     ///
-    /// The `repo_root` parameter is needed to resolve `.gitref` files.
+    /// The `repo_root` parameter is needed to resolve `.gitstub` files.
     pub fn load(
         &self,
         apis: &ManagedApis,
@@ -320,13 +320,13 @@ impl LocalSource {
     ) -> anyhow::Result<(LocalFiles, ErrorAccumulator)> {
         let mut errors = ErrorAccumulator::new();
 
-        // Shallow clones and git ref storage are incompatible.
-        let any_uses_git_ref =
-            apis.iter_apis().any(|a| apis.uses_git_ref_storage(a));
-        if any_uses_git_ref && is_shallow_clone(repo_root) {
+        // Shallow clones and Git stub storage are incompatible.
+        let any_uses_git_stub =
+            apis.iter_apis().any(|a| apis.uses_git_stub_storage(a));
+        if any_uses_git_stub && is_shallow_clone(repo_root) {
             errors.error(anyhow::anyhow!(
-                "this repository is a shallow clone, but git ref storage is \
-                 enabled for some APIs. Git refs cannot be resolved in a \
+                "this repository is a shallow clone, but Git stub storage is \
+                 enabled for some APIs. Git stubs cannot be resolved in a \
                  shallow clone because the referenced commits may not be \
                  available. To fix this, run `git fetch --unshallow` to \
                  fetch complete history, or make a fresh clone without --depth."

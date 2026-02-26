@@ -7,12 +7,12 @@ use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
     git::{
-        GitCommitHash, GitRef, GitRevision, git_first_commit_for_file,
-        git_is_ancestor, git_ls_tree, git_merge_base_head, git_show_file,
+        GitRevision, git_first_commit_for_file, git_is_ancestor, git_ls_tree,
+        git_merge_base_head, git_show_file,
     },
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        GitRefKey, SpecFileInfo,
+        GitStubKey, SpecFileInfo,
     },
 };
 use anyhow::{anyhow, bail};
@@ -20,6 +20,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
 };
+use git_stub::{GitCommitHash, GitStub};
+use git_stub_vcs::Vcs;
 use std::{collections::BTreeMap, ops::Deref};
 
 /// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents from
@@ -132,17 +134,17 @@ impl AsRawFiles for BlessedApiSpecFile {
     }
 }
 
-/// Git reference information for a blessed file.
+/// Git stub information for a blessed file.
 ///
-/// This tracks where a blessed file came from in git, so we can create git ref
-/// files that point back to the original content.
+/// This tracks where a blessed file came from in git, so we can create
+/// `.gitstub` files that point back to the original content.
 ///
-/// For `.gitref` files, the commit is already known from parsing the file. For
-/// JSON files, the commit is computed lazily to avoid slow `git log` calls when
-/// git ref storage is disabled.
+/// For `.gitstub` files, the commit is already known from parsing the file.
+/// For JSON files, the commit is computed lazily to avoid slow `git log`
+/// calls when Git stub storage is disabled.
 #[derive(Clone, Debug)]
-pub enum BlessedGitRef {
-    /// The Git reference is already known. Obtained by from parsing a `.gitref`
+pub enum BlessedGitStub {
+    /// The Git stub is already known. Obtained by from parsing a `.gitstub`
     /// file.
     Known {
         /// The git commit hash where this file was blessed.
@@ -150,7 +152,7 @@ pub enum BlessedGitRef {
         /// The path within the repository, relative to the repo root.
         path: Utf8PathBuf,
     },
-    /// The Git reference needs to be computed. Obtained through JSON files, and
+    /// The Git stub needs to be computed. Obtained through JSON files, and
     /// only resolved if conversions are required.
     Lazy {
         /// The git revision to search within (typically the merge-base).
@@ -160,8 +162,8 @@ pub enum BlessedGitRef {
     },
 }
 
-impl BlessedGitRef {
-    /// Convert to a `GitRef` for reading content.
+impl BlessedGitStub {
+    /// Convert to a `GitStub` for reading content.
     ///
     /// For `Known` variants, this validates that the stored commit is an
     /// ancestor of the merge base. If it is not (e.g., after a rebase or
@@ -171,13 +173,13 @@ impl BlessedGitRef {
     ///
     /// If `merge_base` is `None` (directory-based loading), `Known` commits
     /// are trusted as-is.
-    pub fn to_git_ref(
+    pub fn to_git_stub(
         &self,
         repo_root: &Utf8Path,
         merge_base: Option<&GitRevision>,
-    ) -> anyhow::Result<GitRef> {
+    ) -> anyhow::Result<GitStub> {
         match self {
-            BlessedGitRef::Known { commit, path } => {
+            BlessedGitStub::Known { commit, path } => {
                 if let Some(merge_base) = merge_base {
                     // Check that the stored commit is still an ancestor
                     // of the merge base. If not, the commit is stale
@@ -187,15 +189,15 @@ impl BlessedGitRef {
                         let commit = git_first_commit_for_file(
                             repo_root, merge_base, path,
                         )?;
-                        return Ok(GitRef { commit, path: path.clone() });
+                        return Ok(GitStub::new(commit, path.clone())?);
                     }
                 }
-                Ok(GitRef { commit: *commit, path: path.clone() })
+                Ok(GitStub::new(*commit, path.clone())?)
             }
-            BlessedGitRef::Lazy { revision, path } => {
+            BlessedGitStub::Lazy { revision, path } => {
                 let commit =
                     git_first_commit_for_file(repo_root, revision, path)?;
-                Ok(GitRef { commit, path: path.clone() })
+                Ok(GitStub::new(commit, path.clone())?)
             }
         }
     }
@@ -210,9 +212,9 @@ enum BlessedPathKind<'a> {
     /// These are skipped since blessed files only exist for versioned APIs.
     Lockstep,
 
-    /// Two-component path with `.json.gitref` extension. Potential versioned
-    /// git ref file.
-    GitRefFile { api_dir: &'a str, basename: &'a str },
+    /// Two-component path with `.json.gitstub` extension. Potential versioned
+    /// Git stub.
+    GitStubFile { api_dir: &'a str, basename: &'a str },
 
     /// Two-component path (e.g., "api/api-1.2.3-hash.json"). Could be a
     /// versioned file or latest symlink - requires API validation.
@@ -228,8 +230,8 @@ impl<'a> BlessedPathKind<'a> {
         let parts: Vec<_> = path.iter().collect();
         match parts.as_slice() {
             [_basename] => Ok(BlessedPathKind::Lockstep),
-            [api_dir, basename] if basename.ends_with(".json.gitref") => {
-                Ok(BlessedPathKind::GitRefFile { api_dir, basename })
+            [api_dir, basename] if basename.ends_with(".json.gitstub") => {
+                Ok(BlessedPathKind::GitStubFile { api_dir, basename })
             }
             [api_dir, basename] => {
                 Ok(BlessedPathKind::VersionedFile { api_dir, basename })
@@ -250,8 +252,8 @@ impl<'a> BlessedPathKind<'a> {
 pub struct BlessedFiles {
     /// The loaded blessed files.
     files: BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>,
-    /// Git refs for each blessed file, keyed by (ident, version).
-    git_refs: BTreeMap<GitRefKey, BlessedGitRef>,
+    /// Git stubs for each blessed file, keyed by (ident, version).
+    git_stubs: BTreeMap<GitStubKey, BlessedGitStub>,
     /// The merge base used when loading blessed files from git.
     ///
     /// This is `Some` when loaded via `load_from_git_parent_branch` or
@@ -268,17 +270,17 @@ impl Deref for BlessedFiles {
 }
 
 impl BlessedFiles {
-    /// Returns the git ref for the given API and version, if available.
+    /// Returns the Git stub for the given API and version, if available.
     ///
-    /// This is used to create git ref files that point back to the original
-    /// blessed content in git.
-    pub fn git_ref(
+    /// This is used to create `.gitstub` files that point back to the
+    /// original blessed content in git.
+    pub fn git_stub(
         &self,
         ident: &ApiIdent,
         version: &semver::Version,
-    ) -> Option<&BlessedGitRef> {
-        self.git_refs
-            .get(&GitRefKey { ident: ident.clone(), version: version.clone() })
+    ) -> Option<&BlessedGitStub> {
+        self.git_stubs
+            .get(&GitStubKey { ident: ident.clone(), version: version.clone() })
     }
 
     /// Returns the merge base used when loading blessed files from git.
@@ -333,7 +335,8 @@ impl BlessedFiles {
     ) -> anyhow::Result<BlessedFiles> {
         let mut api_files: ApiSpecFilesBuilder<BlessedApiSpecFile> =
             ApiSpecFilesBuilder::new(apis, error_accumulator);
-        let mut git_refs: BTreeMap<GitRefKey, BlessedGitRef> = BTreeMap::new();
+        let mut git_stubs: BTreeMap<GitStubKey, BlessedGitStub> =
+            BTreeMap::new();
 
         let files_found = git_ls_tree(repo_root, commit, directory)?;
         for f in files_found {
@@ -383,16 +386,16 @@ impl BlessedFiles {
                         continue;
                     };
 
-                    // Track the git ref for this versioned file. Use Lazy so
-                    // the first commit is only computed when needed (i.e., when
-                    // git ref storage is enabled).
+                    // Track the Git stub for this versioned file. Use Lazy
+                    // so the first commit is only computed when needed
+                    // (i.e., when Git stub storage is enabled).
                     if let Some(version) = spec_file_name.version() {
-                        git_refs.insert(
-                            GitRefKey {
+                        git_stubs.insert(
+                            GitStubKey {
                                 ident: ident.clone(),
                                 version: version.clone(),
                             },
-                            BlessedGitRef::Lazy {
+                            BlessedGitStub::Lazy {
                                 revision: commit.clone(),
                                 path: Utf8PathBuf::from(&git_path),
                             },
@@ -402,54 +405,59 @@ impl BlessedFiles {
                     api_files.load_contents(spec_file_name, contents);
                 }
 
-                BlessedPathKind::GitRefFile { api_dir, basename } => {
+                BlessedPathKind::GitStubFile { api_dir, basename } => {
                     let Some(ident) = api_files.versioned_directory(api_dir)
                     else {
                         continue;
                     };
-                    let Some(spec_file_name) =
-                        api_files.versioned_git_ref_file_name(&ident, basename)
+                    let Some(spec_file_name) = api_files
+                        .versioned_git_stub_file_name(&ident, basename)
                     else {
                         continue;
                     };
 
-                    // Parse the git ref content to get the referenced commit
-                    // and path.
-                    let git_ref_str =
+                    // Parse the Git stub content to get the referenced
+                    // commit and path.
+                    let git_stub_str =
                         String::from_utf8_lossy(&contents).to_string();
-                    let git_ref: GitRef = match git_ref_str.parse() {
+                    let git_stub: GitStub = match git_stub_str.parse() {
                         Ok(g) => g,
                         Err(err) => {
                             api_files.load_error(anyhow!(err).context(
-                                format!("parsing git ref file {:?}", git_path),
+                                format!("parsing Git stub {:?}", git_path),
                             ));
                             continue;
                         }
                     };
 
-                    // Load the actual JSON content from the git ref.
-                    let json_contents = match git_ref.read_contents(repo_root) {
+                    // Load the actual JSON content from the Git stub.
+                    let json_contents = match Vcs::git()?
+                        .read_git_stub_contents(&git_stub, repo_root)
+                    {
                         Ok(c) => c,
                         Err(err) => {
-                            api_files.load_error(err.context(format!(
-                                "reading content for git ref {:?}",
-                                git_path
-                            )));
+                            api_files.load_error(
+                                anyhow::Error::new(err).context(format!(
+                                    "reading content for Git stub {:?}",
+                                    git_path
+                                )),
+                            );
                             continue;
                         }
                     };
 
-                    // Track the git ref for this versioned file. The git ref
-                    // already contains the first commit, so we use it directly.
+                    // Track the Git stub for this versioned file. The Git
+                    // stub already contains the first commit, so we use it
+                    // directly.
                     if let Some(version) = spec_file_name.version() {
-                        git_refs.insert(
-                            GitRefKey {
+                        git_stubs.insert(
+                            GitStubKey {
                                 ident: ident.clone(),
                                 version: version.clone(),
                             },
-                            BlessedGitRef::Known {
-                                commit: git_ref.commit,
-                                path: git_ref.path.clone(),
+                            BlessedGitStub::Known {
+                                commit: git_stub.commit(),
+                                path: git_stub.path().to_owned(),
                             },
                         );
                     }
@@ -460,17 +468,17 @@ impl BlessedFiles {
         }
 
         let files = api_files.into_map();
-        Ok(BlessedFiles { files, git_refs, merge_base: Some(commit.clone()) })
+        Ok(BlessedFiles { files, git_stubs, merge_base: Some(commit.clone()) })
     }
 }
 
 impl<'a> From<ApiSpecFilesBuilder<'a, BlessedApiSpecFile>> for BlessedFiles {
     fn from(api_files: ApiSpecFilesBuilder<'a, BlessedApiSpecFile>) -> Self {
-        // When loading from a directory, we don't have git refs or a merge
+        // When loading from a directory, we don't have Git stubs or a merge
         // base.
         BlessedFiles {
             files: api_files.into_map(),
-            git_refs: BTreeMap::new(),
+            git_stubs: BTreeMap::new(),
             merge_base: None,
         }
     }

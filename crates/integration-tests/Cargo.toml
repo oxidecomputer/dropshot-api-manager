@@ -18,6 +18,8 @@ clap.workspace = true
 dropshot.workspace = true
 dropshot-api-manager.workspace = true
 dropshot-api-manager-types.workspace = true
+git-stub.workspace = true
+git-stub-vcs.workspace = true
 openapiv3.workspace = true
 schemars = { workspace = true, features = ["chrono"] }
 semver.workspace = true
