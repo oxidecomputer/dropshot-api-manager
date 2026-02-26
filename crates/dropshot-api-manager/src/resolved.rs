@@ -563,27 +563,25 @@ impl Fix<'_> {
             Fix::UpdateSymlink { .. } => {}
             Fix::ConvertToGitRef { local_file, .. } => {
                 // Writes to the .gitref path, not the JSON path.
-                let json_path = local_file.spec_file_name().path();
-                paths
-                    .insert(Utf8PathBuf::from(format!("{}.gitref", json_path)));
+                paths.insert(
+                    local_file.spec_file_name().to_git_ref_filename().path(),
+                );
             }
             Fix::ConvertToJson { local_file, .. } => {
-                // Writes to the JSON path (removing .gitref suffix).
-                let git_ref_path = local_file.spec_file_name().path();
-                if let Some(json_path) =
-                    git_ref_path.as_str().strip_suffix(".gitref")
-                {
-                    paths.insert(Utf8PathBuf::from(json_path));
-                }
+                // Writes to the JSON path.
+                paths.insert(
+                    local_file.spec_file_name().to_json_filename().path(),
+                );
             }
             Fix::RegenerateFromBlessed { local_file, git_ref, .. } => {
                 if git_ref.is_some() {
-                    // When regenerating as git ref, writes to a .gitref file.
-                    let json_path = local_file.spec_file_name().path();
-                    paths.insert(Utf8PathBuf::from(format!(
-                        "{}.gitref",
-                        json_path
-                    )));
+                    // Writes to a .gitref file.
+                    paths.insert(
+                        local_file
+                            .spec_file_name()
+                            .to_git_ref_filename()
+                            .path(),
+                    );
                 } else {
                     // Overwrites the corrupted local file.
                     paths.insert(local_file.spec_file_name().path().to_owned());
@@ -667,21 +665,18 @@ impl Fix<'_> {
             Fix::ConvertToGitRef { local_file, git_ref } => {
                 let json_path = root.join(local_file.spec_file_name().path());
 
-                let git_ref_basename = format!(
-                    "{}.gitref",
-                    local_file.spec_file_name().basename()
-                );
+                let git_ref_basename =
+                    local_file.spec_file_name().git_ref_basename();
                 let git_ref_path = json_path
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(&git_ref_basename);
 
-                // Write the git ref file. Add a trailing newline so diffs don't
-                // have the "\ No newline at end of file" message. Otherwise,
-                // the extra newline has no impact on usability or correctness.
+                // Write the git ref file in canonical format (forward slashes,
+                // trailing newline).
                 let overwrite_status = overwrite_file(
                     &git_ref_path,
-                    format!("{}\n", git_ref).as_bytes(),
+                    git_ref.to_file_contents().as_bytes(),
                 )?;
 
                 // Remove the original JSON file.
@@ -700,17 +695,7 @@ impl Fix<'_> {
                 // valid.
                 let contents = blessed.contents();
 
-                // Compute the JSON file path by removing the .gitref suffix.
-                let git_ref_basename = local_file.spec_file_name().basename();
-                let json_basename = git_ref_basename
-                    .strip_suffix(".gitref")
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "expected git ref file to end with .gitref: {}",
-                            git_ref_basename
-                        )
-                    })?;
-
+                let json_basename = local_file.spec_file_name().json_basename();
                 let json_path = git_ref_path
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
@@ -737,19 +722,17 @@ impl Fix<'_> {
 
                 if let Some(git_ref) = git_ref {
                     // Write as a git ref file.
-                    let git_ref_basename = format!(
-                        "{}.gitref",
-                        local_file.spec_file_name().basename()
-                    );
+                    let git_ref_basename =
+                        local_file.spec_file_name().git_ref_basename();
                     let git_ref_path = local_path
                         .parent()
                         .ok_or_else(|| anyhow!("cannot get parent directory"))?
                         .join(&git_ref_basename);
 
-                    // Add a trailing newline for clean diffs.
+                    // Write in canonical format (forward slashes, trailing newline).
                     let overwrite_status = overwrite_file(
                         &git_ref_path,
-                        format!("{}\n", git_ref).as_bytes(),
+                        git_ref.to_file_contents().as_bytes(),
                     )?;
 
                     Ok(vec![

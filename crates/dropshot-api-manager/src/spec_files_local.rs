@@ -129,7 +129,7 @@ impl AsRawFiles for Vec<LocalApiSpecFile> {
     }
 }
 
-/// Container for OpenAPI documents found in the local working tree
+/// Container for OpenAPI documents found in the local working tree.
 ///
 /// **Be sure to check for load errors and warnings before using this
 /// structure.**
@@ -350,16 +350,37 @@ fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
                 }
             };
 
+            // Parse the git ref. If parsing fails or the file needs rewriting,
+            // mark it as unparseable so it will be deleted and regenerated.
             let git_ref = match git_ref_contents.parse::<GitRef>() {
                 Ok(git_ref) => git_ref,
                 Err(error) => {
-                    api_files.load_error(anyhow!(error).context(format!(
-                        "failed to parse git ref file {:?}",
-                        entry.path()
-                    )));
+                    api_files.load_unparseable(
+                        spec_file_name,
+                        git_ref_contents.into_bytes(),
+                        anyhow!(error).context(format!(
+                            "git ref file {:?} could not be parsed",
+                            entry.path()
+                        )),
+                    );
                     continue;
                 }
             };
+
+            // Check if the file needs to be rewritten to canonical format.
+            // If so, treat it as unparseable so it gets deleted and regenerated.
+            if GitRef::needs_rewrite(&git_ref_contents) {
+                api_files.load_unparseable(
+                    spec_file_name,
+                    git_ref_contents.into_bytes(),
+                    anyhow!(
+                        "git ref file {:?} needs to be rewritten to canonical \
+                         format (forward slashes, trailing newline)",
+                        entry.path()
+                    ),
+                );
+                continue;
+            }
 
             let contents = match git_ref.read_contents(repo_root) {
                 Ok(contents) => contents,

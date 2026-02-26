@@ -367,11 +367,55 @@ impl GitRef {
     ) -> anyhow::Result<Vec<u8>> {
         git_show_file(repo_root, &GitRevision::from(self.commit), &self.path)
     }
+
+    /// Returns the canonical file contents for this git ref.
+    ///
+    /// The canonical format is `commit:path\n` where:
+    /// - The path uses forward slashes (even on Windows).
+    /// - The file ends with a single newline.
+    pub fn to_file_contents(&self) -> String {
+        format!("{}\n", self)
+    }
+
+    /// Returns whether the given file contents representing a _valid_ Git ref
+    /// file need to be rewritten.
+    ///
+    /// File contents need rewriting if they don't match the canonical format:
+    ///
+    /// - Missing trailing newline.
+    /// - Contains backslashes in the path.
+    /// - Has extra whitespace.
+    ///
+    /// This static method is used to detect files that are valid but need
+    /// normalization.
+    pub fn needs_rewrite(contents: &str) -> bool {
+        // Check for missing trailing newline.
+        if !contents.ends_with('\n') {
+            return true;
+        }
+
+        // Check for extra trailing newlines or other whitespace issues.
+        let trimmed = contents.trim();
+        if trimmed.len() + 1 != contents.len() {
+            return true;
+        }
+
+        // Check for backslashes in the path (after the colon).
+        if let Some((_commit, path)) = trimmed.split_once(':') {
+            if path.contains('\\') {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 impl fmt::Display for GitRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.commit, self.path)
+        // Always use forward slashes for paths, even on Windows.
+        let path = self.path.as_str().replace('\\', "/");
+        write!(f, "{}:{}", self.commit, path)
     }
 }
 
@@ -380,10 +424,19 @@ impl FromStr for GitRef {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
+        if s.is_empty() {
+            return Err(GitRefParseError::EmptyInput);
+        }
         let (commit, path) = s
             .split_once(':')
             .ok_or_else(|| GitRefParseError::InvalidFormat(s.to_owned()))?;
         let commit: GitCommitHash = commit.parse()?;
+        // Normalize backslashes to forward slashes for cross-platform
+        // compatibility.
+        let path = path.replace('\\', "/");
+        if path.is_empty() {
+            return Err(GitRefParseError::EmptyPath);
+        }
         Ok(GitRef { commit, path: Utf8PathBuf::from(path) })
     }
 }
@@ -392,13 +445,24 @@ impl FromStr for GitRef {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GitRefParseError {
+    /// The input was empty or contained only whitespace.
+    #[error("git ref file is empty")]
+    EmptyInput,
+
     /// The git ref string did not contain the expected 'commit:path' format.
-    #[error("invalid git ref format: expected 'commit:path', got {0}")]
+    #[error(
+        "invalid git ref format: expected 'commit:path', got {0:?} \
+         (missing ':' separator)"
+    )]
     InvalidFormat(String),
 
     /// The commit hash in the git ref was invalid.
-    #[error("invalid commit hash")]
+    #[error("invalid commit hash in git ref")]
     InvalidCommitHash(#[from] CommitHashParseError),
+
+    /// The path component was empty.
+    #[error("git ref has empty path (nothing after ':')")]
+    EmptyPath,
 }
 
 #[cfg(test)]
@@ -514,5 +578,99 @@ mod tests {
         assert_eq!(s, expected);
         let parsed = s.parse::<GitRef>().unwrap();
         assert_eq!(git_ref, parsed);
+    }
+
+    #[test]
+    fn test_git_ref_to_file_contents() {
+        let git_ref = GitRef {
+            commit: VALID_SHA1.parse().unwrap(),
+            path: Utf8PathBuf::from("path/to/file.json"),
+        };
+        let contents = git_ref.to_file_contents();
+        let expected = format!("{}:path/to/file.json\n", VALID_SHA1);
+        assert_eq!(contents, expected, "should have trailing newline");
+    }
+
+    #[test]
+    fn test_git_ref_display_forward_slashes() {
+        // Even if the path internally has backslashes, display should use
+        // forward slashes.
+        let git_ref = GitRef {
+            commit: VALID_SHA1.parse().unwrap(),
+            path: Utf8PathBuf::from("path\\to\\file.json"),
+        };
+        let s = git_ref.to_string();
+        assert!(
+            !s.contains('\\'),
+            "display should convert backslashes to forward slashes"
+        );
+        assert!(s.contains("path/to/file.json"));
+    }
+
+    #[test]
+    fn test_git_ref_parse_normalizes_backslashes() {
+        // Parsing should normalize backslashes to forward slashes.
+        let input = format!("{}:path\\to\\file.json", VALID_SHA1);
+        let git_ref = input.parse::<GitRef>().unwrap();
+        assert_eq!(
+            git_ref.path.as_str(),
+            "path/to/file.json",
+            "backslashes should be normalized to forward slashes"
+        );
+    }
+
+    #[test]
+    fn test_git_ref_parse_error_variants() {
+        // Empty input.
+        let result = "".parse::<GitRef>();
+        assert!(matches!(result, Err(GitRefParseError::EmptyInput)));
+
+        // Whitespace-only input.
+        let result = "   \n  ".parse::<GitRef>();
+        assert!(matches!(result, Err(GitRefParseError::EmptyInput)));
+
+        // Empty path (valid commit hash but nothing after colon).
+        let input = format!("{}:", VALID_SHA1);
+        let result = input.parse::<GitRef>();
+        assert!(matches!(result, Err(GitRefParseError::EmptyPath)));
+    }
+
+    #[test]
+    fn test_git_ref_needs_rewrite() {
+        // Canonical format: forward slashes, single trailing newline.
+        let canonical = format!("{}:path/to/file.json\n", VALID_SHA1);
+        assert!(
+            !GitRef::needs_rewrite(&canonical),
+            "canonical format should not need rewrite"
+        );
+
+        // Missing trailing newline.
+        let missing_newline = format!("{}:path/to/file.json", VALID_SHA1);
+        assert!(
+            GitRef::needs_rewrite(&missing_newline),
+            "missing trailing newline should need rewrite"
+        );
+
+        // Extra trailing newlines.
+        let extra_newlines = format!("{}:path/to/file.json\n\n", VALID_SHA1);
+        assert!(
+            GitRef::needs_rewrite(&extra_newlines),
+            "extra trailing newlines should need rewrite"
+        );
+
+        // Leading whitespace.
+        let leading_whitespace =
+            format!("  {}:path/to/file.json\n", VALID_SHA1);
+        assert!(
+            GitRef::needs_rewrite(&leading_whitespace),
+            "leading whitespace should need rewrite"
+        );
+
+        // Backslashes in path.
+        let backslashes = format!("{}:path\\to\\file.json\n", VALID_SHA1);
+        assert!(
+            GitRef::needs_rewrite(&backslashes),
+            "backslashes in path should need rewrite"
+        );
     }
 }

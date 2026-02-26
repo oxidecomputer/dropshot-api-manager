@@ -759,6 +759,63 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
+    /// Record a file as unparseable without attempting to parse it.
+    ///
+    /// This is used for files that are known to be invalid before attempting
+    /// JSON parsing (e.g., git ref files with invalid format). The `reason`
+    /// error is recorded as a warning.
+    ///
+    /// For contexts where unparseable files are allowed (local files), this
+    /// tracks the file so it can be cleaned up during generate. For other
+    /// contexts, the error is recorded.
+    pub fn load_unparseable(
+        &mut self,
+        file_name: ApiSpecFileName,
+        contents: Vec<u8>,
+        reason: anyhow::Error,
+    ) {
+        match T::make_unparseable(file_name.clone(), contents) {
+            Some(unparseable) => {
+                // For local files, track the unparseable file so it can be
+                // cleaned up during generate. Record a warning so the user
+                // knows about it.
+                self.load_warning(reason.context("skipping unparseable file"));
+
+                // Can the file be associated with a version?
+                if let Some(version) = file_name.version() {
+                    let ident = file_name.ident().clone();
+                    let entry = self
+                        .spec_files
+                        .entry(ident)
+                        .or_insert_with(ApiFiles::new)
+                        .spec_files
+                        .entry(version.clone());
+
+                    match entry {
+                        Entry::Vacant(vacant_entry) => {
+                            vacant_entry
+                                .insert(T::unparseable_into_self(unparseable));
+                        }
+                        Entry::Occupied(mut occupied_entry) => {
+                            occupied_entry
+                                .get_mut()
+                                .extend_unparseable(unparseable);
+                        }
+                    }
+                } else {
+                    // No version info, fall back to old behavior.
+                    self.record_unparseable_file(
+                        file_name.ident().clone(),
+                        UnparseableFile { path: file_name.path().to_owned() },
+                    );
+                }
+            }
+            None => {
+                self.load_error(reason);
+            }
+        }
+    }
+
     /// Record an unparseable file for later cleanup.
     fn record_unparseable_file(
         &mut self,
