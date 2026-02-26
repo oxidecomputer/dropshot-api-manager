@@ -1911,3 +1911,398 @@ fn test_invalid_commit_hash_git_ref_regenerated() -> Result<()> {
 
     Ok(())
 }
+
+/// Test the dependent branch workflow with git refs.
+///
+/// See [`dependent_branch_setup`] for the test scenario.
+#[test]
+fn test_dependent_branch_merge() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&env)?;
+
+    // Merge branch_a into main first.
+    env.checkout_branch("main")?;
+    env.merge_branch_without_renames("branch_a")?;
+
+    dependent_branch_after_a_merged_verify(&env, &v1_v2_commit)?;
+
+    // Now merge main into branch_b. This is a clean merge because branch_b is
+    // based on branch_a, and main now has exactly branch_a's changes.
+    env.checkout_branch("branch_b")?;
+    let merge_result = env.try_merge_branch("main")?;
+    assert_eq!(
+        merge_result,
+        MergeResult::Clean,
+        "merge should be clean (branch_b is ahead of main)"
+    );
+
+    // After the merge, v3 and v4 are both still JSON (no generate run yet).
+    dependent_branch_after_merge_before_generate_verify(&env)?;
+
+    // Run generate to convert v3 to a git ref (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4_apis)?;
+
+    dependent_branch_after_generate_verify(
+        &env,
+        &v1_v2_commit,
+        &v1_v2_v3_v4_apis,
+    )
+}
+
+/// Test the dependent branch workflow with git rebase.
+///
+/// This is the rebase equivalent of [`test_dependent_branch_merge`]. See
+/// [`dependent_branch_setup`] for the test scenario.
+#[test]
+fn test_dependent_branch_rebase() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&env)?;
+
+    // Merge branch_a into main first.
+    env.checkout_branch("main")?;
+    env.merge_branch_without_renames("branch_a")?;
+
+    dependent_branch_after_a_merged_verify(&env, &v1_v2_commit)?;
+
+    // Now rebase branch_b onto main. This is a clean rebase because branch_b's
+    // base (branch_a) is now part of main.
+    env.checkout_branch("branch_b")?;
+    let rebase_result = env.try_rebase_onto("main")?;
+    assert_eq!(
+        rebase_result,
+        RebaseResult::Clean,
+        "rebase should be clean (branch_b's base is now on main)"
+    );
+
+    // After the rebase, v3 and v4 are both still JSON (no generate run yet).
+    dependent_branch_after_merge_before_generate_verify(&env)?;
+
+    // Run generate to convert v3 to a git ref (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4_apis)?;
+
+    dependent_branch_after_generate_verify(
+        &env,
+        &v1_v2_commit,
+        &v1_v2_v3_v4_apis,
+    )
+}
+
+/// Test the dependent branch workflow with jj merge.
+///
+/// This is the jj equivalent of [`test_dependent_branch_merge`]. See
+/// [`dependent_branch_setup`] for the test scenario.
+#[test]
+fn test_jj_dependent_branch_merge() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&env)?;
+    env.jj_init()?;
+
+    // Create a merge of branch_a into main using jj.
+    let main_a_merge_result =
+        env.jj_try_merge("main", "branch_a", "merge branch_a into main")?;
+    assert_eq!(
+        main_a_merge_result,
+        JjMergeResult::Clean,
+        "merging branch_a into main should be clean"
+    );
+
+    // Update the main bookmark to point to the merge result. This is necessary
+    // for the blessed version detection to work correctly.
+    env.jj_set_bookmark("main", "@")?;
+
+    // Now create a merge of this result with branch_b.
+    let merge_result = env.jj_try_merge("@", "branch_b", "merge branch_b")?;
+    assert_eq!(
+        merge_result,
+        JjMergeResult::Clean,
+        "jj merge should be clean (branch_b is ahead)"
+    );
+
+    // After the merge, v3 and v4 are both still JSON (no generate run yet).
+    dependent_branch_after_merge_before_generate_verify(&env)?;
+
+    // Run generate to convert v3 to a git ref (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4_apis)?;
+
+    dependent_branch_after_generate_verify(
+        &env,
+        &v1_v2_commit,
+        &v1_v2_v3_v4_apis,
+    )
+}
+
+/// Test the dependent branch workflow with jj rebase.
+///
+/// This is the jj rebase equivalent of [`test_dependent_branch_merge`]. See
+/// [`dependent_branch_setup`] for the test scenario.
+#[test]
+fn test_jj_dependent_branch_rebase() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&env)?;
+    env.jj_init()?;
+
+    // First, rebase branch_a onto main (this should be clean since branch_a is
+    // already based on main).
+    let rebase_a_result = env.jj_try_rebase("branch_a", "main")?;
+    assert_eq!(
+        rebase_a_result,
+        JjRebaseResult::Clean,
+        "rebasing branch_a onto main should be clean"
+    );
+
+    // Update the main bookmark to point to branch_a. This simulates the scenario
+    // where branch_a has been merged into main.
+    env.jj_set_bookmark("main", "branch_a")?;
+
+    // Rebasing branch_b onto branch_a is not required, because jj automatically rebases descendants.
+
+    // Create a new working copy at branch_b so we're on the right commit.
+    env.jj_new("branch_b")?;
+
+    // After the rebase, v3 and v4 are both still JSON (no generate run yet).
+    dependent_branch_after_merge_before_generate_verify(&env)?;
+
+    // Run generate to convert v3 to a git ref (now that v3 is blessed).
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4_apis)?;
+
+    dependent_branch_after_generate_verify(
+        &env,
+        &v1_v2_commit,
+        &v1_v2_v3_v4_apis,
+    )
+}
+
+/// Setup for the dependent branch workflow tests.
+///
+/// This simulates a scenario where:
+/// 1. main has v1 and v2 committed
+/// 2. branch_a (off main) adds v3; v1 and v2 become git refs
+/// 3. branch_b (off branch_a) adds v4; v3 should NOT become a git ref because
+///    v3 is not yet blessed (not on main)
+///
+/// ```text
+/// History:
+///     main: [initial] -- [v1,v2 added]
+///                               |
+///                               +-- branch_a: [add v3]
+///                                       (v1,v2 become git refs)
+///                                              |
+///                                              +-- branch_b: [add v4]
+///                                                      (v3 stays JSON - not blessed!)
+/// ```
+///
+/// The key assertion is that on branch_b, v3 should NOT become a git ref
+/// because v3's first commit is not on main. This tests condition 2 from the
+/// RFD: "The API is blessed (i.e. present in main)."
+///
+/// Returns the commit hash where v1/v2 were added. Leaves the environment on
+/// branch_b.
+fn dependent_branch_setup(env: &TestEnvironment) -> Result<String> {
+    // Step 1: Create v1, v2 on main.
+    let v1_v2_apis = versioned_health_reduced_git_ref_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash_full()?;
+
+    // Step 2: Create branch_a off main and add v3.
+    env.create_branch("branch_a")?;
+    env.checkout_branch("branch_a")?;
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    // Verify: v1 and v2 should now be git refs, v3 is JSON.
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref on branch_a"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should be a git ref on branch_a"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should exist as JSON on branch_a"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a git ref on branch_a"
+    );
+
+    env.commit_documents()?;
+
+    // Step 3: Create branch_b off branch_a and add v4.
+    env.create_branch("branch_b")?;
+    env.checkout_branch("branch_b")?;
+
+    let v1_v2_v3_v4_apis = versioned_health_with_v4_git_ref_apis()?;
+    env.generate_documents(&v1_v2_v3_v4_apis)?;
+
+    // v3 should not become a git ref because v3 is not blessed yet.
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref on branch_b"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should be a git ref on branch_b"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should exist as JSON on branch_b (not blessed yet)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should NOT be a git ref on branch_b (not blessed yet)"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
+        "v4 should exist as JSON on branch_b"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a git ref (it's the latest)"
+    );
+
+    env.commit_documents()?;
+
+    Ok(v1_v2_commit)
+}
+
+/// Verify the state after branch_a is merged into main.
+fn dependent_branch_after_a_merged_verify(
+    env: &TestEnvironment,
+    v1_v2_commit: &str,
+) -> Result<()> {
+    // After merging branch_a into main:
+    // - v1 and v2 should be git refs (they were converted on branch_a).
+    // - v3 should be JSON (it's the latest on main now).
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref on main after merging branch_a"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should be a git ref on main after merging branch_a"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should exist as JSON on main (it's the latest)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should not be a git ref on main (it's the latest)"
+    );
+
+    // Verify git refs point to the correct commit.
+    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v1_commit, v1_v2_commit,
+        "v1 git ref should point to the original v1/v2 commit"
+    );
+
+    let v1_v2_v3_apis = versioned_health_git_ref_apis()?;
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Verify the state after merging main into branch_b, before running generate.
+///
+/// At this point:
+/// - v1 and v2 are git refs (they were converted on branch_a).
+/// - v3 and v4 are both JSON (v3 came from main, v4 is local).
+fn dependent_branch_after_merge_before_generate_verify(
+    env: &TestEnvironment,
+) -> Result<()> {
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref after merge"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should be a git ref after merge"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should exist as JSON after merge (blessed from main)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should not yet be a git ref (generate not run yet)"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
+        "v4 should exist as JSON after merge"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a git ref (it's the latest)"
+    );
+
+    Ok(())
+}
+
+/// Verify the state after running generate on branch_b.
+///
+/// After generate:
+/// - v1 and v2 are git refs.
+/// - v3 should now be a git ref (it's blessed from main and not latest).
+/// - v4 should be JSON (it's the latest).
+fn dependent_branch_after_generate_verify(
+    env: &TestEnvironment,
+    v1_v2_commit: &str,
+    v1_v2_v3_v4_apis: &ManagedApis,
+) -> Result<()> {
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "1.0.0")?,
+        "v1 should be a git ref"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "2.0.0")?,
+        "v2 should be a git ref"
+    );
+    assert!(
+        env.versioned_git_ref_exists("versioned-health", "3.0.0")?,
+        "v3 should now be a git ref (blessed from main, not latest)"
+    );
+    assert!(
+        !env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 JSON should be removed after conversion to git ref"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
+        "v4 should exist as JSON (latest)"
+    );
+    assert!(
+        !env.versioned_git_ref_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a git ref (it's the latest)"
+    );
+
+    // Verify git refs point to the correct commits.
+    let v1_ref = env.read_versioned_git_ref("versioned-health", "1.0.0")?;
+    let v1_commit = v1_ref.trim().split(':').next().unwrap();
+    assert_eq!(
+        v1_commit, v1_v2_commit,
+        "v1 git ref should point to the original v1/v2 commit"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), v1_v2_v3_v4_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
