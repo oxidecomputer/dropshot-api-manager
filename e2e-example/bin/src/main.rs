@@ -5,7 +5,9 @@
 use anyhow::{Context, anyhow};
 use camino::Utf8PathBuf;
 use clap::Parser;
-use dropshot_api_manager::{Environment, ManagedApiConfig, ManagedApis};
+use dropshot_api_manager::{
+    Environment, ManagedApi, ManagedApiConfig, ManagedApis,
+};
 use dropshot_api_manager_types::{
     ManagedApiMetadata, ValidationContext, Versions,
 };
@@ -35,7 +37,7 @@ pub fn environment() -> anyhow::Result<Environment> {
 
 /// The list of APIs managed by the OpenAPI manager.
 pub fn all_apis() -> anyhow::Result<ManagedApis> {
-    let apis = vec![
+    let apis: Vec<ManagedApi> = vec![
         // This API is managed in a simple, lockstep fashion.
         ManagedApiConfig {
             ident: "lockstep",
@@ -54,7 +56,8 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
                 ..ManagedApiMetadata::default()
             },
             api_description: lockstep::lockstep_api_mod::stub_api_description,
-        },
+        }
+        .into(),
         // This API is versioned.
         ManagedApiConfig {
             ident: "versioned",
@@ -73,7 +76,36 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
                 ..ManagedApiMetadata::default()
             },
             api_description: versioned::versioned_api_mod::stub_api_description,
-        },
+        }
+        .into(),
+        // Exercise: try uncommenting with_git_ref_storage below. This will cause
+        // the Dropshot API manager to convert older JSON versions to git refs.
+        //
+        // .with_git_ref_storage(),
+        //
+        // ---
+        //
+        // This API demonstrates git-ref storage for client generation.
+        // Git-ref storage is enabled just for this API.
+        ManagedApi::from(ManagedApiConfig {
+            ident: "versioned-git-ref",
+            versions: Versions::Versioned {
+                supported_versions: versioned::supported_versions(),
+            },
+            title: "Versioned API with Git ref storage",
+            metadata: ManagedApiMetadata {
+                description: Some(
+                    "A versioned API demonstrating git-ref storage",
+                ),
+                extra: serde_json::to_value(ApiExtra {
+                    boundary: ApiBoundary::Internal,
+                })
+                .unwrap(),
+                ..ManagedApiMetadata::default()
+            },
+            api_description: versioned::versioned_api_mod::stub_api_description,
+        })
+        .with_git_ref_storage(),
     ];
 
     let apis = ManagedApis::new(apis)
