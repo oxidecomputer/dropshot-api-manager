@@ -873,10 +873,10 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         version: &semver::Version,
         commit: GitCommitHash,
     ) {
-        if let Some(api_files) = self.spec_files.get_mut(ident) {
-            if let Some(item) = api_files.spec_files.get_mut(version) {
-                item.set_git_stub_commit(commit);
-            }
+        if let Some(api_files) = self.spec_files.get_mut(ident)
+            && let Some(item) = api_files.spec_files.get_mut(version)
+        {
+            item.set_git_stub_commit(commit);
         }
     }
 

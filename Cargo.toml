@@ -10,7 +10,7 @@ resolver = "3"
 license = "Apache-2.0"
 repository = "https://github.com/oxidecomputer/dropshot-api-manager"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.lints]
 

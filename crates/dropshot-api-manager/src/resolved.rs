@@ -1196,13 +1196,13 @@ fn resolve_api<'a>(
 
         // If there was an error computing the first commit for the latest
         // version, add the error to the latest version's resolution.
-        if let Some((Some(spec_file_name), error)) = latest_first_commit_error {
-            if let Some(resolution) = by_version.get_mut(latest_version) {
-                resolution.add_problem(Problem::GitStubFirstCommitUnknown {
-                    spec_file_name,
-                    source: error,
-                });
-            }
+        if let Some((Some(spec_file_name), error)) = latest_first_commit_error
+            && let Some(resolution) = by_version.get_mut(latest_version)
+        {
+            resolution.add_problem(Problem::GitStubFirstCommitUnknown {
+                spec_file_name,
+                source: error,
+            });
         }
 
         // Check the "latest" symlink.
