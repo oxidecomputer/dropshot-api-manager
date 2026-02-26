@@ -3,7 +3,7 @@
   "info": {
     "title": "Versioned API with Git stub storage",
     "description": "A versioned API demonstrating git stub storage",
-    "version": "4.0.0"
+    "version": "5.0.0"
   },
   "paths": {
     "/search": {
