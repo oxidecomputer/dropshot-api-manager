@@ -659,7 +659,31 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
-    /// Load an API document.
+    /// Load an already-parsed API document.
+    pub fn load_parsed(&mut self, file: ApiSpecFile) {
+        let ident = file.spec_file_name().ident();
+        let api_version = file.version();
+        let entry = self
+            .spec_files
+            .entry(ident.clone())
+            .or_insert_with(ApiFiles::new)
+            .spec_files
+            .entry(api_version.clone());
+
+        match entry {
+            Entry::Vacant(vacant_entry) => {
+                vacant_entry.insert(T::make_item(file));
+            }
+            Entry::Occupied(mut occupied_entry) => {
+                match occupied_entry.get_mut().try_extend(file) {
+                    Ok(()) => (),
+                    Err(error) => self.load_error(error),
+                };
+            }
+        };
+    }
+
+    /// Load an API document from raw bytes.
     ///
     /// On failure, records errors or warnings. For local files (where
     /// `T::UNPARSEABLE_FILES_ALLOWED` is true), unparseable files are recorded
@@ -672,26 +696,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         let maybe_file = ApiSpecFile::for_contents(file_name.clone(), contents);
         match maybe_file {
             Ok(file) => {
-                let ident = file.spec_file_name().ident();
-                let api_version = file.version();
-                let entry = self
-                    .spec_files
-                    .entry(ident.clone())
-                    .or_insert_with(ApiFiles::new)
-                    .spec_files
-                    .entry(api_version.clone());
-
-                match entry {
-                    Entry::Vacant(vacant_entry) => {
-                        vacant_entry.insert(T::make_item(file));
-                    }
-                    Entry::Occupied(mut occupied_entry) => {
-                        match occupied_entry.get_mut().try_extend(file) {
-                            Ok(()) => (),
-                            Err(error) => self.load_error(error),
-                        };
-                    }
-                };
+                self.load_parsed(file);
             }
             Err((error, contents)) => {
                 match T::make_unparseable(file_name.clone(), contents) {
