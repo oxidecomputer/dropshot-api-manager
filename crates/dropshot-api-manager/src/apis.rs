@@ -226,7 +226,7 @@ impl ManagedApi {
     /// [`ValidationContext::is_blessed`].
     pub fn with_extra_validation<F>(mut self, f: F) -> Self
     where
-        F: Fn(&OpenAPI, ValidationContext<'_>) + Send + 'static,
+        F: Fn(&OpenAPI, ValidationContext<'_>) + Send + Sync + 'static,
     {
         self.extra_validation = Some(Box::new(f));
         self
@@ -376,7 +376,7 @@ impl ManagedApis {
     /// files for which the contents need to be compared with those on disk.
     pub fn with_validation<F>(mut self, validation: F) -> Self
     where
-        F: Fn(&OpenAPI, ValidationContext<'_>) + Send + 'static,
+        F: Fn(&OpenAPI, ValidationContext<'_>) + Send + Sync + 'static,
     {
         self.validation = Some(Box::new(validation));
         self
