@@ -41,6 +41,7 @@ openapiv3 = "2.2.0"
 owo-colors = "4.2.3"
 paste = "1.0.15"
 progenitor = "0.13.0"
+rayon = "1"
 reqwest = { version = "0.13.1", default-features = false, features = ["json"] }
 schemars = "0.8.22"
 semver = "1.0.27"
