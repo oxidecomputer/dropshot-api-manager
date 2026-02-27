@@ -169,11 +169,11 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
         //
         // (Note that ParallelIterator::map does not reorder items.)
         let latest = versions.iter().rev().find_map(|r| {
-            r.as_ref().ok().and_then(|file| match file.spec_file_name() {
-                ApiSpecFileName::Versioned(v) => Some(v.clone()),
-                ApiSpecFileName::Lockstep(_) => unreachable!(
-                    "lockstep file name in versioned API path"
-                ),
+            r.as_ref().ok().map(|file| match file.spec_file_name() {
+                ApiSpecFileName::Versioned(v) => v.clone(),
+                ApiSpecFileName::Lockstep(_) => {
+                    unreachable!("lockstep file name in versioned API path")
+                }
             })
         });
         GeneratedApiResult::Versioned {
