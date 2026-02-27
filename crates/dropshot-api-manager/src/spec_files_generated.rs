@@ -171,7 +171,9 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
         let latest = versions.iter().rev().find_map(|r| {
             r.as_ref().ok().and_then(|file| match file.spec_file_name() {
                 ApiSpecFileName::Versioned(v) => Some(v.clone()),
-                _ => None,
+                ApiSpecFileName::Lockstep(_) => unreachable!(
+                    "lockstep file name in versioned API path"
+                ),
             })
         });
         GeneratedApiResult::Versioned {
