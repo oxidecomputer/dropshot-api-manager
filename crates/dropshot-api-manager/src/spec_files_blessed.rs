@@ -325,6 +325,123 @@ enum BlessedFileResult {
     Error(anyhow::Error),
 }
 
+// ---- Phase 1: parallel read + filename parse + deserialization ----
+
+/// Process a single path from `git ls-tree`.
+///
+/// This is called in parallel.
+fn process_blessed_entry(
+    f: &Utf8Path,
+    repo_root: &Utf8Path,
+    commit: &GitRevision,
+    directory: &Utf8Path,
+    apis: &ManagedApis,
+) -> BlessedFileResult {
+    let kind = match BlessedPathKind::parse(f) {
+        Ok(kind) => kind,
+        Err(UnrecognizedPath) => {
+            return BlessedFileResult::UnrecognizedPath(f.to_owned());
+        }
+    };
+
+    match kind {
+        BlessedPathKind::Lockstep => BlessedFileResult::Skip,
+
+        BlessedPathKind::VersionedFile { api_dir, basename } => {
+            // Skip the latest symlink.
+            if ApiIdent::from(api_dir).versioned_api_is_latest_symlink(basename)
+            {
+                return BlessedFileResult::Skip;
+            }
+
+            let Some(spec_file_name) =
+                parse_versioned_file_name(apis, api_dir, basename)
+                    .ok()
+                    .map(ApiSpecFileName::from)
+            else {
+                return BlessedFileResult::VersionedParseFailed {
+                    api_dir: api_dir.to_owned(),
+                    basename: basename.to_owned(),
+                };
+            };
+
+            let git_path = format!("{directory}/{f}");
+            let contents =
+                match git_show_file(repo_root, commit, git_path.as_ref()) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        return BlessedFileResult::Error(err);
+                    }
+                };
+
+            // Deserialize.
+            let result = ApiSpecFile::for_contents(spec_file_name, contents)
+                .map_err(|(err, _bytes)| {
+                    // BlessedApiSpecFile doesn't track unparseable
+                    // files, so drop the raw bytes (as _bytes).
+                    err
+                });
+
+            BlessedFileResult::VersionedDeserialized { result, git_path }
+        }
+
+        BlessedPathKind::GitStubFile { api_dir, basename } => {
+            let Some(spec_file_name) =
+                parse_versioned_git_stub_file_name(apis, api_dir, basename)
+                    .ok()
+                    .map(ApiSpecFileName::from)
+            else {
+                return BlessedFileResult::GitStubParseFailed {
+                    api_dir: api_dir.to_owned(),
+                    basename: basename.to_owned(),
+                };
+            };
+
+            let git_path = format!("{directory}/{f}");
+            let contents =
+                match git_show_file(repo_root, commit, git_path.as_ref()) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        return BlessedFileResult::Error(err);
+                    }
+                };
+
+            // Read and parse the Git stub contents.
+            let git_stub_str = String::from_utf8_lossy(&contents).to_string();
+            let git_stub: GitStub =
+                match git_stub_str.parse() {
+                    Ok(g) => g,
+                    Err(err) => {
+                        return BlessedFileResult::Error(anyhow!(err).context(
+                            format!("parsing Git stub {:?}", git_path),
+                        ));
+                    }
+                };
+
+            // Read the actual JSON contents.
+            let json_contents =
+                match resolve_git_stub_contents(&git_stub, repo_root) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        return BlessedFileResult::Error(err.context(format!(
+                            "reading content for Git stub {:?}",
+                            git_path
+                        )));
+                    }
+                };
+
+            // Deserialize.
+            let result =
+                ApiSpecFile::for_contents(spec_file_name, json_contents)
+                    .map_err(|(err, _bytes)| err);
+
+            BlessedFileResult::GitStubDeserialized { result, git_stub }
+        }
+    }
+}
+
+// ---- Phase 2: sequential reduce into builder ----
+
 impl BlessedFiles {
     /// Load OpenAPI documents from the given directory in the merge base
     /// between HEAD and the given branch.
@@ -375,134 +492,7 @@ impl BlessedFiles {
         let results: Vec<BlessedFileResult> = files_found
             .par_iter()
             .map(|f| {
-                let kind = match BlessedPathKind::parse(f) {
-                    Ok(kind) => kind,
-                    Err(UnrecognizedPath) => {
-                        return BlessedFileResult::UnrecognizedPath(
-                            f.to_owned(),
-                        );
-                    }
-                };
-
-                match kind {
-                    BlessedPathKind::Lockstep => BlessedFileResult::Skip,
-
-                    BlessedPathKind::VersionedFile { api_dir, basename } => {
-                        // Skip the latest symlink.
-                        if ApiIdent::from(api_dir)
-                            .versioned_api_is_latest_symlink(basename)
-                        {
-                            return BlessedFileResult::Skip;
-                        }
-
-                        let Some(spec_file_name) =
-                            parse_versioned_file_name(apis, api_dir, basename)
-                                .ok()
-                                .map(ApiSpecFileName::from)
-                        else {
-                            return BlessedFileResult::VersionedParseFailed {
-                                api_dir: api_dir.to_owned(),
-                                basename: basename.to_owned(),
-                            };
-                        };
-
-                        let git_path = format!("{directory}/{f}");
-                        let contents = match git_show_file(
-                            repo_root,
-                            commit,
-                            git_path.as_ref(),
-                        ) {
-                            Ok(c) => c,
-                            Err(err) => {
-                                return BlessedFileResult::Error(err);
-                            }
-                        };
-
-                        // Deserialize.
-                        let result =
-                            ApiSpecFile::for_contents(spec_file_name, contents)
-                                .map_err(|(err, _bytes)| {
-                                    // BlessedApiSpecFile doesn't track
-                                    // unparseable files, so drop the raw bytes
-                                    // (as _bytes).
-                                    err
-                                });
-
-                        BlessedFileResult::VersionedDeserialized {
-                            result,
-                            git_path,
-                        }
-                    }
-
-                    BlessedPathKind::GitStubFile { api_dir, basename } => {
-                        let Some(spec_file_name) =
-                            parse_versioned_git_stub_file_name(
-                                apis, api_dir, basename,
-                            )
-                            .ok()
-                            .map(ApiSpecFileName::from)
-                        else {
-                            return BlessedFileResult::GitStubParseFailed {
-                                api_dir: api_dir.to_owned(),
-                                basename: basename.to_owned(),
-                            };
-                        };
-
-                        let git_path = format!("{directory}/{f}");
-                        let contents = match git_show_file(
-                            repo_root,
-                            commit,
-                            git_path.as_ref(),
-                        ) {
-                            Ok(c) => c,
-                            Err(err) => {
-                                return BlessedFileResult::Error(err);
-                            }
-                        };
-
-                        // Read and parse the Git stub contents.
-                        let git_stub_str =
-                            String::from_utf8_lossy(&contents).to_string();
-                        let git_stub: GitStub = match git_stub_str.parse() {
-                            Ok(g) => g,
-                            Err(err) => {
-                                return BlessedFileResult::Error(
-                                    anyhow!(err).context(format!(
-                                        "parsing Git stub {:?}",
-                                        git_path
-                                    )),
-                                );
-                            }
-                        };
-
-                        // Read the actual JSON contents.
-                        let json_contents = match resolve_git_stub_contents(
-                            &git_stub, repo_root,
-                        ) {
-                            Ok(c) => c,
-                            Err(err) => {
-                                return BlessedFileResult::Error(err.context(
-                                    format!(
-                                        "reading content for Git stub {:?}",
-                                        git_path
-                                    ),
-                                ));
-                            }
-                        };
-
-                        // Deserialize.
-                        let result = ApiSpecFile::for_contents(
-                            spec_file_name,
-                            json_contents,
-                        )
-                        .map_err(|(err, _bytes)| err);
-
-                        BlessedFileResult::GitStubDeserialized {
-                            result,
-                            git_stub,
-                        }
-                    }
-                }
+                process_blessed_entry(f, repo_root, commit, directory, apis)
             })
             .collect();
 
