@@ -657,6 +657,8 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
                 api_files.load_maybe_unparseable(file_name, result);
             }
             LocalFileResult::VersionedDeserialized { file_name, result } => {
+                // parse_versioned_file_name() already validated that the
+                // API exists and is versioned.
                 api_files.load_maybe_unparseable(file_name, result);
             }
             LocalFileResult::GitStubDeserialized {
