@@ -45,7 +45,7 @@ pub struct UnparseableFile {
 /// Attempts to parse the given file basename as a `VersionedApiSpecFileName`.
 ///
 /// These look like: `ident-SEMVER-HASH.json`.
-fn parse_versioned_file_name(
+pub(crate) fn parse_versioned_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
@@ -123,7 +123,7 @@ fn parse_versioned_file_name(
 /// with Git stub storage.
 ///
 /// These look like: `ident-SEMVER-HASH.json.gitstub`.
-fn parse_versioned_git_stub_file_name(
+pub(crate) fn parse_versioned_git_stub_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
@@ -144,7 +144,7 @@ fn parse_versioned_git_stub_file_name(
 }
 
 /// Attempts to parse the given file basename as a `LockstepApiSpecFileName`.
-fn parse_lockstep_file_name(
+pub(crate) fn parse_lockstep_file_name(
     apis: &ManagedApis,
     basename: &str,
 ) -> Result<LockstepApiSpecFileName, BadLockstepFileName> {
@@ -164,9 +164,9 @@ fn parse_lockstep_file_name(
     Ok(LockstepApiSpecFileName::new(ident))
 }
 
-/// Describes a failure to parse a file name for a lockstep API
+/// Describes a failure to parse a file name for a lockstep API.
 #[derive(Debug, Error)]
-enum BadLockstepFileName {
+pub(crate) enum BadLockstepFileName {
     #[error("expected lockstep API file name to end in \".json\"")]
     MissingJsonSuffix,
     #[error("does not match a known API")]
@@ -181,9 +181,9 @@ enum BadLockstepFileName {
     NotLockstep,
 }
 
-/// Describes a failure to parse a file name for a versioned API
+/// Describes a failure to parse a file name for a versioned API.
 #[derive(Debug, Error)]
-enum BadVersionedFileName {
+pub(crate) enum BadVersionedFileName {
     #[error("does not match a known API")]
     NoSuchApi,
     #[error("this API is not a versioned API")]
@@ -693,8 +693,22 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         file_name: ApiSpecFileName,
         contents: Vec<u8>,
     ) {
-        let maybe_file = ApiSpecFile::for_contents(file_name.clone(), contents);
-        match maybe_file {
+        let result = ApiSpecFile::for_contents(file_name.clone(), contents);
+        self.load_maybe_unparseable(file_name, result);
+    }
+
+    /// Load an API document that may or may not have parsed successfully.
+    ///
+    /// The `Ok` path delegates to `load_parsed`. The `Err` path
+    /// handles unparseable files: for local files, the raw bytes are
+    /// tracked so the file can be cleaned up during generate; for
+    /// other contexts, the error is recorded.
+    pub fn load_maybe_unparseable(
+        &mut self,
+        file_name: ApiSpecFileName,
+        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+    ) {
+        match result {
             Ok(file) => {
                 self.load_parsed(file);
             }
