@@ -4,14 +4,15 @@
 //! repository
 
 use crate::{apis::ManagedApis, environment::ErrorAccumulator};
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
 use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
     VersionedApiSpecFileName, VersionedApiSpecKind,
 };
-use git_stub::GitCommitHash;
+use git_stub::{GitCommitHash, GitStub};
+use git_stub_vcs::Vcs;
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
 use std::{
@@ -40,6 +41,15 @@ pub struct UnparseableFile {
     /// The path to the file on disk, relative to the OpenAPI documents
     /// directory.
     pub path: Utf8PathBuf,
+}
+
+/// Resolve a parsed [`GitStub`] to its JSON document contents.
+pub(crate) fn resolve_git_stub_contents(
+    git_stub: &GitStub,
+    repo_root: &Utf8Path,
+) -> anyhow::Result<Vec<u8>> {
+    let vcs = Vcs::git().context("initializing Git VCS")?;
+    Ok(vcs.read_git_stub_contents(git_stub, repo_root)?)
 }
 
 /// Attempts to parse the given file basename as a `VersionedApiSpecFileName`.
@@ -886,6 +896,20 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         {
             item.set_git_stub_commit(commit);
         }
+    }
+
+    /// Look up a versioned directory basename in a cache, calling
+    /// [`Self::versioned_directory`] at most once per unique basename
+    /// to avoid duplicate warnings.
+    pub(crate) fn lookup_versioned_dir(
+        &mut self,
+        seen_dirs: &mut BTreeMap<String, Option<ApiIdent>>,
+        dir_basename: &str,
+    ) -> Option<ApiIdent> {
+        seen_dirs
+            .entry(dir_basename.to_owned())
+            .or_insert_with(|| self.versioned_directory(dir_basename))
+            .clone()
     }
 
     /// Returns the underlying set of files loaded

@@ -9,14 +9,13 @@ use crate::{
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
         SpecFileInfo, parse_lockstep_file_name, parse_versioned_file_name,
-        parse_versioned_git_stub_file_name,
+        parse_versioned_git_stub_file_name, resolve_git_stub_contents,
     },
 };
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
 use git_stub::{GitCommitHash, GitStub};
-use git_stub_vcs::Vcs;
 use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -548,33 +547,20 @@ fn process_local_entry(
             }
 
             // Resolve the git stub to actual file contents.
-            let vcs = match Vcs::git() {
-                Ok(vcs) => vcs,
+            let contents = match resolve_git_stub_contents(&git_stub, repo_root)
+            {
+                Ok(c) => c,
                 Err(error) => {
-                    return LocalFileResult::Error(anyhow!(error).context(
-                        format!(
-                            "failed to initialize Git VCS for stub \
-                             file {:?}",
+                    return LocalFileResult::GitStubUnresolvable {
+                        file_name: spec_file_name,
+                        original_contents: git_stub_contents.into_bytes(),
+                        reason: error.context(format!(
+                            "Git stub {:?} could not be resolved",
                             path,
-                        ),
-                    ));
+                        )),
+                    };
                 }
             };
-
-            let contents =
-                match vcs.read_git_stub_contents(&git_stub, repo_root) {
-                    Ok(c) => c,
-                    Err(error) => {
-                        return LocalFileResult::GitStubUnresolvable {
-                            file_name: spec_file_name,
-                            original_contents: git_stub_contents.into_bytes(),
-                            reason: anyhow!(error).context(format!(
-                                "Git stub {:?} could not be resolved",
-                                path,
-                            )),
-                        };
-                    }
-                };
 
             // Deserialize the resolved contents.
             let commit = git_stub.commit();
@@ -693,31 +679,22 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
                 dir_basename,
                 file_name,
             } => {
-                let ident = lookup_versioned_dir(
-                    &mut api_files,
-                    &mut seen_dirs,
-                    &dir_basename,
-                );
+                let ident = api_files
+                    .lookup_versioned_dir(&mut seen_dirs, &dir_basename);
                 if let Some(ident) = ident {
                     api_files.versioned_file_name(&ident, &file_name);
                 }
             }
             LocalFileResult::GitStubParseFailed { dir_basename, file_name } => {
-                let ident = lookup_versioned_dir(
-                    &mut api_files,
-                    &mut seen_dirs,
-                    &dir_basename,
-                );
+                let ident = api_files
+                    .lookup_versioned_dir(&mut seen_dirs, &dir_basename);
                 if let Some(ident) = ident {
                     api_files.versioned_git_stub_file_name(&ident, &file_name);
                 }
             }
             LocalFileResult::LatestSymlink { dir_basename, path, target } => {
-                let ident = lookup_versioned_dir(
-                    &mut api_files,
-                    &mut seen_dirs,
-                    &dir_basename,
-                );
+                let ident = api_files
+                    .lookup_versioned_dir(&mut seen_dirs, &dir_basename);
                 if let Some(ident) = ident
                     && let Some(v) =
                         api_files.symlink_contents(&path, &ident, &target)
@@ -742,18 +719,4 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
     }
 
     Ok(api_files)
-}
-
-/// Look up a versioned directory basename in the cache, calling
-/// `versioned_directory()` on the builder at most once per unique
-/// basename to avoid duplicate warnings.
-fn lookup_versioned_dir<T: ApiLoad + AsRawFiles>(
-    api_files: &mut ApiSpecFilesBuilder<'_, T>,
-    seen_dirs: &mut BTreeMap<String, Option<ApiIdent>>,
-    dir_basename: &str,
-) -> Option<ApiIdent> {
-    seen_dirs
-        .entry(dir_basename.to_owned())
-        .or_insert_with(|| api_files.versioned_directory(dir_basename))
-        .clone()
 }

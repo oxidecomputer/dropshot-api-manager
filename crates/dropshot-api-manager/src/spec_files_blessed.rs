@@ -13,7 +13,7 @@ use crate::{
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
         GitStubKey, SpecFileInfo, parse_versioned_file_name,
-        parse_versioned_git_stub_file_name,
+        parse_versioned_git_stub_file_name, resolve_git_stub_contents,
     },
 };
 use anyhow::{anyhow, bail};
@@ -22,7 +22,6 @@ use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
 };
 use git_stub::{GitCommitHash, GitStub};
-use git_stub_vcs::Vcs;
 use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -477,28 +476,17 @@ impl BlessedFiles {
                         };
 
                         // Read the actual JSON contents.
-                        let vcs = match Vcs::git() {
-                            Ok(vcs) => vcs,
-                            Err(err) => {
-                                return BlessedFileResult::Error(
-                                    anyhow::Error::new(err).context(format!(
-                                        "reading content for Git stub {:?}",
-                                        git_path
-                                    )),
-                                );
-                            }
-                        };
-                        let json_contents = match vcs
-                            .read_git_stub_contents(&git_stub, repo_root)
-                        {
+                        let json_contents = match resolve_git_stub_contents(
+                            &git_stub, repo_root,
+                        ) {
                             Ok(c) => c,
                             Err(err) => {
-                                return BlessedFileResult::Error(
-                                    anyhow::Error::new(err).context(format!(
+                                return BlessedFileResult::Error(err.context(
+                                    format!(
                                         "reading content for Git stub {:?}",
                                         git_path
-                                    )),
-                                );
+                                    ),
+                                ));
                             }
                         };
 
@@ -589,21 +577,15 @@ impl BlessedFiles {
                     api_dir,
                     basename,
                 } => {
-                    let ident = lookup_versioned_dir(
-                        &mut api_files,
-                        &mut seen_dirs,
-                        &api_dir,
-                    );
+                    let ident = api_files
+                        .lookup_versioned_dir(&mut seen_dirs, &api_dir);
                     if let Some(ident) = ident {
                         api_files.versioned_file_name(&ident, &basename);
                     }
                 }
                 BlessedFileResult::GitStubParseFailed { api_dir, basename } => {
-                    let ident = lookup_versioned_dir(
-                        &mut api_files,
-                        &mut seen_dirs,
-                        &api_dir,
-                    );
+                    let ident = api_files
+                        .lookup_versioned_dir(&mut seen_dirs, &api_dir);
                     if let Some(ident) = ident {
                         api_files
                             .versioned_git_stub_file_name(&ident, &basename);
@@ -627,18 +609,4 @@ impl<'a> From<ApiSpecFilesBuilder<'a, BlessedApiSpecFile>> for BlessedFiles {
             merge_base: None,
         }
     }
-}
-
-/// Look up a versioned directory basename in the cache, calling
-/// `versioned_directory()` on the builder at most once per unique
-/// basename to avoid duplicate warnings.
-fn lookup_versioned_dir(
-    api_files: &mut ApiSpecFilesBuilder<'_, BlessedApiSpecFile>,
-    seen_dirs: &mut BTreeMap<String, Option<ApiIdent>>,
-    dir_basename: &str,
-) -> Option<ApiIdent> {
-    seen_dirs
-        .entry(dir_basename.to_owned())
-        .or_insert_with(|| api_files.versioned_directory(dir_basename))
-        .clone()
 }
