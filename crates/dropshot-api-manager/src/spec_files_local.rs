@@ -8,14 +8,16 @@ use crate::{
     environment::ErrorAccumulator,
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        SpecFileInfo,
+        SpecFileInfo, parse_lockstep_file_name, parse_versioned_file_name,
+        parse_versioned_git_stub_file_name,
     },
 };
 use anyhow::{Context, anyhow};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
 use git_stub::{GitCommitHash, GitStub};
 use git_stub_vcs::Vcs;
+use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
 
 /// A local file that exists but couldn't be parsed.
@@ -208,6 +210,398 @@ impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
     }
 }
 
+/// Entry discovered during the directory walk (Phase 1).
+///
+/// No file content is read here; only metadata from `readdir` and
+/// `file_type()`.
+enum LocalDiscoveredEntry {
+    /// A regular file in the top-level directory. This is likely a lockstep
+    /// API.
+    TopLevelFile { file_name: String, path: Utf8PathBuf },
+    /// A regular `.json` file inside a versioned API directory.
+    VersionedFile { dir_basename: String, file_name: String, path: Utf8PathBuf },
+    /// A `.json.gitstub` file inside a versioned API directory.
+    GitStub { dir_basename: String, file_name: String, path: Utf8PathBuf },
+    /// A symlink matching the `{ident}-latest.json` pattern.
+    LatestSymlink { dir_basename: String, path: Utf8PathBuf, target: String },
+    /// A file matching the latest symlink pattern but not actually a
+    /// symlink (e.g., corrupted by a merge conflict).
+    LatestNotSymlink { path: Utf8PathBuf },
+    /// A non-fatal issue discovered during the walk.
+    Warning(anyhow::Error),
+    /// A fatal issue discovered during the walk.
+    Error(anyhow::Error),
+}
+
+/// Result from parallel I/O and deserialization (Phase 2).
+enum LocalFileResult {
+    // --- Successfully parsed filename + deserialized ---
+    LockstepDeserialized {
+        file_name: ApiSpecFileName,
+        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+    },
+    VersionedDeserialized {
+        file_name: ApiSpecFileName,
+        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+    },
+    GitStubDeserialized {
+        file_name: ApiSpecFileName,
+        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+        commit: GitCommitHash,
+    },
+
+    // --- Git stub that couldn't be resolved ---
+    GitStubUnresolvable {
+        file_name: ApiSpecFileName,
+        original_contents: Vec<u8>,
+        reason: anyhow::Error,
+    },
+
+    // --- Filename parse failures (diagnostics happen at the reduce phase) ---
+    LockstepParseFailed {
+        file_name: String,
+    },
+    VersionedParseFailed {
+        dir_basename: String,
+        file_name: String,
+    },
+    GitStubParseFailed {
+        dir_basename: String,
+        file_name: String,
+    },
+
+    // --- Symlinks ---
+    LatestSymlink {
+        dir_basename: String,
+        path: Utf8PathBuf,
+        target: String,
+    },
+    LatestNotSymlink {
+        path: Utf8PathBuf,
+    },
+
+    // --- Errors and warnings ---
+    Warning(anyhow::Error),
+    Error(anyhow::Error),
+}
+
+// ---- Phase 1: sequential directory walk ----
+
+/// Walk the two-level directory structure, collecting entries without
+/// reading file contents.
+///
+/// Returns `Err` only if the top-level `readdir` fails.
+fn discover_local_entries(
+    dir: &Utf8Path,
+) -> anyhow::Result<Vec<LocalDiscoveredEntry>> {
+    let mut entries = Vec::new();
+    let top_iter =
+        dir.read_dir_utf8().with_context(|| format!("readdir {:?}", dir))?;
+
+    for maybe_entry in top_iter {
+        let entry = match maybe_entry {
+            Ok(e) => e,
+            Err(error) => {
+                entries.push(LocalDiscoveredEntry::Error(
+                    anyhow!(error).context(format!("readdir {:?} entry", dir)),
+                ));
+                continue;
+            }
+        };
+
+        let path = entry.path().to_owned();
+        let file_name = entry.file_name().to_owned();
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(error) => {
+                entries.push(LocalDiscoveredEntry::Error(
+                    anyhow!(error).context(format!("file type of {:?}", path)),
+                ));
+                continue;
+            }
+        };
+
+        if file_type.is_file() {
+            entries
+                .push(LocalDiscoveredEntry::TopLevelFile { file_name, path });
+        } else if file_type.is_dir() {
+            discover_versioned_directory(&mut entries, &path, &file_name);
+        } else {
+            entries.push(LocalDiscoveredEntry::Warning(anyhow!(
+                "ignored (not a file or directory): {:?}",
+                path
+            )));
+        }
+    }
+
+    Ok(entries)
+}
+
+/// Walk a single versioned-API subdirectory, appending discovered entries
+/// to `out`.
+fn discover_versioned_directory(
+    out: &mut Vec<LocalDiscoveredEntry>,
+    path: &Utf8Path,
+    dir_basename: &str,
+) {
+    let sub_entries = match path
+        .read_dir_utf8()
+        .and_then(|iter| iter.collect::<Result<Vec<_>, _>>())
+    {
+        Ok(entries) => entries,
+        Err(error) => {
+            out.push(LocalDiscoveredEntry::Error(
+                anyhow!(error).context(format!("readdir {:?}", path)),
+            ));
+            return;
+        }
+    };
+
+    // Construct a temporary ApiIdent so we can use its canonical
+    // symlink-detection method. This ident is not validated against the
+    // known API set (that happens in phase 3); it's used only for the
+    // filename pattern check.
+    let ident = ApiIdent::from(dir_basename.to_owned());
+
+    for entry in sub_entries {
+        let file_name = entry.file_name().to_owned();
+        let entry_path = entry.path().to_owned();
+
+        if ident.versioned_api_is_latest_symlink(&file_name) {
+            // Check whether it's actually a symlink.
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(error) => {
+                    out.push(LocalDiscoveredEntry::Warning(
+                        anyhow!(error).context(format!(
+                            "failed to get file type for {:?}",
+                            entry_path
+                        )),
+                    ));
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                let target = match entry_path.read_link_utf8() {
+                    Ok(s) => s.to_string(),
+                    Err(error) => {
+                        out.push(LocalDiscoveredEntry::Error(
+                            anyhow!(error).context(format!(
+                                "read what should be a symlink {:?}",
+                                entry_path
+                            )),
+                        ));
+                        continue;
+                    }
+                };
+
+                out.push(LocalDiscoveredEntry::LatestSymlink {
+                    dir_basename: dir_basename.to_owned(),
+                    path: entry_path,
+                    target,
+                });
+            } else {
+                out.push(LocalDiscoveredEntry::LatestNotSymlink {
+                    path: entry_path,
+                });
+            }
+            continue;
+        }
+
+        if file_name.ends_with(".json.gitstub") {
+            out.push(LocalDiscoveredEntry::GitStub {
+                dir_basename: dir_basename.to_owned(),
+                file_name,
+                path: entry_path,
+            });
+        } else {
+            out.push(LocalDiscoveredEntry::VersionedFile {
+                dir_basename: dir_basename.to_owned(),
+                file_name,
+                path: entry_path,
+            });
+        }
+    }
+}
+
+// ---- Phase 2: parallel I/O + filename parse + deserialization ----
+
+/// Process a single discovered entry: parse the filename, read file
+/// contents, and deserialize.
+///
+/// This is called in parallel.
+fn process_local_entry(
+    entry: LocalDiscoveredEntry,
+    apis: &ManagedApis,
+    repo_root: &Utf8Path,
+) -> LocalFileResult {
+    match entry {
+        LocalDiscoveredEntry::TopLevelFile { file_name, path } => {
+            // Try to parse as a lockstep filename. If that fails, defer
+            // diagnostics to the reduce phase (the builder methods produce
+            // the correct warnings/errors depending on T).
+            let Some(spec_file_name) =
+                parse_lockstep_file_name(apis, &file_name)
+                    .ok()
+                    .map(ApiSpecFileName::from)
+            else {
+                return LocalFileResult::LockstepParseFailed { file_name };
+            };
+
+            let contents = match fs_err::read(&path) {
+                Ok(c) => c,
+                Err(error) => {
+                    return LocalFileResult::Error(anyhow!(error));
+                }
+            };
+
+            let result =
+                ApiSpecFile::for_contents(spec_file_name.clone(), contents);
+            LocalFileResult::LockstepDeserialized {
+                file_name: spec_file_name,
+                result,
+            }
+        }
+
+        LocalDiscoveredEntry::VersionedFile {
+            dir_basename,
+            file_name,
+            path,
+        } => {
+            let Some(spec_file_name) =
+                parse_versioned_file_name(apis, &dir_basename, &file_name)
+                    .ok()
+                    .map(ApiSpecFileName::from)
+            else {
+                return LocalFileResult::VersionedParseFailed {
+                    dir_basename,
+                    file_name,
+                };
+            };
+
+            let contents = match fs_err::read(&path) {
+                Ok(c) => c,
+                Err(error) => {
+                    return LocalFileResult::Error(anyhow!(error));
+                }
+            };
+
+            let result =
+                ApiSpecFile::for_contents(spec_file_name.clone(), contents);
+            LocalFileResult::VersionedDeserialized {
+                file_name: spec_file_name,
+                result,
+            }
+        }
+
+        LocalDiscoveredEntry::GitStub { dir_basename, file_name, path } => {
+            let Some(spec_file_name) = parse_versioned_git_stub_file_name(
+                apis,
+                &dir_basename,
+                &file_name,
+            )
+            .ok()
+            .map(ApiSpecFileName::from) else {
+                return LocalFileResult::GitStubParseFailed {
+                    dir_basename,
+                    file_name,
+                };
+            };
+
+            let git_stub_contents = match fs_err::read_to_string(&path) {
+                Ok(c) => c,
+                Err(error) => {
+                    return LocalFileResult::Error(anyhow!(error).context(
+                        format!("failed to read Git stub {:?}", path,),
+                    ));
+                }
+            };
+
+            // Parse the Git stub.
+            let git_stub = match git_stub_contents.parse::<GitStub>() {
+                Ok(g) => g,
+                Err(error) => {
+                    return LocalFileResult::GitStubUnresolvable {
+                        file_name: spec_file_name,
+                        original_contents: git_stub_contents.into_bytes(),
+                        reason: anyhow!(error).context(format!(
+                            "Git stub {:?} could not be parsed",
+                            path,
+                        )),
+                    };
+                }
+            };
+
+            // Check if the stub needs rewriting to canonical format.
+            if git_stub.needs_rewrite() {
+                return LocalFileResult::GitStubUnresolvable {
+                    file_name: spec_file_name,
+                    original_contents: git_stub_contents.into_bytes(),
+                    reason: anyhow!(
+                        "Git stub {:?} needs to be rewritten to \
+                         canonical format (forward slashes, trailing \
+                         newline)",
+                        path,
+                    ),
+                };
+            }
+
+            // Resolve the git stub to actual file contents.
+            let vcs = match Vcs::git() {
+                Ok(vcs) => vcs,
+                Err(error) => {
+                    return LocalFileResult::Error(anyhow!(error).context(
+                        format!(
+                            "failed to initialize Git VCS for stub \
+                             file {:?}",
+                            path,
+                        ),
+                    ));
+                }
+            };
+
+            let contents =
+                match vcs.read_git_stub_contents(&git_stub, repo_root) {
+                    Ok(c) => c,
+                    Err(error) => {
+                        return LocalFileResult::GitStubUnresolvable {
+                            file_name: spec_file_name,
+                            original_contents: git_stub_contents.into_bytes(),
+                            reason: anyhow!(error).context(format!(
+                                "Git stub {:?} could not be resolved",
+                                path,
+                            )),
+                        };
+                    }
+                };
+
+            // Deserialize the resolved contents.
+            let commit = git_stub.commit();
+            let result =
+                ApiSpecFile::for_contents(spec_file_name.clone(), contents);
+            LocalFileResult::GitStubDeserialized {
+                file_name: spec_file_name,
+                result,
+                commit,
+            }
+        }
+
+        LocalDiscoveredEntry::LatestSymlink { dir_basename, path, target } => {
+            LocalFileResult::LatestSymlink { dir_basename, path, target }
+        }
+
+        LocalDiscoveredEntry::LatestNotSymlink { path } => {
+            LocalFileResult::LatestNotSymlink { path }
+        }
+
+        LocalDiscoveredEntry::Warning(err) => LocalFileResult::Warning(err),
+        LocalDiscoveredEntry::Error(err) => LocalFileResult::Error(err),
+    }
+}
+
+// ---- Phase 3: sequential reduce into builder ----
+
 /// Load OpenAPI documents for the local directory tree.
 ///
 /// Under `dir`, we expect to find either:
@@ -241,240 +635,123 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
     error_accumulator: &'a mut ErrorAccumulator,
     repo_root: &Utf8Path,
 ) -> anyhow::Result<ApiSpecFilesBuilder<'a, T>> {
-    let mut api_files = ApiSpecFilesBuilder::new(apis, error_accumulator);
-    let entry_iter =
-        dir.read_dir_utf8().with_context(|| format!("readdir {:?}", dir))?;
-    for maybe_entry in entry_iter {
-        let entry =
-            maybe_entry.with_context(|| format!("readdir {:?} entry", dir))?;
+    // Phase 1: discover entries (sequential, fast).
+    let entries = discover_local_entries(dir)?;
 
-        // If this entry is a file, then we'd expect it to be the JSON file
-        // for one of our lockstep APIs. Check and see.
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("file type of {:?}", path))?;
-        if file_type.is_file() {
-            match fs_err::read(path) {
-                Ok(contents) => {
-                    if let Some(file_name) =
-                        api_files.lockstep_file_name(file_name)
-                    {
-                        api_files.load_contents(file_name, contents);
-                    }
-                }
-                Err(error) => {
-                    api_files.load_error(anyhow!(error));
-                }
-            };
-        } else if file_type.is_dir() {
-            load_versioned_directory(
-                &mut api_files,
-                path,
+    // Phase 2: I/O + filename parse + deserialization (parallel).
+    let file_results: Vec<LocalFileResult> = entries
+        .into_par_iter()
+        .map(|entry| process_local_entry(entry, apis, repo_root))
+        .collect();
+
+    // Phase 3: reduce into builder (sequential).
+    let mut api_files = ApiSpecFilesBuilder::new(apis, error_accumulator);
+
+    // Cache for `versioned_directory()` results to avoid duplicate
+    // warnings for entries from the same directory.
+    let mut seen_dirs: BTreeMap<String, Option<ApiIdent>> = BTreeMap::new();
+
+    for result in file_results {
+        match result {
+            LocalFileResult::LockstepDeserialized { file_name, result } => {
+                api_files.load_maybe_unparseable(file_name, result);
+            }
+            LocalFileResult::VersionedDeserialized { file_name, result } => {
+                api_files.load_maybe_unparseable(file_name, result);
+            }
+            LocalFileResult::GitStubDeserialized {
                 file_name,
-                repo_root,
-            );
-        } else {
-            // This is not something the tool cares about, but it's not
-            // obviously a problem, either.
-            api_files.load_warning(anyhow!(
-                "ignored (not a file or directory): {:?}",
-                path
-            ));
-        };
+                result,
+                commit,
+            } => {
+                let version = file_name.version().cloned();
+                let ident = file_name.ident().clone();
+                api_files.load_maybe_unparseable(file_name, result);
+                if let Some(version) = version {
+                    api_files.set_git_stub_commit(&ident, &version, commit);
+                }
+            }
+            LocalFileResult::GitStubUnresolvable {
+                file_name,
+                original_contents,
+                reason,
+            } => {
+                api_files.load_unparseable(
+                    file_name,
+                    original_contents,
+                    reason,
+                );
+            }
+            LocalFileResult::LockstepParseFailed { file_name } => {
+                // The builder's `lockstep_file_name` produces the correct
+                // warnings/errors.
+                api_files.lockstep_file_name(&file_name);
+            }
+            LocalFileResult::VersionedParseFailed {
+                dir_basename,
+                file_name,
+            } => {
+                let ident = lookup_versioned_dir(
+                    &mut api_files,
+                    &mut seen_dirs,
+                    &dir_basename,
+                );
+                if let Some(ident) = ident {
+                    api_files.versioned_file_name(&ident, &file_name);
+                }
+            }
+            LocalFileResult::GitStubParseFailed { dir_basename, file_name } => {
+                let ident = lookup_versioned_dir(
+                    &mut api_files,
+                    &mut seen_dirs,
+                    &dir_basename,
+                );
+                if let Some(ident) = ident {
+                    api_files.versioned_git_stub_file_name(&ident, &file_name);
+                }
+            }
+            LocalFileResult::LatestSymlink { dir_basename, path, target } => {
+                let ident = lookup_versioned_dir(
+                    &mut api_files,
+                    &mut seen_dirs,
+                    &dir_basename,
+                );
+                if let Some(ident) = ident
+                    && let Some(v) =
+                        api_files.symlink_contents(&path, &ident, &target)
+                {
+                    api_files.load_latest_link(&ident, v);
+                }
+            }
+            LocalFileResult::LatestNotSymlink { path } => {
+                api_files.load_warning(anyhow!(
+                    "expected symlink but found regular file {:?}; \
+                     will regenerate",
+                    path
+                ));
+            }
+            LocalFileResult::Warning(err) => {
+                api_files.load_warning(err);
+            }
+            LocalFileResult::Error(err) => {
+                api_files.load_error(err);
+            }
+        }
     }
 
     Ok(api_files)
 }
 
-/// Load the contents of a directory that corresponds to a versioned API.
-///
-/// See [`walk_local_directory()`] for what we expect to find.
-fn load_versioned_directory<T: ApiLoad + AsRawFiles>(
+/// Look up a versioned directory basename in the cache, calling
+/// `versioned_directory()` on the builder at most once per unique
+/// basename to avoid duplicate warnings.
+fn lookup_versioned_dir<T: ApiLoad + AsRawFiles>(
     api_files: &mut ApiSpecFilesBuilder<'_, T>,
-    path: &Utf8Path,
-    basename: &str,
-    repo_root: &Utf8Path,
-) {
-    let Some(ident) = api_files.versioned_directory(basename) else {
-        return;
-    };
-
-    let entries = match path
-        .read_dir_utf8()
-        .and_then(|entry_iter| entry_iter.collect::<Result<Vec<_>, _>>())
-    {
-        Ok(entries) => entries,
-        Err(error) => {
-            api_files.load_error(
-                anyhow!(error).context(format!("readdir {:?}", path)),
-            );
-            return;
-        }
-    };
-
-    for entry in entries {
-        let file_name = entry.file_name();
-
-        if ident.versioned_api_is_latest_symlink(file_name) {
-            // We should be looking at a symlink. However, VCS tools like jj
-            // can turn symlinks into regular files with conflict markers when
-            // there's a symlink conflict. In that case, we treat it as a
-            // missing/corrupted symlink and let generate recreate it.
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(error) => {
-                    api_files.load_warning(anyhow!(error).context(format!(
-                        "failed to get file type for {:?}",
-                        entry.path()
-                    )));
-                    continue;
-                }
-            };
-
-            if !file_type.is_symlink() {
-                // This is not a symlink (likely corrupted by a merge conflict).
-                // Skip it so generate will recreate it.
-                api_files.load_warning(anyhow!(
-                    "expected symlink but found regular file {:?}; \
-                     will regenerate",
-                    entry.path()
-                ));
-                continue;
-            }
-
-            let symlink = match entry.path().read_link_utf8() {
-                Ok(s) => s,
-                Err(error) => {
-                    api_files.load_error(anyhow!(error).context(format!(
-                        "read what should be a symlink {:?}",
-                        entry.path()
-                    )));
-                    continue;
-                }
-            };
-
-            if let Some(v) = api_files.symlink_contents(
-                entry.path(),
-                &ident,
-                symlink.as_str(),
-            ) {
-                api_files.load_latest_link(&ident, v);
-            }
-            continue;
-        }
-
-        // Handle .gitstub files: these contain a `commit:path` reference to
-        // the actual content in git.
-        if file_name.ends_with(".json.gitstub") {
-            let Some(spec_file_name) =
-                api_files.versioned_git_stub_file_name(&ident, file_name)
-            else {
-                continue;
-            };
-
-            let git_stub_contents = match fs_err::read_to_string(entry.path()) {
-                Ok(content) => content,
-                Err(error) => {
-                    api_files.load_error(anyhow!(error).context(format!(
-                        "failed to read Git stub {:?}",
-                        entry.path()
-                    )));
-                    continue;
-                }
-            };
-
-            // Parse the Git stub. If parsing fails or the file needs
-            // rewriting, mark it as unparseable so it will be deleted and
-            // regenerated.
-            let git_stub = match git_stub_contents.parse::<GitStub>() {
-                Ok(git_stub) => git_stub,
-                Err(error) => {
-                    api_files.load_unparseable(
-                        spec_file_name,
-                        git_stub_contents.into_bytes(),
-                        anyhow!(error).context(format!(
-                            "Git stub {:?} could not be parsed",
-                            entry.path()
-                        )),
-                    );
-                    continue;
-                }
-            };
-
-            // Check if the file needs to be rewritten to canonical format.
-            // If so, treat it as unparseable so it gets deleted and
-            // regenerated.
-            if git_stub.needs_rewrite() {
-                api_files.load_unparseable(
-                    spec_file_name,
-                    git_stub_contents.into_bytes(),
-                    anyhow!(
-                        "Git stub {:?} needs to be rewritten to \
-                         canonical format (forward slashes, trailing \
-                         newline)",
-                        entry.path()
-                    ),
-                );
-                continue;
-            }
-
-            // If the Git stub is syntactically valid but can't be resolved
-            // (e.g., the commit or path no longer exists after a rebase or
-            // force-push), treat it as unparseable so generate can delete
-            // and recreate it.
-            let vcs = match Vcs::git() {
-                Ok(vcs) => vcs,
-                Err(error) => {
-                    api_files.load_error(anyhow!(error).context(format!(
-                        "failed to initialize Git VCS for stub file {:?}",
-                        entry.path()
-                    )));
-                    continue;
-                }
-            };
-            let contents =
-                match vcs.read_git_stub_contents(&git_stub, repo_root) {
-                    Ok(contents) => contents,
-                    Err(error) => {
-                        api_files.load_unparseable(
-                            spec_file_name,
-                            git_stub_contents.into_bytes(),
-                            anyhow!(error).context(format!(
-                                "Git stub {:?} could not be resolved",
-                                entry.path()
-                            )),
-                        );
-                        continue;
-                    }
-                };
-
-            // Extract the version before spec_file_name is moved into
-            // load_contents.
-            let version = spec_file_name.version().cloned();
-            let commit = git_stub.commit();
-            api_files.load_contents(spec_file_name, contents);
-            if let Some(version) = version {
-                api_files.set_git_stub_commit(&ident, &version, commit);
-            }
-            continue;
-        }
-
-        // Handle regular .json files.
-        let Some(file_name) = api_files.versioned_file_name(&ident, file_name)
-        else {
-            continue;
-        };
-
-        let contents = match fs_err::read(entry.path()) {
-            Ok(contents) => contents,
-            Err(error) => {
-                api_files.load_error(anyhow!(error));
-                continue;
-            }
-        };
-
-        api_files.load_contents(file_name, contents);
-    }
+    seen_dirs: &mut BTreeMap<String, Option<ApiIdent>>,
+    dir_basename: &str,
+) -> Option<ApiIdent> {
+    seen_dirs
+        .entry(dir_basename.to_owned())
+        .or_insert_with(|| api_files.versioned_directory(dir_basename))
+        .clone()
 }
