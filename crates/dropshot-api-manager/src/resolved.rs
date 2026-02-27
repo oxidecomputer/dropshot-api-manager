@@ -23,6 +23,7 @@ use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
 };
 use git_stub::{GitCommitHash, GitStub};
+use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::{Debug, Display},
@@ -901,10 +902,12 @@ impl<'a> Resolved<'a> {
                 .collect();
 
         // Resolve each of the supported API versions first, so we know what
-        // paths will be written.
+        // paths will be written. (Do this in parallel across each API version.)
         let api_results: BTreeMap<ApiIdent, ApiResolved<'_>> = apis
             .iter_apis()
-            .map(|api| {
+            .collect::<Vec<_>>()
+            .par_iter()
+            .map(|&api| {
                 let ident = api.ident().clone();
                 let api_blessed = blessed.get(&ident);
                 let Some(api_generated) = generated.get(&ident) else {
@@ -1137,14 +1140,12 @@ fn resolve_api<'a>(
             }
         };
 
-        let mut by_version: BTreeMap<_, _> = api
-            .iter_versions_semver()
-            // Reverse the order of versions: they are stored in sorted order,
-            // so the last version (first one from the back) is the latest.
-            .rev()
-            .enumerate()
-            .map(|(index, version)| {
-                let is_latest = index == 0;
+        // Run per-version resolution in parallel.
+        let versions: Vec<_> = api.iter_versions_semver().collect();
+        let mut by_version: BTreeMap<_, _> = versions
+            .par_iter()
+            .map(|&version| {
+                let is_latest = version == latest_version;
                 let version = version.clone();
                 let blessed =
                     api_blessed.and_then(|b| b.versions().get(&version));
