@@ -435,10 +435,10 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         self.error_accumulator.warning(error);
     }
 
-    /// Returns an `ApiSpecFileName` for the given lockstep API
+    /// Returns an `ApiSpecFileName` for the given lockstep API.
     ///
     /// On success, this does not load anything into `self`.  Callers generally
-    /// invoke `load_contents()` with the returned value.  On failure, warnings
+    /// invoke `load_parsed()` with the returned value.  On failure, warnings
     /// or errors will be recorded.
     pub fn lockstep_file_name(
         &mut self,
@@ -507,9 +507,10 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
 
     /// Returns an identifier for the versioned API identified by `basename`.
     ///
-    /// On success, this does not load anything into `self`.  Callers generally
-    /// invoke `versioned_file_name()` with the returned value.  On failure,
-    /// warnings or errors will be recorded.
+    /// On success, this does not load anything into `self`. Callers generally
+    /// parse the contents, then invoke `load_parsed()` or
+    /// `load_maybe_unparseable()` with the returned value. On failure, warnings
+    /// or errors will be recorded.
     pub fn versioned_directory(&mut self, basename: &str) -> Option<ApiIdent> {
         let ident = ApiIdent::from(basename.to_owned());
         match self.apis.api(&ident) {
@@ -542,10 +543,11 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
-    /// Returns an `ApiSpecFileName` for the given versioned API
+    /// Returns an `ApiSpecFileName` for the given versioned API.
     ///
-    /// On success, this does not load anything into `self`.  Callers generally
-    /// invoke `load_contents()` with the returned value.  On failure, warnings
+    /// On success, this does not load anything into `self`. Callers generally
+    /// parse the contents, then invoke `load_parsed()` or
+    /// `load_maybe_unparseable()` with the returned value. On failure, warnings
     /// or errors will be recorded.
     pub fn versioned_file_name(
         &mut self,
@@ -585,8 +587,9 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// Returns an `ApiSpecFileName` for the given versioned Git stub.
     ///
     /// On success, this does not load anything into `self`. Callers generally
-    /// invoke `load_contents()` with the returned value after dereferencing the
-    /// Git stub. On failure, warnings or errors will be recorded.
+    /// parse the contents, then invoke `load_parsed()` or
+    /// `load_maybe_unparseable()` with the returned value. On failure, warnings
+    /// or errors will be recorded.
     pub fn versioned_git_stub_file_name(
         &mut self,
         ident: &ApiIdent,
@@ -681,20 +684,6 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                 };
             }
         };
-    }
-
-    /// Load an API document from raw bytes.
-    ///
-    /// On failure, records errors or warnings. For local files (where
-    /// `T::UNPARSEABLE_FILES_ALLOWED` is true), unparseable files are recorded
-    /// as warnings and tracked so they can be cleaned up during generate.
-    pub fn load_contents(
-        &mut self,
-        file_name: ApiSpecFileName,
-        contents: Vec<u8>,
-    ) {
-        let result = ApiSpecFile::for_contents(file_name.clone(), contents);
-        self.load_maybe_unparseable(file_name, result);
     }
 
     /// Load an API document that may or may not have parsed successfully.
@@ -883,9 +872,9 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// Set the Git stub commit on the most recently loaded item at (ident,
     /// version).
     ///
-    /// Called after `load_contents` for Git stubs to attach the commit
+    /// Called after `load_parsed` for Git stubs to attach the commit
     /// hash to the loaded file. No-op if the item doesn't exist (e.g.,
-    /// `load_contents` failed) or the `ApiLoad` impl ignores it.
+    /// loading failed) or the `ApiLoad` impl ignores it.
     pub fn set_git_stub_commit(
         &mut self,
         ident: &ApiIdent,

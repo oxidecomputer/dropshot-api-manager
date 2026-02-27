@@ -12,7 +12,8 @@ use crate::{
     },
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        GitStubKey, SpecFileInfo,
+        GitStubKey, SpecFileInfo, parse_versioned_file_name,
+        parse_versioned_git_stub_file_name,
     },
 };
 use anyhow::{anyhow, bail};
@@ -22,6 +23,7 @@ use dropshot_api_manager_types::{
 };
 use git_stub::{GitCommitHash, GitStub};
 use git_stub_vcs::Vcs;
+use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
 
 /// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents from
@@ -292,6 +294,38 @@ impl BlessedFiles {
     }
 }
 
+/// Intermediate result from reading a single blessed file in parallel.
+///
+/// Produced by the parallel map phase and consumed in the reduce phase.
+enum BlessedFileResult {
+    /// Lockstep file or latest symlink: skip this file.
+    Skip,
+    /// A path structure we don't understand.
+    UnrecognizedPath(Utf8PathBuf),
+
+    /// Read a versioned JSON file from git. The `result` indicates whether
+    /// deserialization succeeded.
+    VersionedDeserialized {
+        result: Result<ApiSpecFile, anyhow::Error>,
+        git_path: String,
+    },
+    /// Read a Git stub file and resolved its contents. The `result`
+    /// indicates whether deserialization succeeded.
+    GitStubDeserialized {
+        result: Result<ApiSpecFile, anyhow::Error>,
+        git_stub: GitStub,
+    },
+
+    /// A versioned filename that couldn't be parsed. Deferred so the builder
+    /// can produce the appropriate diagnostics.
+    VersionedParseFailed { api_dir: String, basename: String },
+    /// A Git stub filename that couldn't be parsed.
+    GitStubParseFailed { api_dir: String, basename: String },
+
+    /// An error during git I/O or stub resolution.
+    Error(anyhow::Error),
+}
+
 impl BlessedFiles {
     /// Load OpenAPI documents from the given directory in the merge base
     /// between HEAD and the given branch.
@@ -326,6 +360,9 @@ impl BlessedFiles {
     }
 
     /// Load OpenAPI documents from the given Git revision and directory.
+    ///
+    /// Work is split into two phases in a map-reduce pattern, similar to
+    /// generated and local files.
     pub fn load_from_git_revision(
         repo_root: &Utf8Path,
         commit: &GitRevision,
@@ -333,136 +370,244 @@ impl BlessedFiles {
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
     ) -> anyhow::Result<BlessedFiles> {
+        let files_found = git_ls_tree(repo_root, commit, directory)?;
+
+        // Phase 1 (map): parallel read + deserialize.
+        let results: Vec<BlessedFileResult> = files_found
+            .par_iter()
+            .map(|f| {
+                let kind = match BlessedPathKind::parse(f) {
+                    Ok(kind) => kind,
+                    Err(UnrecognizedPath) => {
+                        return BlessedFileResult::UnrecognizedPath(
+                            f.to_owned(),
+                        );
+                    }
+                };
+
+                match kind {
+                    BlessedPathKind::Lockstep => BlessedFileResult::Skip,
+
+                    BlessedPathKind::VersionedFile { api_dir, basename } => {
+                        // Skip the latest symlink.
+                        if ApiIdent::from(api_dir)
+                            .versioned_api_is_latest_symlink(basename)
+                        {
+                            return BlessedFileResult::Skip;
+                        }
+
+                        let Some(spec_file_name) =
+                            parse_versioned_file_name(apis, api_dir, basename)
+                                .ok()
+                                .map(ApiSpecFileName::from)
+                        else {
+                            return BlessedFileResult::VersionedParseFailed {
+                                api_dir: api_dir.to_owned(),
+                                basename: basename.to_owned(),
+                            };
+                        };
+
+                        let git_path = format!("{directory}/{f}");
+                        let contents = match git_show_file(
+                            repo_root,
+                            commit,
+                            git_path.as_ref(),
+                        ) {
+                            Ok(c) => c,
+                            Err(err) => {
+                                return BlessedFileResult::Error(err);
+                            }
+                        };
+
+                        // Deserialize.
+                        let result =
+                            ApiSpecFile::for_contents(spec_file_name, contents)
+                                .map_err(|(err, _bytes)| {
+                                    // BlessedApiSpecFile doesn't track
+                                    // unparseable files, so drop the raw bytes
+                                    // (as _bytes).
+                                    err
+                                });
+
+                        BlessedFileResult::VersionedDeserialized {
+                            result,
+                            git_path,
+                        }
+                    }
+
+                    BlessedPathKind::GitStubFile { api_dir, basename } => {
+                        let Some(spec_file_name) =
+                            parse_versioned_git_stub_file_name(
+                                apis, api_dir, basename,
+                            )
+                            .ok()
+                            .map(ApiSpecFileName::from)
+                        else {
+                            return BlessedFileResult::GitStubParseFailed {
+                                api_dir: api_dir.to_owned(),
+                                basename: basename.to_owned(),
+                            };
+                        };
+
+                        let git_path = format!("{directory}/{f}");
+                        let contents = match git_show_file(
+                            repo_root,
+                            commit,
+                            git_path.as_ref(),
+                        ) {
+                            Ok(c) => c,
+                            Err(err) => {
+                                return BlessedFileResult::Error(err);
+                            }
+                        };
+
+                        // Read and parse the Git stub contents.
+                        let git_stub_str =
+                            String::from_utf8_lossy(&contents).to_string();
+                        let git_stub: GitStub = match git_stub_str.parse() {
+                            Ok(g) => g,
+                            Err(err) => {
+                                return BlessedFileResult::Error(
+                                    anyhow!(err).context(format!(
+                                        "parsing Git stub {:?}",
+                                        git_path
+                                    )),
+                                );
+                            }
+                        };
+
+                        // Read the actual JSON contents.
+                        let vcs = match Vcs::git() {
+                            Ok(vcs) => vcs,
+                            Err(err) => {
+                                return BlessedFileResult::Error(
+                                    anyhow::Error::new(err).context(format!(
+                                        "reading content for Git stub {:?}",
+                                        git_path
+                                    )),
+                                );
+                            }
+                        };
+                        let json_contents = match vcs
+                            .read_git_stub_contents(&git_stub, repo_root)
+                        {
+                            Ok(c) => c,
+                            Err(err) => {
+                                return BlessedFileResult::Error(
+                                    anyhow::Error::new(err).context(format!(
+                                        "reading content for Git stub {:?}",
+                                        git_path
+                                    )),
+                                );
+                            }
+                        };
+
+                        // Deserialize.
+                        let result = ApiSpecFile::for_contents(
+                            spec_file_name,
+                            json_contents,
+                        )
+                        .map_err(|(err, _bytes)| err);
+
+                        BlessedFileResult::GitStubDeserialized {
+                            result,
+                            git_stub,
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Phase 2 (reduce): build up the internal builder state.
         let mut api_files: ApiSpecFilesBuilder<BlessedApiSpecFile> =
             ApiSpecFilesBuilder::new(apis, error_accumulator);
         let mut git_stubs: BTreeMap<GitStubKey, BlessedGitStub> =
             BTreeMap::new();
+        // Cache for `versioned_directory()` results to avoid duplicate
+        // warnings for entries from the same directory.
+        let mut seen_dirs: BTreeMap<String, Option<ApiIdent>> = BTreeMap::new();
 
-        let files_found = git_ls_tree(repo_root, commit, directory)?;
-        for f in files_found {
-            let kind = match BlessedPathKind::parse(&f) {
-                Ok(kind) => kind,
-                Err(UnrecognizedPath) => {
+        for result in results {
+            match result {
+                BlessedFileResult::Skip => {}
+                BlessedFileResult::UnrecognizedPath(path) => {
                     api_files.load_warning(anyhow!(
                         "path {:?}: can't understand this path name",
-                        f
+                        path
                     ));
-                    continue;
                 }
-            };
-
-            // Lockstep files are not loaded from blessed sources. They're
-            // always regenerated from the current code, so there's no
-            // "blessed" version to compare against.
-            if matches!(kind, BlessedPathKind::Lockstep) {
-                continue;
-            }
-
-            // Read the contents. Use "/" rather than "\" on Windows.
-            let git_path = format!("{directory}/{f}");
-            let contents = git_show_file(repo_root, commit, git_path.as_ref())?;
-
-            match kind {
-                BlessedPathKind::Lockstep => {
-                    unreachable!("handled above");
+                BlessedFileResult::Error(err) => {
+                    api_files.load_error(err);
                 }
 
-                BlessedPathKind::VersionedFile { api_dir, basename } => {
-                    let Some(ident) = api_files.versioned_directory(api_dir)
-                    else {
-                        continue;
-                    };
-
-                    // This is the "latest" symlink. We could dereference it and
-                    // report it here, but it's not relevant for anything this
-                    // tool does, so we don't bother.
-                    if ident.versioned_api_is_latest_symlink(basename) {
-                        continue;
-                    }
-
-                    let Some(spec_file_name) =
-                        api_files.versioned_file_name(&ident, basename)
-                    else {
-                        continue;
-                    };
-
-                    // Track the Git stub for this versioned file. Use Lazy
-                    // so the first commit is only computed when needed
-                    // (i.e., when Git stub storage is enabled).
-                    if let Some(version) = spec_file_name.version() {
+                BlessedFileResult::VersionedDeserialized {
+                    result,
+                    git_path,
+                } => match result {
+                    Ok(file) => {
+                        // Track the Git stub for this versioned file.
+                        // Use Lazy so the first commit is only computed
+                        // when needed (i.e., when Git stub storage is
+                        // enabled).
+                        let version = file.version().clone();
+                        let ident = file.spec_file_name().ident().clone();
                         git_stubs.insert(
-                            GitStubKey {
-                                ident: ident.clone(),
-                                version: version.clone(),
-                            },
+                            GitStubKey { ident, version },
                             BlessedGitStub::Lazy {
                                 revision: commit.clone(),
                                 path: Utf8PathBuf::from(&git_path),
                             },
                         );
+                        api_files.load_parsed(file);
                     }
+                    Err(error) => api_files.load_error(error),
+                },
 
-                    api_files.load_contents(spec_file_name, contents);
+                BlessedFileResult::GitStubDeserialized { result, git_stub } => {
+                    match result {
+                        Ok(file) => {
+                            // Track the Git stub for this versioned file.
+                            // The Git stub already contains the first
+                            // commit, so use it directly.
+                            let version = file.version().clone();
+                            let ident = file.spec_file_name().ident().clone();
+                            git_stubs.insert(
+                                GitStubKey { ident, version },
+                                BlessedGitStub::Known {
+                                    commit: git_stub.commit(),
+                                    path: git_stub.path().to_owned(),
+                                },
+                            );
+                            api_files.load_parsed(file);
+                        }
+                        Err(error) => api_files.load_error(error),
+                    }
                 }
 
-                BlessedPathKind::GitStubFile { api_dir, basename } => {
-                    let Some(ident) = api_files.versioned_directory(api_dir)
-                    else {
-                        continue;
-                    };
-                    let Some(spec_file_name) = api_files
-                        .versioned_git_stub_file_name(&ident, basename)
-                    else {
-                        continue;
-                    };
-
-                    // Parse the Git stub content to get the referenced
-                    // commit and path.
-                    let git_stub_str =
-                        String::from_utf8_lossy(&contents).to_string();
-                    let git_stub: GitStub = match git_stub_str.parse() {
-                        Ok(g) => g,
-                        Err(err) => {
-                            api_files.load_error(anyhow!(err).context(
-                                format!("parsing Git stub {:?}", git_path),
-                            ));
-                            continue;
-                        }
-                    };
-
-                    // Load the actual JSON content from the Git stub.
-                    let json_contents = match Vcs::git()?
-                        .read_git_stub_contents(&git_stub, repo_root)
-                    {
-                        Ok(c) => c,
-                        Err(err) => {
-                            api_files.load_error(
-                                anyhow::Error::new(err).context(format!(
-                                    "reading content for Git stub {:?}",
-                                    git_path
-                                )),
-                            );
-                            continue;
-                        }
-                    };
-
-                    // Track the Git stub for this versioned file. The Git
-                    // stub already contains the first commit, so we use it
-                    // directly.
-                    if let Some(version) = spec_file_name.version() {
-                        git_stubs.insert(
-                            GitStubKey {
-                                ident: ident.clone(),
-                                version: version.clone(),
-                            },
-                            BlessedGitStub::Known {
-                                commit: git_stub.commit(),
-                                path: git_stub.path().to_owned(),
-                            },
-                        );
+                // Produce diagnostics for parse failures.
+                BlessedFileResult::VersionedParseFailed {
+                    api_dir,
+                    basename,
+                } => {
+                    let ident = lookup_versioned_dir(
+                        &mut api_files,
+                        &mut seen_dirs,
+                        &api_dir,
+                    );
+                    if let Some(ident) = ident {
+                        api_files.versioned_file_name(&ident, &basename);
                     }
-
-                    api_files.load_contents(spec_file_name, json_contents);
+                }
+                BlessedFileResult::GitStubParseFailed { api_dir, basename } => {
+                    let ident = lookup_versioned_dir(
+                        &mut api_files,
+                        &mut seen_dirs,
+                        &api_dir,
+                    );
+                    if let Some(ident) = ident {
+                        api_files
+                            .versioned_git_stub_file_name(&ident, &basename);
+                    }
                 }
             }
         }
@@ -482,4 +627,18 @@ impl<'a> From<ApiSpecFilesBuilder<'a, BlessedApiSpecFile>> for BlessedFiles {
             merge_base: None,
         }
     }
+}
+
+/// Look up a versioned directory basename in the cache, calling
+/// `versioned_directory()` on the builder at most once per unique
+/// basename to avoid duplicate warnings.
+fn lookup_versioned_dir(
+    api_files: &mut ApiSpecFilesBuilder<'_, BlessedApiSpecFile>,
+    seen_dirs: &mut BTreeMap<String, Option<ApiIdent>>,
+    dir_basename: &str,
+) -> Option<ApiIdent> {
+    seen_dirs
+        .entry(dir_basename.to_owned())
+        .or_insert_with(|| api_files.versioned_directory(dir_basename))
+        .clone()
 }
