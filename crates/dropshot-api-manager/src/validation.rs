@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{
     apis::ManagedApi, environment::ResolvedEnv,
@@ -16,7 +16,7 @@ use std::io::Write;
 
 /// A validation function that can be called on an OpenAPI document.
 pub(crate) type DynValidationFn =
-    dyn Fn(&OpenAPI, ValidationContext<'_>) + Send;
+    dyn Fn(&OpenAPI, ValidationContext<'_>) + Send + Sync;
 
 pub fn validate(
     env: &ResolvedEnv,
