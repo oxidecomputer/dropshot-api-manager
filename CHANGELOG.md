@@ -3,6 +3,11 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Changed
+
+- API processing and validation is now done in parallel using rayon. We've measured up to 6x performance improvements as a result.
+- The validation function is now called in parallel. As a result, if the validation function is a closure, it must be `Sync` on top of the existing requirement to be `Send`. (Most validation functions are just function pointers, which are already `Sync`.)
+
 ## [0.4.0] - 2026-02-26
 
 ### Added
