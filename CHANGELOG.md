@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Changed
+
+API manager structures are now dropped in parallel, leading to measured performance gains of up to 15%.
+
 ## [0.5.1] - 2026-02-28
 
 ### Fixed
