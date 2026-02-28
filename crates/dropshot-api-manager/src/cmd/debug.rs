@@ -82,6 +82,16 @@ pub(crate) fn debug_impl(
         }
     }
 
+    // Release borrows held by `resolved`, then drop the source
+    // collections in parallel. Each contains many parsed OpenAPI
+    // documents whose sequential drops are costly.
+    drop(resolved);
+    std::thread::scope(|s| {
+        s.spawn(|| drop(blessed));
+        s.spawn(|| drop(generated));
+        s.spawn(|| drop(local_files));
+    });
+
     Ok(())
 }
 

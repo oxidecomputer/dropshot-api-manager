@@ -39,5 +39,17 @@ pub(crate) fn check_impl(
     let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);
 
     eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
-    display_resolution(env, apis, &resolved, &styles)
+    let result = display_resolution(env, apis, &resolved, &styles)?;
+
+    // Release borrows held by `resolved`, then drop the source
+    // collections in parallel. Each contains many parsed OpenAPI
+    // documents whose sequential drops are costly.
+    drop(resolved);
+    std::thread::scope(|s| {
+        s.spawn(|| drop(blessed));
+        s.spawn(|| drop(generated));
+        s.spawn(|| drop(local_files));
+    });
+
+    Ok(result)
 }
