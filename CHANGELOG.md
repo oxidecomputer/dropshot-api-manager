@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.5.2] - 2026-02-28
+
 ### Changed
 
 API manager structures are now dropped in parallel, leading to measured performance gains of up to 15%.
@@ -107,6 +109,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.5.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.2
 [0.5.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.1
 [0.5.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.0
 [0.4.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.4.0
