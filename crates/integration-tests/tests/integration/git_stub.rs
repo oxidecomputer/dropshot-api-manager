@@ -7,7 +7,7 @@
 //! of full JSON files. The content is retrieved via `git cat-file blob` at
 //! runtime.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use dropshot_api_manager::{
     ManagedApis,
@@ -2807,4 +2807,319 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
     );
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Blessed version missing local
+// ---------------------------------------------------------------------------
+
+/// Verify that `BlessedVersionMissingLocal` is fixable with Git stub storage.
+///
+/// The restored v3 should be written as a Git stub (not JSON) because it's a
+/// non-latest blessed version with Git stub storage enabled.
+#[test]
+fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Step 1: Generate and commit v1 and v2 on main.
+    let v2_apis = versioned_health_reduced_git_stub_apis()?;
+    env.generate_documents(&v2_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v2_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Step 2: Add v3 (this triggers Git stub conversion for v1 and v2).
+    let v3_apis = versioned_health_git_stub_apis()?;
+    env.generate_documents(&v3_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // v3 is the latest, so it should be JSON. v1 and v2 should be Git stubs.
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
+    );
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should be JSON (latest)"
+    );
+
+    let v3_json_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 document should exist");
+
+    // --- Part 1: Restore the latest blessed version as JSON. ---
+    // With Git stub storage enabled, the latest version should still be
+    // restored as JSON (not a Git stub).
+    {
+        env.create_branch("feature-latest")?;
+        env.checkout_branch("feature-latest")?;
+
+        std::fs::remove_file(env.workspace_root().join(&v3_json_path))
+            .context("failed to delete blessed v3 file")?;
+
+        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        assert_eq!(result, CheckResult::NeedsUpdate);
+
+        env.generate_documents(&v3_apis)?;
+
+        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        assert_eq!(result, CheckResult::Success);
+
+        // v3 is the latest: it should be restored as JSON, not a Git
+        // stub, even though Git stub storage is enabled.
+        assert!(
+            env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+            "v3 should be restored as JSON (latest)"
+        );
+        assert!(
+            !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+            "v3 should not be a Git stub (it's the latest)"
+        );
+
+        env.checkout_branch("main")?;
+    }
+
+    // --- Part 2: Restore a non-latest blessed version as a Git stub. ---
+    env.create_branch("feature")?;
+    env.checkout_branch("feature")?;
+
+    std::fs::remove_file(env.workspace_root().join(&v3_json_path))
+        .context("failed to delete blessed v3 file")?;
+
+    // This changes v3 in a trivial manner and introduces v4.
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    // Check should report NeedsUpdate (not Failure).
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate should restore v3 as a Git stub (not JSON, since v4 is now
+    // latest and Git stub storage is enabled).
+    env.generate_documents(&v4_trivial_apis)?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // v3 should now be a Git stub, as a blessed, non-latest version.
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should be restored as a Git stub"
+    );
+    // v4 should be JSON as the latest version.
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
+        "v4 should exist as JSON (latest)"
+    );
+
+    Ok(())
+}
+
+/// Shared setup for the blessed-version-missing-local git stub tests.
+///
+/// Creates this branch structure with Git stub storage:
+/// ```text
+/// main: [v1,v2] ── merge(feature1, --no-ff) = M
+///          \
+///           feature1: [v1,v2,v3] = B (v1,v2 become git stubs)
+///                        \
+///                         feature2: [v1,v2,v3-trivial,v4] = C
+/// ```
+///
+/// Returns the environment positioned on `feature2`.
+fn blessed_version_missing_local_git_stub_setup(
+    env: &TestEnvironment,
+) -> Result<()> {
+    let v2_apis = versioned_health_reduced_git_stub_apis()?;
+    let v3_apis = versioned_health_git_stub_apis()?;
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    // Step 1: main has v1 and v2 (both JSON, v2 is latest).
+    env.generate_documents(&v2_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v2_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Step 2: feature1 adds v3. v1 and v2 become Git stubs.
+    env.create_branch("feature1")?;
+    env.checkout_branch("feature1")?;
+
+    env.generate_documents(&v3_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub on feature1"
+    );
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub on feature1"
+    );
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+        "v3 should be JSON on feature1 (latest)"
+    );
+
+    // Step 3: feature2 (from feature1) adds v4 with a trivially modified v3.
+    env.create_branch("feature2")?;
+    env.checkout_branch("feature2")?;
+
+    env.generate_documents(&v4_trivial_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Step 4: merge feature1 into main, making v3 blessed.
+    env.checkout_branch("main")?;
+    env.merge_branch_without_renames("feature1")?;
+
+    let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Return to feature2.
+    env.checkout_branch("feature2")?;
+
+    Ok(())
+}
+
+fn blessed_version_missing_local_git_stub_verify(
+    env: &TestEnvironment,
+) -> Result<()> {
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    // v1, v2, v3 should all be Git stubs (blessed, not latest).
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
+        "v1 should be a Git stub"
+    );
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "2.0.0")?,
+        "v2 should be a Git stub"
+    );
+    assert!(
+        env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+        "v3 should be a Git stub (blessed, not latest)"
+    );
+    // v4 should be JSON (latest).
+    assert!(
+        env.versioned_local_document_exists("versioned-health", "4.0.0")?,
+        "v4 should exist as JSON (latest)"
+    );
+    assert!(
+        !env.versioned_git_stub_exists("versioned-health", "4.0.0")?,
+        "v4 should not be a Git stub (it's the latest)"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Rebase test: blessed version missing local with Git stub storage.
+#[test]
+fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&env)?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    let rebase_result = env.try_rebase_onto("main")?;
+    assert_eq!(rebase_result, RebaseResult::Clean);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_git_stub_verify(&env)
+}
+
+/// Merge test: blessed version missing local with Git stub storage.
+#[test]
+fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&env)?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    let merge_result = env.try_merge_branch("main")?;
+    assert_eq!(merge_result, MergeResult::Clean);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_git_stub_verify(&env)
+}
+
+/// jj rebase variant: blessed version missing local with Git stub storage.
+#[test]
+fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&env)?;
+    env.jj_init()?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    let rebase_result = env.jj_try_rebase("feature2", "main")?;
+    assert_eq!(rebase_result, JjRebaseResult::Clean);
+
+    env.jj_new("feature2")?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_git_stub_verify(&env)
+}
+
+/// jj merge variant: blessed version missing local with Git stub storage.
+#[test]
+fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&env)?;
+    env.jj_init()?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
+
+    let merge_result =
+        env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
+    assert_eq!(merge_result, JjMergeResult::Clean);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_git_stub_verify(&env)
 }
