@@ -2815,7 +2815,6 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
 
 /// Verify that `BlessedVersionMissingLocal` is fixable with Git stub storage.
 ///
-///
 /// The restored v3 should be written as a Git stub (not JSON) because it's a
 /// non-latest blessed version with Git stub storage enabled.
 #[test]
@@ -2852,11 +2851,43 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
         "v3 should be JSON (latest)"
     );
 
-    // Create a feature branch and delete the v3 JSON file.
     let v3_json_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
         .expect("v3 document should exist");
 
+    // --- Part 1: Restore the latest blessed version as JSON. ---
+    // With Git stub storage enabled, the latest version should still be
+    // restored as JSON (not a Git stub).
+    {
+        env.create_branch("feature-latest")?;
+        env.checkout_branch("feature-latest")?;
+
+        std::fs::remove_file(env.workspace_root().join(&v3_json_path))
+            .context("failed to delete blessed v3 file")?;
+
+        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        assert_eq!(result, CheckResult::NeedsUpdate);
+
+        env.generate_documents(&v3_apis)?;
+
+        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        assert_eq!(result, CheckResult::Success);
+
+        // v3 is the latest: it should be restored as JSON, not a Git
+        // stub, even though Git stub storage is enabled.
+        assert!(
+            env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+            "v3 should be restored as JSON (latest)"
+        );
+        assert!(
+            !env.versioned_git_stub_exists("versioned-health", "3.0.0")?,
+            "v3 should not be a Git stub (it's the latest)"
+        );
+
+        env.checkout_branch("main")?;
+    }
+
+    // --- Part 2: Restore a non-latest blessed version as a Git stub. ---
     env.create_branch("feature")?;
     env.checkout_branch("feature")?;
 

@@ -164,10 +164,10 @@ pub enum Problem<'a> {
         "This version is blessed, and it's a supported version, but it's \
          missing a local OpenAPI document. This can happen with dependent \
          commits or PRs. This tool can restore the file from the blessed \
-         version for you: {spec_file_name}"
+         version for you: {}",
+        blessed.versioned_spec_file_name()
     )]
     BlessedVersionMissingLocal {
-        spec_file_name: VersionedApiSpecFileName,
         blessed: &'a BlessedApiSpecFile,
         git_stub: Option<GitStub>,
     },
@@ -376,12 +376,12 @@ impl<'a> Problem<'a> {
                     files: DisplayableVec(vec![spec_file_name.clone().into()]),
                 })
             }
-            Problem::BlessedVersionMissingLocal {
-                blessed, git_stub, ..
-            } => Some(Fix::RestoreFromBlessed {
-                blessed,
-                git_stub: git_stub.as_ref(),
-            }),
+            Problem::BlessedVersionMissingLocal { blessed, git_stub } => {
+                Some(Fix::RestoreFromBlessed {
+                    blessed,
+                    git_stub: git_stub.as_ref(),
+                })
+            }
             Problem::BlessedVersionExtraLocalSpec { spec_file_name } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![spec_file_name.clone().into()]),
@@ -1682,22 +1682,33 @@ fn resolve_api_version_blessed<'a>(
 
     if matching.is_empty() && corrupted.is_empty() {
         // No valid or corrupted local files match the blessed version.
-        let git_stub = if use_git_stub_storage && !is_latest {
+        if use_git_stub_storage && !is_latest {
             match compute_storage_format(&mut problems) {
-                VersionStorageFormat::GitStub(g) => Some(g),
-                VersionStorageFormat::Json | VersionStorageFormat::Error => {
-                    None
+                VersionStorageFormat::GitStub(g) => {
+                    problems.push(Problem::BlessedVersionMissingLocal {
+                        blessed,
+                        git_stub: Some(g),
+                    });
+                }
+                VersionStorageFormat::Json => {
+                    problems.push(Problem::BlessedVersionMissingLocal {
+                        blessed,
+                        git_stub: None,
+                    });
+                }
+                VersionStorageFormat::Error => {
+                    // Already pushed an unfixable
+                    // GitStubFirstCommitUnknown problem. Skip
+                    // BlessedVersionMissingLocal: we can't determine
+                    // the correct storage format to restore as.
                 }
             }
         } else {
-            None
-        };
-
-        problems.push(Problem::BlessedVersionMissingLocal {
-            spec_file_name: blessed.versioned_spec_file_name().clone(),
-            blessed,
-            git_stub,
-        });
+            problems.push(Problem::BlessedVersionMissingLocal {
+                blessed,
+                git_stub: None,
+            });
+        }
 
         // Report non-matching local files as extra.
         problems.extend(non_matching.into_iter().map(|s| {

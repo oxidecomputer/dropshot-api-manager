@@ -1251,22 +1251,47 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
     let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
     assert_eq!(result, CheckResult::Success);
 
-    // Record the blessed v3 file path before deleting it.
     let v3_blessed_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
         .expect("v3 document should exist");
 
+    // --- Part 1: Restore the latest blessed version. ---
+    // v3 is currently the latest version. Deleting it and running
+    // generate should restore it as JSON.
+    {
+        env.create_branch("feature-latest")?;
+        env.checkout_branch("feature-latest")?;
+
+        std::fs::remove_file(env.workspace_root().join(&v3_blessed_path))
+            .context("failed to delete blessed v3 file")?;
+
+        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        assert_eq!(result, CheckResult::NeedsUpdate);
+
+        env.generate_documents(&v3_apis)?;
+
+        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        assert_eq!(result, CheckResult::Success);
+
+        assert!(
+            env.versioned_local_document_exists("versioned-health", "3.0.0")?,
+            "v3 should be restored as JSON (latest blessed version)"
+        );
+
+        env.checkout_branch("main")?;
+    }
+
+    // --- Part 2: Restore a non-latest blessed version. ---
     env.create_branch("feature")?;
     env.checkout_branch("feature")?;
 
-    // Delete the blessed v3 file.
     std::fs::remove_file(env.workspace_root().join(&v3_blessed_path))
         .context("failed to delete blessed v3 file")?;
 
-    // Write a dummy v3 file with a different hash, The content doesn't need to
-    // be a valid OpenAPI doc for the "missing local" detection, but it does
-    // need the right naming pattern. For simplicity, we generate from the
-    // trivial v3 module to get a realistic file.
+    // The v4_trivial_apis configuration includes a trivially different
+    // v3 definition and adds v4 as the new latest. Since the original
+    // blessed v3 file was deleted, the tool should detect this as
+    // BlessedVersionMissingLocal and restore from the blessed content.
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
 
@@ -1455,7 +1480,6 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
 
-    // Merge feature2 and main using jj.
     let merge_result =
         env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
     assert_eq!(merge_result, JjMergeResult::Clean);
