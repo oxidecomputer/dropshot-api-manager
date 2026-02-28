@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.5.0] - 2026-02-28
+
 ### Changed
 
 - API processing and validation is now done in parallel using rayon. We've measured up to 6x performance improvements as a result.
@@ -95,6 +97,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.5.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.0
 [0.4.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.4.0
 [0.3.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.3.0
 [0.2.4]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.2.4
