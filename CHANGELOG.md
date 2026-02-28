@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.5.1] - 2026-02-28
+
 ### Fixed
 
 Handle scenarios where the blessed version was missing from local disk. This was previously unusual and indicated a user deleting the file from disk, but the semantic compatibility support added in version 0.2.1 makes this more likely to happen in normal workflows.
@@ -101,6 +103,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.5.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.1
 [0.5.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.0
 [0.4.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.4.0
 [0.3.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.3.0
