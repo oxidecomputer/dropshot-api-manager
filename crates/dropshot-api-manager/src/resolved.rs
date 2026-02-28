@@ -162,12 +162,15 @@ pub enum Problem<'a> {
     // API.
     #[error(
         "This version is blessed, and it's a supported version, but it's \
-         missing a local OpenAPI document.  This is unusual.  If you intended \
-         to remove this version, you must also update the list of supported \
-         versions in Rust.  If you didn't, restore the file from git: \
-         {spec_file_name}"
+         missing a local OpenAPI document. This can happen with dependent \
+         commits or PRs. This tool can restore the file from the blessed \
+         version for you: {spec_file_name}"
     )]
-    BlessedVersionMissingLocal { spec_file_name: VersionedApiSpecFileName },
+    BlessedVersionMissingLocal {
+        spec_file_name: VersionedApiSpecFileName,
+        blessed: &'a BlessedApiSpecFile,
+        git_stub: Option<GitStub>,
+    },
 
     #[error(
         "For this blessed version, found an extra OpenAPI document that does \
@@ -373,7 +376,12 @@ impl<'a> Problem<'a> {
                     files: DisplayableVec(vec![spec_file_name.clone().into()]),
                 })
             }
-            Problem::BlessedVersionMissingLocal { .. } => None,
+            Problem::BlessedVersionMissingLocal {
+                blessed, git_stub, ..
+            } => Some(Fix::RestoreFromBlessed {
+                blessed,
+                git_stub: git_stub.as_ref(),
+            }),
             Problem::BlessedVersionExtraLocalSpec { spec_file_name } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![spec_file_name.clone().into()]),
@@ -492,6 +500,17 @@ pub enum Fix<'a> {
         /// If Some, regenerate as a Git stub instead of JSON.
         git_stub: Option<&'a GitStub>,
     },
+    /// Restore a missing blessed file from the blessed content, or as a Git
+    /// stub.
+    ///
+    /// Unlike `RegenerateFromBlessed`, there is no existing `local_file` to
+    /// delete. The target path is derived from
+    /// `blessed.versioned_spec_file_name()`.
+    RestoreFromBlessed {
+        blessed: &'a BlessedApiSpecFile,
+        /// If Some, write as a Git stub instead of JSON.
+        git_stub: Option<&'a GitStub>,
+    },
     /// Update a Git stub whose commit hash has become stale (e.g.,
     /// after a rebase).
     UpdateGitStub {
@@ -578,6 +597,21 @@ impl Display for Fix<'_> {
                     )?;
                 }
             }
+            Fix::RestoreFromBlessed { blessed, git_stub } => {
+                if git_stub.is_some() {
+                    writeln!(
+                        f,
+                        "restore {} from blessed content as Git stub",
+                        blessed.versioned_spec_file_name().to_git_stub().path()
+                    )?;
+                } else {
+                    writeln!(
+                        f,
+                        "restore {} from blessed content",
+                        blessed.versioned_spec_file_name().path()
+                    )?;
+                }
+            }
             Fix::UpdateGitStub { local_file, git_stub } => {
                 writeln!(
                     f,
@@ -635,6 +669,17 @@ impl Fix<'_> {
                 } else {
                     // Overwrites the corrupted local file.
                     paths.insert(local_file.spec_file_name().path().to_owned());
+                }
+            }
+            Fix::RestoreFromBlessed { blessed, git_stub } => {
+                if git_stub.is_some() {
+                    paths.insert(
+                        blessed.versioned_spec_file_name().to_git_stub().path(),
+                    );
+                } else {
+                    paths.insert(
+                        blessed.versioned_spec_file_name().path().to_owned(),
+                    );
                 }
             }
             Fix::UpdateGitStub { local_file, .. } => {
@@ -809,6 +854,30 @@ impl Fix<'_> {
                     Ok(vec![format!(
                         "regenerated {} from blessed content: {:?}",
                         local_path, overwrite_status
+                    )])
+                }
+            }
+            Fix::RestoreFromBlessed { blessed, git_stub } => {
+                if let Some(git_stub) = git_stub {
+                    let git_stub_path = root.join(
+                        blessed.versioned_spec_file_name().to_git_stub().path(),
+                    );
+                    let overwrite_status = overwrite_file(
+                        &git_stub_path,
+                        git_stub.to_file_contents().as_bytes(),
+                    )?;
+                    Ok(vec![format!(
+                        "restored Git stub {}: {:?}",
+                        git_stub_path, overwrite_status
+                    )])
+                } else {
+                    let path =
+                        root.join(blessed.versioned_spec_file_name().path());
+                    let overwrite_status =
+                        overwrite_file(&path, blessed.contents())?;
+                    Ok(vec![format!(
+                        "restored {} from blessed content: {:?}",
+                        path, overwrite_status
                     )])
                 }
             }
@@ -1613,9 +1682,33 @@ fn resolve_api_version_blessed<'a>(
 
     if matching.is_empty() && corrupted.is_empty() {
         // No valid or corrupted local files match the blessed version.
+        let git_stub = if use_git_stub_storage && !is_latest {
+            match compute_storage_format(&mut problems) {
+                VersionStorageFormat::GitStub(g) => Some(g),
+                VersionStorageFormat::Json | VersionStorageFormat::Error => {
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         problems.push(Problem::BlessedVersionMissingLocal {
             spec_file_name: blessed.versioned_spec_file_name().clone(),
+            blessed,
+            git_stub,
         });
+
+        // Report non-matching local files as extra.
+        problems.extend(non_matching.into_iter().map(|s| {
+            Problem::BlessedVersionExtraLocalSpec {
+                spec_file_name: s
+                    .spec_file_name()
+                    .as_versioned()
+                    .expect("blessed extra spec is versioned")
+                    .clone(),
+            }
+        }));
     } else if !use_git_stub_storage || is_latest {
         // Fast path: Git stub storage disabled or this is the latest version.
         // We know we always want JSON in this case, so we can avoid computing

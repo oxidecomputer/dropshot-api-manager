@@ -1233,3 +1233,237 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
 
     successive_changes_concrete_verify(&env, &v1_v2_v3_v4alt2_apis)
 }
+
+// ---------------------------------------------------------------------------
+// Blessed version missing local (dependent-PR rebase scenario)
+// ---------------------------------------------------------------------------
+
+/// Direct test: verify that `BlessedVersionMissingLocal` is fixable.
+#[test]
+fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    let v3_apis = versioned_health_apis()?;
+
+    // Generate and commit v1,v2,v3 on main. This makes v3 blessed.
+    env.generate_documents(&v3_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Record the blessed v3 file path before deleting it.
+    let v3_blessed_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 document should exist");
+
+    env.create_branch("feature")?;
+    env.checkout_branch("feature")?;
+
+    // Delete the blessed v3 file.
+    std::fs::remove_file(env.workspace_root().join(&v3_blessed_path))
+        .context("failed to delete blessed v3 file")?;
+
+    // Write a dummy v3 file with a different hash, The content doesn't need to
+    // be a valid OpenAPI doc for the "missing local" detection, but it does
+    // need the right naming pattern. For simplicity, we generate from the
+    // trivial v3 module to get a realistic file.
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    // Check should report NeedsUpdate (not Failure).
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    // Generate should restore the blessed v3 and create a v4.
+    env.generate_documents(&v4_trivial_apis)?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Verify the blessed v3 file was restored to the original location.
+    assert!(
+        env.workspace_root().join(&v3_blessed_path).exists(),
+        "blessed v3 file should be restored at {v3_blessed_path}"
+    );
+
+    // Verify all versions exist.
+    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
+
+    Ok(())
+}
+
+/// Shared setup for the dependent-PR rebase/merge tests.
+///
+/// Creates this branch structure:
+/// ```text
+/// main: [v1,v2] ── merge(feature1, --no-ff) = M
+///          \
+///           feature1: [v1,v2,v3] = B
+///                        \
+///                         feature2: [v1,v2,v3-trivial,v4] = C
+/// ```
+///
+/// Returns the environment positioned on `feature2`.
+fn blessed_version_missing_local_setup(env: &TestEnvironment) -> Result<()> {
+    let v2_apis = versioned_health_reduced_apis()?;
+    let v3_apis = versioned_health_apis()?;
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    // Step 1: main has v1 and v2.
+    env.generate_documents(&v2_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v2_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Step 2: feature1 adds v3.
+    env.create_branch("feature1")?;
+    env.checkout_branch("feature1")?;
+
+    env.generate_documents(&v3_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Step 3: feature2 (from feature1) adds v4 with trivially modified v3.
+    env.create_branch("feature2")?;
+    env.checkout_branch("feature2")?;
+
+    env.generate_documents(&v4_trivial_apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Step 4: merge feature1 into main (makes v3 blessed).
+    env.checkout_branch("main")?;
+    env.merge_branch_without_renames("feature1")?;
+
+    let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    // Return to feature2.
+    env.checkout_branch("feature2")?;
+
+    Ok(())
+}
+
+/// Verify the end state after fixing blessed version missing local.
+fn blessed_version_missing_local_verify(env: &TestEnvironment) -> Result<()> {
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    // Verify all versions exist.
+    assert!(env.versioned_local_document_exists("versioned-health", "1.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "2.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
+    assert!(env.versioned_local_document_exists("versioned-health", "4.0.0")?);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Rebase test: dependent-PR scenario with trivial changes + git rebase.
+///
+/// After feature1 merges to main and feature2 is rebased onto main, the
+/// feature2 commit will delete the blessed file and create a different file in
+/// its place. The tool should detect this as fixable and restore it.
+#[test]
+fn test_rebase_blessed_version_missing_local() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&env)?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    let rebase_result = env.try_rebase_onto("main")?;
+    assert_eq!(rebase_result, RebaseResult::Clean);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_verify(&env)
+}
+
+/// Merge test: dependent-PR scenario with trivial changes + git merge.
+#[test]
+fn test_merge_blessed_version_missing_local() -> Result<()> {
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&env)?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    let merge_result = env.try_merge_branch("main")?;
+    assert_eq!(merge_result, MergeResult::Clean);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_verify(&env)
+}
+
+/// jj rebase variant of the dependent-PR-with-trivial-changes scenario.
+#[test]
+fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&env)?;
+    env.jj_init()?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    let rebase_result = env.jj_try_rebase("feature2", "main")?;
+    assert_eq!(rebase_result, JjRebaseResult::Clean);
+
+    env.jj_new("feature2")?;
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_verify(&env)
+}
+
+/// jj merge variant of the dependent-PR-with-trivial-changes scenario.
+#[test]
+fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+
+    let env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&env)?;
+    env.jj_init()?;
+
+    let v4_trivial_apis =
+        versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
+
+    // Merge feature2 and main using jj.
+    let merge_result =
+        env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
+    assert_eq!(merge_result, JjMergeResult::Clean);
+
+    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+
+    env.generate_documents(&v4_trivial_apis)?;
+
+    blessed_version_missing_local_verify(&env)
+}
