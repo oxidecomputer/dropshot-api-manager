@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{
     FAILURE_EXIT_CODE,
@@ -150,6 +150,10 @@ pub(crate) fn generate_impl(
         &mut num_errors,
     );
 
+    // Done with the first resolution. Release borrows so the source
+    // collections can be dropped in parallel later.
+    drop(resolved);
+
     if num_errors > 0 {
         print_final_status(
             &styles,
@@ -164,14 +168,15 @@ pub(crate) fn generate_impl(
     // Finally, check again for any problems. Since we expect this should have
     // fixed everything, be quiet unless we find something amiss.
     let mut nproblems = 0;
-    let (local_files, errors) =
+    let (local_files_recheck, errors) =
         env.local_source.load(apis, &styles, &env.repo_root)?;
     eprintln!(
         "{:>HEADER_WIDTH$} all local files",
         "Rechecking".style(styles.success_header),
     );
     display_load_problems(&errors, &styles)?;
-    let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);
+    let resolved =
+        Resolved::new(env, apis, &blessed, &generated, &local_files_recheck);
     let general_problems: Vec<_> = resolved.general_problems().collect();
     nproblems += general_problems.len();
     if !general_problems.is_empty() {
@@ -208,6 +213,17 @@ pub(crate) fn generate_impl(
             );
         }
     }
+
+    // Release borrows held by `resolved`, then drop all source
+    // collections in parallel. Each contains many parsed OpenAPI
+    // documents whose sequential drops are costly.
+    drop(resolved);
+    std::thread::scope(|s| {
+        s.spawn(|| drop(blessed));
+        s.spawn(|| drop(generated));
+        s.spawn(|| drop(local_files));
+        s.spawn(|| drop(local_files_recheck));
+    });
 
     if nproblems > 0 {
         bail!(
