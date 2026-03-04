@@ -89,9 +89,11 @@ impl Environment {
     /// remote and branch name separated by a forward slash, e.g.
     /// `origin/master` or `upstream/dev`.
     ///
-    /// For individual commands, this can be overridden through the
-    /// `--blessed-from-git` argument, or the `OPENAPI_MGR_BLESSED_FROM_GIT`
-    /// environment variable.
+    /// For individual commands, the revision can be overridden through
+    /// the `--blessed-from-git` argument (or
+    /// `OPENAPI_MGR_BLESSED_FROM_GIT`), and the path within the
+    /// revision can be overridden through `--blessed-from-vcs-path`
+    /// (or `OPENAPI_MGR_BLESSED_FROM_VCS_PATH`).
     pub fn with_default_git_branch(
         mut self,
         branch: impl Into<String>,
