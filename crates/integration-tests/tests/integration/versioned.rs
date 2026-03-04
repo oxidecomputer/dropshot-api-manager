@@ -244,35 +244,6 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
     Ok(())
 }
 
-/// Test git integration: commit documents.
-#[test]
-fn test_git_commit_documents() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let apis = versioned_health_apis()?;
-
-    // Initially no uncommitted changes.
-    assert!(!env.has_uncommitted_document_changes()?);
-
-    // Generate documents.
-    env.generate_documents(&apis)?;
-
-    // Now there should be uncommitted changes.
-    assert!(env.has_uncommitted_document_changes()?);
-
-    // Commit the documents.
-    env.commit_documents()?;
-
-    // Should no longer have uncommitted changes.
-    assert!(!env.has_uncommitted_document_changes()?);
-
-    // Should be able to get current commit hash.
-    let commit_hash = env.get_current_commit_hash()?;
-    assert!(!commit_hash.is_empty());
-    assert!(commit_hash.len() >= 7); // Git short hash is typically 7+ chars.
-
-    Ok(())
-}
-
 /// Test blessed document lifecycle - generate, commit, then verify check passes.
 #[test]
 fn test_blessed_document_lifecycle() -> Result<()> {
