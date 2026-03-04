@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{
     apis::ManagedApis,
@@ -68,28 +68,28 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct BlessedSourceArgs {
-    /// Loads blessed OpenAPI documents from path PATH in the given Git
-    /// REVISION.
+    /// Loads blessed OpenAPI documents from the given Git REVISION.
     ///
-    /// The REVISION is not used as-is; instead, the tool always looks at the
-    /// merge-base between HEAD and REVISION. So if you provide `main:openapi`,
-    /// then it will look at the merge-base of HEAD and `main`, in directory
-    /// "openapi" in that commit.
+    /// The REVISION is not used as-is; instead, the tool always looks at
+    /// the merge-base between HEAD and REVISION. So if you provide
+    /// `main`, then it will look at the merge-base of HEAD and `main`.
     ///
-    /// REVISION is optional and defaults to the `default_git_branch` provided
-    /// by the OpenAPI manager binary (typically `origin/main`).
+    /// REVISION is optional and defaults to the `default_git_branch`
+    /// provided by the OpenAPI manager binary (typically `origin/main`).
     ///
-    /// PATH is optional and defaults to `default_openapi_dir` provided by the
-    /// OpenAPI manager binary.
-    #[clap(
-        long,
-        env("OPENAPI_MGR_BLESSED_FROM_GIT"),
-        value_name("REVISION[:PATH]")
-    )]
+    /// The path within the revision defaults to `default_openapi_dir`
+    /// provided by the OpenAPI manager binary. To override it, use
+    /// `--blessed-from-vcs-path`.
+    #[clap(long, env("OPENAPI_MGR_BLESSED_FROM_GIT"), value_name("REVISION"))]
     pub blessed_from_git: Option<String>,
 
-    /// Loads blessed OpenAPI documents from a local directory (instead of the
-    /// default, from Git).
+    /// Overrides the path within the VCS revision to load blessed
+    /// OpenAPI documents from.
+    #[clap(long, env("OPENAPI_MGR_BLESSED_FROM_VCS_PATH"), value_name("PATH"))]
+    pub blessed_from_vcs_path: Option<Utf8PathBuf>,
+
+    /// Loads blessed OpenAPI documents from a local directory (instead of
+    /// the default, from Git).
     ///
     /// This is intended for testing and debugging this tool.
     #[clap(
@@ -116,19 +116,17 @@ impl BlessedSourceArgs {
             });
         }
 
-        let (revision_str, maybe_directory) = match &self.blessed_from_git {
-            None => (env.default_git_branch.as_str(), None),
-            Some(arg) => match arg.split_once(":") {
-                Some((r, d)) => (r, Some(d)),
-                None => (arg.as_str(), None),
-            },
+        let revision_str = match &self.blessed_from_git {
+            None => env.default_git_branch.as_str(),
+            Some(revision) => revision.as_str(),
         };
         let revision = GitRevision::from(String::from(revision_str));
-        let directory = Utf8PathBuf::from(maybe_directory.map_or(
-            // We must use the relative directory path for Git commands.
-            env.openapi_rel_dir(),
-            |d| d.as_ref(),
-        ));
+        let directory = match &self.blessed_from_vcs_path {
+            Some(path) => path.clone(),
+            // We must use the relative directory path for Git
+            // commands.
+            None => Utf8PathBuf::from(env.openapi_rel_dir()),
+        };
         Ok(BlessedSource::GitRevisionMergeBase { revision, directory })
     }
 }
@@ -291,6 +289,7 @@ mod test {
                 local: LocalSourceArgs { dir: None },
                 blessed: BlessedSourceArgs {
                     blessed_from_git: None,
+                    blessed_from_vcs_path: None,
                     blessed_from_dir: None
                 },
                 generated: GeneratedSourceArgs { generated_from_dir: None },
@@ -302,7 +301,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
-                BlessedSourceArgs { blessed_from_git: None, blessed_from_dir: None },
+                BlessedSourceArgs { blessed_from_git: None, blessed_from_vcs_path: None, blessed_from_dir: None },
             generated: GeneratedSourceArgs { generated_from_dir: None },
         }) if local_dir == "foo");
 
@@ -318,7 +317,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
-                BlessedSourceArgs { blessed_from_git: None, blessed_from_dir: None },
+                BlessedSourceArgs { blessed_from_git: None, blessed_from_vcs_path: None, blessed_from_dir: None },
             generated: GeneratedSourceArgs { generated_from_dir: Some(generated_dir) },
         }) if local_dir == "foo" && generated_dir == "bar");
 
@@ -336,7 +335,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
-                BlessedSourceArgs { blessed_from_git: None, blessed_from_dir: Some(blessed_dir) },
+                BlessedSourceArgs { blessed_from_git: None, blessed_from_vcs_path: None, blessed_from_dir: Some(blessed_dir) },
             generated: GeneratedSourceArgs { generated_from_dir: Some(generated_dir) },
         }) if local_dir == "foo" && generated_dir == "bar" && blessed_dir == "baz");
 
@@ -350,7 +349,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: None },
             blessed:
-                BlessedSourceArgs { blessed_from_git: Some(git), blessed_from_dir: None },
+                BlessedSourceArgs { blessed_from_git: Some(git), blessed_from_vcs_path: None, blessed_from_dir: None },
             generated: GeneratedSourceArgs { generated_from_dir: None },
         }) if git == "some/other/upstream");
 
@@ -366,7 +365,7 @@ mod test {
         .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         assert!(error.to_string().contains(
-            "error: the argument '--blessed-from-git <REVISION[:PATH]>' cannot \
+            "error: the argument '--blessed-from-git <REVISION>' cannot \
              be used with '--blessed-from-dir <DIRECTORY>"
         ));
     }
@@ -460,6 +459,7 @@ mod test {
 
         let source = BlessedSourceArgs {
             blessed_from_git: None,
+            blessed_from_vcs_path: None,
             blessed_from_dir: None,
         }
         .to_blessed_source(&env)
@@ -470,9 +470,10 @@ mod test {
                 if *revision == "upstream/dev" && directory == "foo-openapi"
         );
 
-        // Override branch only
+        // Override branch only.
         let source = BlessedSourceArgs {
             blessed_from_git: Some(String::from("my/other/main")),
+            blessed_from_vcs_path: None,
             blessed_from_dir: None,
         }
         .to_blessed_source(&env)
@@ -483,11 +484,10 @@ mod test {
                 if *revision == "my/other/main" && directory == "foo-openapi"
         );
 
-        // Override branch and directory
+        // Override branch and directory.
         let source = BlessedSourceArgs {
-            blessed_from_git: Some(String::from(
-                "my/other/main:other_openapi/bar",
-            )),
+            blessed_from_git: Some(String::from("my/other/main")),
+            blessed_from_vcs_path: Some(Utf8PathBuf::from("other_openapi/bar")),
             blessed_from_dir: None,
         }
         .to_blessed_source(&env)
@@ -499,9 +499,10 @@ mod test {
                      directory == "other_openapi/bar"
         );
 
-        // Override with a local directory
+        // Override with a local directory.
         let source = BlessedSourceArgs {
             blessed_from_git: None,
+            blessed_from_vcs_path: None,
             blessed_from_dir: Some(Utf8PathBuf::from("/tmp")),
         }
         .to_blessed_source(&env)

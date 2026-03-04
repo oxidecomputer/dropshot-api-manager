@@ -44,9 +44,12 @@ fn check_apis_impl(
     // directory is desired, it can always be passed in via `env`.)
     let env = env.resolve(None)?;
 
-    let blessed_source =
-        BlessedSourceArgs { blessed_from_git: None, blessed_from_dir: None }
-            .to_blessed_source(&env)?;
+    let blessed_source = BlessedSourceArgs {
+        blessed_from_git: None,
+        blessed_from_vcs_path: None,
+        blessed_from_dir: None,
+    }
+    .to_blessed_source(&env)?;
     let generated_source =
         GeneratedSource::from(GeneratedSourceArgs { generated_from_dir });
     let output = OutputOpts { color: clap::ColorChoice::Auto };
