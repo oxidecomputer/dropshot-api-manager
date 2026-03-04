@@ -16,7 +16,21 @@ use semver::Version;
 /// Test basic versioned API document generation.
 #[test]
 fn test_versioned_generate_basic() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
+    versioned_generate_basic_impl(&env)
+}
+
+/// Test basic versioned API document generation with a pure jj backend.
+#[test]
+fn test_pure_jj_versioned_generate_basic() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+    let env = TestEnvironment::new_jj()?;
+    versioned_generate_basic_impl(&env)
+}
+
+fn versioned_generate_basic_impl(env: &TestEnvironment) -> Result<()> {
     let apis = versioned_health_apis()?;
 
     // Check that latest_version exists.
@@ -77,7 +91,7 @@ fn test_versioned_generate_basic() -> Result<()> {
 /// Test versioned API document content differs by version.
 #[test]
 fn test_versioned_content_by_version() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate documents.
@@ -117,7 +131,7 @@ fn test_versioned_content_by_version() -> Result<()> {
 /// Test versioned API latest document points to newest version.
 #[test]
 fn test_versioned_latest_document() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate documents.
@@ -147,7 +161,7 @@ fn test_versioned_latest_document() -> Result<()> {
 /// Test generating multiple versioned APIs.
 #[test]
 fn test_multiple_versioned_apis() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = multi_versioned_apis()?;
 
     // Generate all documents.
@@ -195,7 +209,7 @@ fn test_multiple_versioned_apis() -> Result<()> {
 /// Test mixed lockstep and versioned APIs.
 #[test]
 fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = create_mixed_test_apis()?;
 
     // Generate all documents.
@@ -247,7 +261,21 @@ fn test_mixed_lockstep_and_versioned_apis() -> Result<()> {
 /// Test blessed document lifecycle - generate, commit, then verify check passes.
 #[test]
 fn test_blessed_document_lifecycle() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
+    blessed_document_lifecycle_impl(&env)
+}
+
+/// Test blessed document lifecycle (pure jj backend).
+#[test]
+fn test_pure_jj_blessed_document_lifecycle() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+    let env = TestEnvironment::new_jj()?;
+    blessed_document_lifecycle_impl(&env)
+}
+
+fn blessed_document_lifecycle_impl(env: &TestEnvironment) -> Result<()> {
     let apis = versioned_health_apis()?;
 
     // Initially, APIs should fail the up-to-date check (no documents exist).
@@ -275,7 +303,7 @@ fn test_blessed_document_lifecycle() -> Result<()> {
 /// bump.
 #[test]
 fn test_blessed_api_trivial_changes_fail_for_latest() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents (v1, v2, v3).
@@ -303,7 +331,7 @@ fn test_blessed_api_trivial_changes_fail_for_latest() -> Result<()> {
 /// `allow_trivial_changes_for_latest` option is set.
 #[test]
 fn test_blessed_api_trivial_changes_pass_when_allowed() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents (v1, v2, v3).
@@ -328,7 +356,7 @@ fn test_blessed_api_trivial_changes_pass_when_allowed() -> Result<()> {
 /// semantic equality only.
 #[test]
 fn test_blessed_api_trivial_changes_pass_for_older_versions() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents (v1, v2, v3).
@@ -365,7 +393,7 @@ fn test_blessed_api_trivial_changes_pass_for_older_versions() -> Result<()> {
 /// Test multiple versioned APIs with mixed blessed document states.
 #[test]
 fn test_mixed_blessed_document_states() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
 
     // Start with combined APIs to establish the proper context.
     let combined_apis = multi_versioned_apis()?;
@@ -397,7 +425,7 @@ fn test_mixed_blessed_document_states() -> Result<()> {
 /// Test that removing API versions fails the check.
 #[test]
 fn test_removing_api_version_fails_check() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents (3 versions).
@@ -440,7 +468,7 @@ fn test_removing_api_version_fails_check() -> Result<()> {
 /// Test that adding new API versions passes the check.
 #[test]
 fn test_adding_new_api_version_passes_check() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
 
     // Start with reduced version API.
     let reduced_apis = versioned_health_reduced_apis()?;
@@ -471,7 +499,7 @@ fn test_adding_new_api_version_passes_check() -> Result<()> {
 /// Test retirement of the latest blessed API version.
 #[test]
 fn test_retiring_latest_blessed_version() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
 
     // Start with the full versioned health API (3 versions).
     let full_apis = versioned_health_apis()?;
@@ -586,7 +614,7 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
 
 #[test]
 fn test_retiring_older_blessed_version() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
 
     // Start with the full versioned health API (3 versions).
     let full_apis = versioned_health_apis()?;
@@ -701,7 +729,7 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 
 #[test]
 fn test_incompatible_blessed_api_change() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
 
     // Start with the original versioned health API (3 versions).
     let original_apis = versioned_health_apis()?;
@@ -757,7 +785,7 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
 /// * copies over this extra version
 #[test]
 fn test_blessed_version_extra_local_spec() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     // Generate and commit initial documents to make them blessed.
@@ -769,7 +797,7 @@ fn test_blessed_version_extra_local_spec() -> Result<()> {
     assert_eq!(result, CheckResult::Success);
 
     // Generate with the incompatible APIs.
-    let env2 = TestEnvironment::new()?;
+    let env2 = TestEnvironment::new_git()?;
     let incompatible_apis = versioned_health_incompat_apis()?;
 
     env2.generate_documents(&incompatible_apis)?;
@@ -838,7 +866,7 @@ fn get_validation_pair(
 
 #[test]
 fn test_extra_validation_blessed_vs_non_blessed() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_with_validation_apis()?;
 
     env.generate_documents(&apis)?;
@@ -893,7 +921,7 @@ fn test_extra_validation_blessed_vs_non_blessed() -> Result<()> {
 
 #[test]
 fn test_extra_validation_with_extra_file() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_with_extra_file_apis()?;
 
     env.generate_documents(&apis)?;
@@ -972,7 +1000,7 @@ fn test_extra_validation_with_extra_file() -> Result<()> {
 /// target).
 #[test]
 fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
     env.generate_documents(&apis)?;
@@ -1039,7 +1067,7 @@ fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
 #[test]
 fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
 {
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_git()?;
     let (expected_first_conflicts, expected_second_conflicts) =
         successive_changes_concrete_setup(&mut env)?;
 
@@ -1112,7 +1140,7 @@ fn successive_changes_concrete_setup(
 
     // Pre-compute the v4 path: resolution will promote alt-1 to v4.
     let v4_path = {
-        let temp_env = TestEnvironment::new()?;
+        let temp_env = TestEnvironment::new_git()?;
         let v4_apis = versioned_health_v1_v2_v3_v4alt_apis(Storage::Concrete)?;
         temp_env.generate_documents(&v4_apis)?;
         temp_env
@@ -1176,10 +1204,9 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
         return Ok(());
     }
 
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_jj()?;
     let (expected_first_conflicts, expected_second_conflicts) =
         successive_changes_concrete_setup(&mut env)?;
-    env.jj_init()?;
 
     let rebase_result = env.jj_try_rebase("feature", "main")?;
     let JjRebaseResult::Conflict(_) = rebase_result else {
@@ -1212,7 +1239,7 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
 /// Direct test: verify that `BlessedVersionMissingLocal` is fixable.
 #[test]
 fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_git()?;
     let v3_apis = versioned_health_apis()?;
 
     // Generate and commit v1,v2,v3 on main. This makes v3 blessed.
@@ -1375,7 +1402,7 @@ fn blessed_version_missing_local_verify(env: &TestEnvironment) -> Result<()> {
 /// its place. The tool should detect this as fixable and restore it.
 #[test]
 fn test_rebase_blessed_version_missing_local() -> Result<()> {
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_git()?;
     blessed_version_missing_local_setup(&mut env)?;
 
     let v4_trivial_apis =
@@ -1395,7 +1422,7 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
 /// Merge test: dependent-PR scenario with trivial changes + git merge.
 #[test]
 fn test_merge_blessed_version_missing_local() -> Result<()> {
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_git()?;
     blessed_version_missing_local_setup(&mut env)?;
 
     let v4_trivial_apis =
@@ -1419,9 +1446,8 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
         return Ok(());
     }
 
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_jj()?;
     blessed_version_missing_local_setup(&mut env)?;
-    env.jj_init()?;
 
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
@@ -1446,9 +1472,8 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
         return Ok(());
     }
 
-    let mut env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new_jj()?;
     blessed_version_missing_local_setup(&mut env)?;
-    env.jj_init()?;
 
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;

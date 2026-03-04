@@ -17,7 +17,20 @@ use openapiv3::OpenAPI;
 /// Test basic lockstep API document generation.
 #[test]
 fn test_lockstep_generate_basic() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
+    lockstep_generate_basic_impl(&env)
+}
+
+#[test]
+fn test_pure_jj_lockstep_generate_basic() -> Result<()> {
+    if !check_jj_available()? {
+        return Ok(());
+    }
+    let env = TestEnvironment::new_jj()?;
+    lockstep_generate_basic_impl(&env)
+}
+
+fn lockstep_generate_basic_impl(env: &TestEnvironment) -> Result<()> {
     let apis = lockstep_health_apis()?;
 
     // Initially, no documents should exist.
@@ -48,7 +61,7 @@ fn test_lockstep_generate_basic() -> Result<()> {
 /// Test that lockstep APIs always pass the up-to-date check.
 #[test]
 fn test_lockstep_always_up_to_date() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = lockstep_multi_apis()?;
 
     // Generate all documents.
@@ -64,7 +77,7 @@ fn test_lockstep_always_up_to_date() -> Result<()> {
 /// Test generating multiple lockstep APIs.
 #[test]
 fn test_lockstep_multiple_apis() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = lockstep_multi_apis()?;
 
     // Generate all documents.
@@ -94,7 +107,7 @@ fn test_lockstep_multiple_apis() -> Result<()> {
 /// Test empty API set handling.
 #[test]
 fn test_empty_api_set() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = ManagedApis::new(Vec::<ManagedApiConfig>::new())?;
 
     env.generate_documents(&apis)?;
@@ -113,7 +126,7 @@ fn test_empty_api_set() -> Result<()> {
 /// generate run.
 #[test]
 fn test_unparseable_conflict_markers() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = lockstep_health_apis()?;
 
     env.generate_documents(&apis)?;

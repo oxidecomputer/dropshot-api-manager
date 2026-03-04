@@ -12,7 +12,6 @@ mod apis;
 mod cmd;
 mod compatibility;
 mod environment;
-mod git;
 mod iter_only;
 mod output;
 mod resolved;
@@ -22,6 +21,7 @@ mod spec_files_generic;
 mod spec_files_local;
 pub mod test_util;
 mod validation;
+mod vcs;
 
 #[macro_use]
 extern crate newtype_derive;
