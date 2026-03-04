@@ -9,7 +9,6 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-atomicwrites.workspace = true
 camino.workspace = true
 camino-tempfile.workspace = true
 camino-tempfile-ext.workspace = true
@@ -28,6 +27,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true
+atomicwrites.workspace = true
 
 [package.metadata.release]
 release = false
