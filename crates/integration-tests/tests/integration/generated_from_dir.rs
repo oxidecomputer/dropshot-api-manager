@@ -22,7 +22,7 @@ fn atomic_write(path: &camino::Utf8Path, content: &str) -> Result<()> {
 /// report a clear error rather than panicking.
 #[test]
 fn test_generated_from_empty_dir_does_not_panic() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
     env.generate_documents(&apis)?;
 
@@ -46,7 +46,7 @@ fn test_generated_from_empty_dir_does_not_panic() -> Result<()> {
 /// rather than panicking.
 #[test]
 fn test_generated_from_partial_dir_does_not_panic() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = create_mixed_test_apis()?;
     env.generate_documents(&apis)?;
 
@@ -73,7 +73,7 @@ fn test_generated_from_partial_dir_does_not_panic() -> Result<()> {
 /// versions rather than panicking.
 #[test]
 fn test_generated_from_dir_partial_versions() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&apis)?;
     env.commit_documents()?;
@@ -118,7 +118,7 @@ fn test_generated_from_dir_partial_versions() -> Result<()> {
 /// succeed.
 #[test]
 fn test_generated_from_complete_dir_succeeds() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let env = TestEnvironment::new_git()?;
     let apis = lockstep_health_apis()?;
     env.generate_documents(&apis)?;
 

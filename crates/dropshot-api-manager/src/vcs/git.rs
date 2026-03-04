@@ -2,22 +2,11 @@
 
 //! Helpers for accessing data stored in git
 
+use super::imp::{VcsRevision, cmd_label, do_run, do_run_bytes};
 use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use git_stub::GitCommitHash;
 use std::process::Command;
-
-/// Newtype String wrapper identifying a Git revision
-///
-/// This could be a commit, branch name, tag name, etc.  This type does not
-/// validate the contents.
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct GitRevision(String);
-NewtypeDebug! { () pub struct GitRevision(String); }
-NewtypeDeref! { () pub struct GitRevision(String); }
-NewtypeDerefMut! { () pub struct GitRevision(String); }
-NewtypeDisplay! { () pub struct GitRevision(String); }
-NewtypeFrom! { () pub struct GitRevision(String); }
 
 /// Given a revision, return its merge base with the current working state.
 ///
@@ -34,9 +23,9 @@ NewtypeFrom! { () pub struct GitRevision(String); }
 ///
 /// In the rare case where the two merge bases are independent (neither is an
 /// ancestor of the other), we fall back to HEAD's merge base.
-pub fn git_merge_base_head(
+pub(super) fn git_merge_base_head(
     repo_root: &Utf8Path,
-    revision: &GitRevision,
+    revision: &VcsRevision,
 ) -> anyhow::Result<GitCommitHash> {
     if git_merge_head_exists(repo_root) {
         // We're in a merge. Compute merge bases for both HEAD and MERGE_HEAD.
@@ -60,7 +49,7 @@ pub fn git_merge_base_head(
 fn git_merge_base(
     repo_root: &Utf8Path,
     base_ref: &str,
-    revision: &GitRevision,
+    revision: &VcsRevision,
 ) -> anyhow::Result<GitCommitHash> {
     let mut cmd = git_start(repo_root);
     cmd.arg("merge-base").arg("--all").arg(base_ref).arg(revision.as_str());
@@ -80,7 +69,7 @@ fn git_merge_base(
 }
 
 /// Check if `potential_ancestor` is an ancestor of `commit`.
-pub(crate) fn git_is_ancestor(
+pub(super) fn git_is_ancestor(
     repo_root: &Utf8Path,
     potential_ancestor: GitCommitHash,
     commit: GitCommitHash,
@@ -131,7 +120,7 @@ fn git_merge_head_exists(repo_root: &Utf8Path) -> bool {
 }
 
 /// List files recursively under some path `path` in Git revision `revision`.
-pub fn git_ls_tree(
+pub(super) fn git_ls_tree(
     repo_root: &Utf8Path,
     revision: GitCommitHash,
     directory: &Utf8Path,
@@ -168,15 +157,14 @@ pub fn git_ls_tree(
 
 /// Returns the contents of the file at the given path `path` in Git revision
 /// `revision`.
-pub fn git_show_file(
+pub(super) fn git_show_file(
     repo_root: &Utf8Path,
     revision: GitCommitHash,
     path: &Utf8Path,
 ) -> anyhow::Result<Vec<u8>> {
     let mut cmd = git_start(repo_root);
     cmd.arg("cat-file").arg("blob").arg(format!("{}:{}", revision, path));
-    let stdout = do_run(&mut cmd)?;
-    Ok(stdout.into_bytes())
+    do_run_bytes(&mut cmd)
 }
 
 /// Returns the first commit where a file was introduced, searching up to and
@@ -189,7 +177,7 @@ pub fn git_show_file(
 /// previous blessed version into having the same contents for both developers.
 /// This avoids an unnecessary merge conflict in the contents of the `.gitstub`
 /// file.
-pub fn git_first_commit_for_file(
+pub(super) fn git_first_commit_for_file(
     repo_root: &Utf8Path,
     revision: GitCommitHash,
     path: &Utf8Path,
@@ -237,67 +225,10 @@ pub fn git_first_commit_for_file(
     })
 }
 
-/// Returns true if the repository is a shallow clone.
-///
-/// Shallow clones have truncated history, which can cause `git log` to return
-/// incorrect results when searching for the commit that added a file. In a
-/// shallow clone, files present at the shallow boundary appear to have been
-/// "added" in the boundary commit, even if they were actually added earlier.
-pub fn is_shallow_clone(repo_root: &Utf8Path) -> bool {
-    let mut cmd = git_start(repo_root);
-    cmd.arg("rev-parse").arg("--is-shallow-repository");
-    match do_run(&mut cmd) {
-        Ok(output) => output.trim() == "true",
-        // If this failed, don't print a warning.
-        Err(_) => false,
-    }
-}
-
-/// Begin assembling an invocation of git(1)
+/// Begin assembling an invocation of git(1).
 fn git_start(repo_root: &Utf8Path) -> Command {
     let git = std::env::var("GIT").ok().unwrap_or_else(|| String::from("git"));
     let mut command = Command::new(&git);
     command.current_dir(repo_root);
     command
-}
-
-/// Runs an assembled git(1) command, returning stdout on success and an error
-/// including the exit status and stderr contents on failure.
-fn do_run(cmd: &mut Command) -> anyhow::Result<String> {
-    let label = cmd_label(cmd);
-    let output = cmd.output().with_context(|| format!("invoking {:?}", cmd))?;
-    let status = output.status;
-    let stdout = output.stdout;
-    let stderr = output.stderr;
-    if status.success() {
-        if let Ok(stdout) = String::from_utf8(stdout) {
-            return Ok(stdout);
-        } else {
-            bail!("command succeeded, but output was not UTF-8: {}:\n", label);
-        }
-    }
-
-    bail!(
-        "command failed: {}: {}\n\
-        stderr:\n\
-        -----\n\
-        {}\n\
-        -----\n",
-        label,
-        status,
-        String::from_utf8_lossy(&stderr)
-    );
-}
-
-/// Returns a string describing an assembled command (for debugging and error
-/// reporting)
-fn cmd_label(cmd: &Command) -> String {
-    format!(
-        "{:?} {}",
-        cmd.get_program(),
-        cmd.get_args()
-            .map(|a| format!("{:?}", a))
-            .collect::<Vec<_>>()
-            .join(" ")
-    )
 }

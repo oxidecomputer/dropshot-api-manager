@@ -351,8 +351,8 @@ pub enum Problem<'a> {
 
     #[error(
         "The first commit for this blessed version could not be determined. This \
-         may indicate a corrupted git repository or other git-related issue. Git \
-         stub storage requires complete git history access"
+         may indicate a corrupted repository or other VCS-related issue. Git \
+         stub storage requires complete VCS history access"
          // Note: omitting a trailing period after "access" because we show ":
          // <source>".
     )]
@@ -1183,9 +1183,11 @@ fn resolve_api<'a>(
             } else {
                 // The latest version is blessed. Try to find its first commit.
                 match all_blessed.git_stub(api.ident(), latest_version) {
-                    Some(gr) => match gr
-                        .to_git_stub(&env.repo_root, all_blessed.merge_base())
-                    {
+                    Some(gr) => match gr.to_git_stub(
+                        &env.repo_root,
+                        all_blessed.merge_base(),
+                        &env.vcs,
+                    ) {
                         Ok(git_stub) => (
                             LatestFirstCommit::Blessed(git_stub.commit()),
                             None,
@@ -1661,20 +1663,23 @@ fn resolve_api_version_blessed<'a>(
     let compute_storage_format =
         |problems: &mut Vec<Problem<'a>>| -> VersionStorageFormat {
             match git_stub {
-                Some(r) => match r.to_git_stub(&env.repo_root, merge_base) {
-                    Ok(current) => {
-                        storage_format_for_blessed(latest_first_commit, current)
+                Some(r) => {
+                    match r.to_git_stub(&env.repo_root, merge_base, &env.vcs) {
+                        Ok(current) => storage_format_for_blessed(
+                            latest_first_commit,
+                            current,
+                        ),
+                        Err(error) => {
+                            problems.push(Problem::GitStubFirstCommitUnknown {
+                                spec_file_name: blessed
+                                    .versioned_spec_file_name()
+                                    .clone(),
+                                source: error,
+                            });
+                            VersionStorageFormat::Error
+                        }
                     }
-                    Err(error) => {
-                        problems.push(Problem::GitStubFirstCommitUnknown {
-                            spec_file_name: blessed
-                                .versioned_spec_file_name()
-                                .clone(),
-                            source: error,
-                        });
-                        VersionStorageFormat::Error
-                    }
-                },
+                }
                 None => VersionStorageFormat::Json,
             }
         };

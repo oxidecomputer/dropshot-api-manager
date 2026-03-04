@@ -9,8 +9,9 @@ use crate::{
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
         SpecFileInfo, parse_lockstep_file_name, parse_versioned_file_name,
-        parse_versioned_git_stub_file_name, resolve_git_stub_contents,
+        parse_versioned_git_stub_file_name,
     },
+    vcs::RepoVcs,
 };
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -196,9 +197,10 @@ impl LocalFiles {
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
         repo_root: &Utf8Path,
+        vcs: &RepoVcs,
     ) -> anyhow::Result<LocalFiles> {
         let api_files =
-            walk_local_directory(dir, apis, error_accumulator, repo_root)?;
+            walk_local_directory(dir, apis, error_accumulator, repo_root, vcs)?;
         Ok(LocalFiles { files: api_files.into_map() })
     }
 }
@@ -434,6 +436,7 @@ fn process_local_entry(
     entry: LocalDiscoveredEntry,
     apis: &ManagedApis,
     repo_root: &Utf8Path,
+    vcs: &RepoVcs,
 ) -> LocalFileResult {
     match entry {
         LocalDiscoveredEntry::TopLevelFile { file_name, path } => {
@@ -547,7 +550,7 @@ fn process_local_entry(
             }
 
             // Resolve the git stub to actual file contents.
-            let contents = match resolve_git_stub_contents(&git_stub, repo_root)
+            let contents = match vcs.resolve_stub_contents(&git_stub, repo_root)
             {
                 Ok(c) => c,
                 Err(error) => {
@@ -620,6 +623,7 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
     apis: &'a ManagedApis,
     error_accumulator: &'a mut ErrorAccumulator,
     repo_root: &Utf8Path,
+    vcs: &RepoVcs,
 ) -> anyhow::Result<ApiSpecFilesBuilder<'a, T>> {
     // Phase 1: discover entries (sequential, fast).
     let entries = discover_local_entries(dir)?;
@@ -627,7 +631,7 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
     // Phase 2: I/O + filename parse + deserialization (parallel).
     let file_results: Vec<LocalFileResult> = entries
         .into_par_iter()
-        .map(|entry| process_local_entry(entry, apis, repo_root))
+        .map(|entry| process_local_entry(entry, apis, repo_root, vcs))
         .collect();
 
     // Phase 3: reduce into builder (sequential).

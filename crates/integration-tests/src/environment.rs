@@ -2,7 +2,7 @@
 
 //! Test environment infrastructure for integration tests.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use camino_tempfile::Utf8TempDir;
 use camino_tempfile_ext::{fixture::ChildPath, prelude::*};
@@ -80,6 +80,24 @@ pub fn check_jj_available() -> Result<bool> {
     }
 }
 
+/// VCS mode for the test environment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VcsMode {
+    /// Standard git repository.
+    Git,
+    /// A Jujutsu repository.
+    ///
+    /// Currently, tests always create non-colocated repositories, under the
+    /// assumption that if the tool works for Git repositories and for
+    /// non-colocated Jujutsu repositories, it also works for colocated Jujutsu
+    /// repositories.
+    Jj {
+        /// The currently active bookmark. When commits are made, this bookmark
+        /// is advanced to the new commit.
+        current_bookmark: String,
+    },
+}
+
 /// A temporary test environment that manages directories and cleanup.
 pub struct TestEnvironment {
     /// Temporary directory that will be cleaned up automatically.
@@ -91,11 +109,14 @@ pub struct TestEnvironment {
     documents_dir: ChildPath,
     /// The dropshot-api-manager Environment.
     environment: Environment,
+    /// The VCS backend used by this environment.
+    vcs_mode: VcsMode,
 }
 
 impl TestEnvironment {
-    /// Create a new test environment with temporary directories and git repo.
-    pub fn new() -> Result<Self> {
+    /// Create a new test environment with temporary directories, backed by a
+    /// Git repository.
+    pub fn new_git() -> Result<Self> {
         let temp_dir =
             Utf8TempDir::with_prefix("dropshot-api-manager-integration-")
                 .context("failed to create temporary directory")?;
@@ -142,7 +163,76 @@ impl TestEnvironment {
         // document blessed.
         .with_default_git_branch("main");
 
-        Ok(Self { temp_dir, workspace_root, documents_dir, environment })
+        Ok(Self {
+            temp_dir,
+            workspace_root,
+            documents_dir,
+            environment,
+            vcs_mode: VcsMode::Git,
+        })
+    }
+
+    /// Create a new test environment with a non-colocated Jujutsu repository.
+    ///
+    /// The non-colocated nature of the Jujutsu repository means that operations
+    /// are forced to go through jj.
+    pub fn new_jj() -> Result<Self> {
+        let temp_dir = Utf8TempDir::with_prefix("dropshot-api-manager-jj-")
+            .context("failed to create temporary directory")?;
+
+        temp_dir.child("workspace/documents").create_dir_all()?;
+
+        let workspace_root = temp_dir.child("workspace");
+        let documents_dir = workspace_root.child("documents");
+
+        Self::run_jj_command(
+            workspace_root.as_path(),
+            &["git", "init", "--no-colocate"],
+        )?;
+
+        Self::run_jj_command(
+            workspace_root.as_path(),
+            &["config", "set", "--repo", "user.name", "Test User"],
+        )?;
+        Self::run_jj_command(
+            workspace_root.as_path(),
+            &["config", "set", "--repo", "user.email", "test@example.com"],
+        )?;
+
+        // Create an initial commit with .gitattributes and README.md.
+        workspace_root.child(".gitattributes").write_str("* -text\n")?;
+        workspace_root.child("README.md").write_str("# Test workspace\n")?;
+        Self::run_jj_command(
+            workspace_root.as_path(),
+            &["commit", "-m", "initial commit"],
+        )?;
+
+        // Create a `main` bookmark at the initial commit.
+        Self::run_jj_command(
+            workspace_root.as_path(),
+            &["bookmark", "create", "main", "-r", "@-"],
+        )?;
+
+        let environment = Environment::new(
+            "test-openapi-manager",
+            workspace_root.as_path(),
+            "documents",
+        )?
+        // Use the "main" bookmark as the blessed revset.
+        .with_default_jj_revset("main");
+
+        Ok(Self {
+            temp_dir,
+            workspace_root,
+            documents_dir,
+            environment,
+            vcs_mode: VcsMode::Jj { current_bookmark: "main".into() },
+        })
+    }
+
+    /// Returns the VCS mode of this test environment.
+    pub fn vcs_mode(&self) -> &VcsMode {
+        &self.vcs_mode
     }
 
     /// Get the workspace root path.
@@ -229,13 +319,22 @@ impl TestEnvironment {
             return Ok(false);
         };
 
-        // Query git on main at the blessed path (main).
-        let output = Self::run_git_command(
-            &self.workspace_root,
-            &["ls-tree", "-r", "--name-only", "main", path.as_str()],
-        )?;
-        // If the output equals the path, the document is present and blessed.
-        Ok(output.trim() == path)
+        match self.vcs_mode {
+            VcsMode::Git => {
+                let output = Self::run_git_command(
+                    &self.workspace_root,
+                    &["ls-tree", "-r", "--name-only", "main", path.as_str()],
+                )?;
+                Ok(output.trim() == path)
+            }
+            VcsMode::Jj { .. } => {
+                let output = Self::run_jj_command(
+                    &self.workspace_root,
+                    &["file", "list", "-r", "main", "--ignore-working-copy"],
+                )?;
+                Ok(output.lines().any(|line| line == path.as_str()))
+            }
+        }
     }
 
     /// Find the path of a versioned API document for a specific version,
@@ -403,15 +502,20 @@ impl TestEnvironment {
     /// Read the actual content referenced by a Git stub.
     ///
     /// This reads the Git stub, parses it to get the commit and path,
-    /// then uses git to retrieve the referenced content.
+    /// then uses the appropriate VCS to retrieve the referenced content.
     pub fn read_git_stub_content(
         &self,
         api_ident: &str,
         version: &str,
     ) -> Result<String> {
         let git_stub = self.read_versioned_git_stub(api_ident, version)?;
-        let content = Vcs::git()
-            .context("failed to create git VCS")?
+        let vcs = match self.vcs_mode {
+            VcsMode::Git => Vcs::git().context("failed to create git VCS")?,
+            VcsMode::Jj { .. } => {
+                Vcs::jj().context("failed to create jj VCS")?
+            }
+        };
+        let content = vcs
             .read_git_stub_contents(&git_stub, &self.workspace_root)
             .with_context(|| {
                 format!(
@@ -446,45 +550,93 @@ impl TestEnvironment {
         Ok(())
     }
 
-    /// Commit documents to git (for blessed document workflow testing).
+    /// Commit documents (for blessed document workflow testing).
+    ///
+    /// In git mode, stages and commits all files in the documents directory. In
+    /// pure jj mode, commits all working copy changes and advances the current
+    /// bookmark. For our tests there shouldn't be a difference in behavior
+    /// between Git and Jujutsu.
     pub fn commit_documents(&self) -> Result<()> {
-        // Add all files in documents directory to git.
-        Self::run_git_command(&self.workspace_root, &["add", "documents/"])?;
+        match &self.vcs_mode {
+            VcsMode::Git => {
+                // Add all files in the documents directory to git.
+                Self::run_git_command(
+                    &self.workspace_root,
+                    &["add", "documents/"],
+                )?;
 
-        // Check if there are any changes to commit.
-        let status_output = Self::run_git_command(
-            &self.workspace_root,
-            &["status", "--porcelain"],
-        )?;
-        if status_output.trim().is_empty() {
-            // No changes to commit.
-            return Ok(());
+                // Check if there are any changes to commit.
+                let status_output = Self::run_git_command(
+                    &self.workspace_root,
+                    &["status", "--porcelain"],
+                )?;
+                if status_output.trim().is_empty() {
+                    return Ok(());
+                }
+
+                Self::run_git_command(
+                    &self.workspace_root,
+                    &["commit", "-m", "Update API documents"],
+                )?;
+            }
+            VcsMode::Jj { .. } => {
+                // jj auto-tracks files. Check if there are changes.
+                let output = Self::run_jj_command(
+                    &self.workspace_root,
+                    &["diff", "--summary"],
+                )?;
+                if output.trim().is_empty() {
+                    return Ok(());
+                }
+
+                self.jj_commit_and_advance_bookmark("Update API documents")?;
+            }
         }
-
-        // Commit the changes.
-        Self::run_git_command(
-            &self.workspace_root,
-            &["commit", "-m", "Update API documents"],
-        )?;
         Ok(())
     }
 
     /// Check if files in the documents directory have uncommitted changes.
     pub fn has_uncommitted_document_changes(&self) -> Result<bool> {
-        let output = Self::run_git_command(
-            &self.workspace_root,
-            &["status", "--porcelain", "documents/"],
-        )?;
-        Ok(!output.trim().is_empty())
+        match self.vcs_mode {
+            VcsMode::Git => {
+                let output = Self::run_git_command(
+                    &self.workspace_root,
+                    &["status", "--porcelain", "documents/"],
+                )?;
+                Ok(!output.trim().is_empty())
+            }
+            VcsMode::Jj { .. } => {
+                let output = Self::run_jj_command(
+                    &self.workspace_root,
+                    &["diff", "--name-only"],
+                )?;
+                // Filter for changes in the documents/ directory.
+                let has_doc_changes = output
+                    .lines()
+                    .any(|line| Utf8Path::new(line).starts_with("documents"));
+                Ok(has_doc_changes)
+            }
+        }
     }
 
-    /// Get the current git commit hash.
+    /// Get the current commit hash.
     pub fn get_current_commit_hash(&self) -> Result<String> {
-        let output = Self::run_git_command(
-            &self.workspace_root,
-            &["rev-parse", "HEAD"],
-        )?;
-        Ok(output.trim().to_string())
+        match self.vcs_mode {
+            VcsMode::Git => {
+                let output = Self::run_git_command(
+                    &self.workspace_root,
+                    &["rev-parse", "HEAD"],
+                )?;
+                Ok(output.trim().to_string())
+            }
+            VcsMode::Jj { .. } => {
+                let output = Self::run_jj_command(
+                    &self.workspace_root,
+                    &["log", "-r", "@-", "-T", "commit_id", "--no-graph"],
+                )?;
+                Ok(output.trim().to_string())
+            }
+        }
     }
 
     /// Check if any file matching the given prefix pattern is committed in the
@@ -496,20 +648,39 @@ impl TestEnvironment {
             .context("documents_dir should be under workspace_root")?;
         let pattern =
             rel_path_forward_slashes(&format!("{}/{}", rel_docs_dir, prefix));
-        let output = Self::run_git_command(
-            &self.workspace_root,
-            &["ls-tree", "-r", "--name-only", "HEAD"],
-        )?;
-        Ok(output.lines().any(|line| line.starts_with(&pattern)))
+        match self.vcs_mode {
+            VcsMode::Git => {
+                let output = Self::run_git_command(
+                    &self.workspace_root,
+                    &["ls-tree", "-r", "--name-only", "HEAD"],
+                )?;
+                Ok(output.lines().any(|line| line.starts_with(&pattern)))
+            }
+            VcsMode::Jj { .. } => {
+                let output = Self::run_jj_command(
+                    &self.workspace_root,
+                    &["file", "list", "-r", "@-", "--ignore-working-copy"],
+                )?;
+                Ok(output.lines().any(|line| line.starts_with(&pattern)))
+            }
+        }
     }
 
     /// Make an unrelated commit (useful for advancing HEAD without changing
     /// API documents).
     pub fn make_unrelated_commit(&self, message: &str) -> Result<()> {
-        Self::run_git_command(
-            &self.workspace_root,
-            &["commit", "--allow-empty", "-m", message],
-        )?;
+        match &self.vcs_mode {
+            VcsMode::Git => {
+                Self::run_git_command(
+                    &self.workspace_root,
+                    &["commit", "--allow-empty", "-m", message],
+                )?;
+            }
+            VcsMode::Jj { .. } => {
+                // jj natively supports empty commits.
+                self.jj_commit_and_advance_bookmark(message)?;
+            }
+        }
         Ok(())
     }
 
@@ -566,18 +737,45 @@ impl TestEnvironment {
             workspace_root: workspace_root.clone(),
             documents_dir: workspace_root.child("documents"),
             environment,
+            vcs_mode: VcsMode::Git,
         })
     }
 
     /// Create a new branch at the current HEAD.
     pub fn create_branch(&self, name: &str) -> Result<()> {
-        Self::run_git_command(&self.workspace_root, &["branch", name])?;
+        match self.vcs_mode {
+            VcsMode::Git => {
+                Self::run_git_command(&self.workspace_root, &["branch", name])?;
+            }
+            VcsMode::Jj { .. } => {
+                // Create a bookmark at @- (the last committed change).
+                Self::run_jj_command(
+                    &self.workspace_root,
+                    &["bookmark", "create", name, "-r", "@-"],
+                )?;
+            }
+        }
         Ok(())
     }
 
     /// Checkout a branch.
     pub fn checkout_branch(&mut self, name: &str) -> Result<()> {
-        Self::run_git_command(&self.workspace_root, &["checkout", name])?;
+        match &self.vcs_mode {
+            VcsMode::Git => {
+                Self::run_git_command(
+                    &self.workspace_root,
+                    &["checkout", name],
+                )?;
+            }
+            VcsMode::Jj { .. } => {
+                // Create a new working copy on top of the bookmark.
+                Self::run_jj_command(&self.workspace_root, &["new", name])?;
+            }
+        }
+        // Track this as the current bookmark so commits advance it.
+        if let VcsMode::Jj { current_bookmark } = &mut self.vcs_mode {
+            *current_bookmark = name.to_owned();
+        }
         Ok(())
     }
 
@@ -590,10 +788,23 @@ impl TestEnvironment {
     /// tests the scenario without rename/rename conflicts.
     pub fn merge_branch_without_renames(&self, source: &str) -> Result<()> {
         let message = format!("Merge branch '{}'", source);
-        Self::run_git_command(
-            &self.workspace_root,
-            &["merge", "-m", &message, "-X", "no-renames", source],
-        )?;
+        match &self.vcs_mode {
+            VcsMode::Git => {
+                Self::run_git_command(
+                    &self.workspace_root,
+                    &["merge", "-m", &message, "-X", "no-renames", source],
+                )?;
+            }
+            VcsMode::Jj { current_bookmark } => {
+                // Create a merge working copy with both parents, commit
+                // it, and advance the current bookmark.
+                Self::run_jj_command(
+                    &self.workspace_root,
+                    &["new", current_bookmark, source],
+                )?;
+                self.jj_commit_and_advance_bookmark(&message)?;
+            }
+        }
         Ok(())
     }
 
@@ -860,18 +1071,21 @@ impl TestEnvironment {
     // jj (Jujutsu) methods
     // -------------------------------------------------------------------------
 
-    /// Initialize jj in the existing git repository (colocated mode).
-    pub fn jj_init(&self) -> Result<()> {
+    /// Commit the current jj working copy and advance the tracked bookmark.
+    fn jj_commit_and_advance_bookmark(&self, message: &str) -> Result<()> {
+        let VcsMode::Jj { current_bookmark } = &self.vcs_mode else {
+            bail!("jj_commit_and_advance_bookmark called on non-jj env");
+        };
+        Self::run_jj_command(&self.workspace_root, &["commit", "-m", message])?;
         Self::run_jj_command(
             &self.workspace_root,
-            &["git", "init", "--colocate"],
+            &["bookmark", "set", current_bookmark, "-r", "@-"],
         )?;
         Ok(())
     }
 
-    /// Attempt to create a merge commit from two git branches using jj.
+    /// Attempt to create a merge commit from two parents using jj.
     ///
-    /// Uses `jj new branch1 branch2 -m "message"` to create a merge commit.
     /// Returns `JjMergeResult::Clean` if the merge has no conflicts, or
     /// `JjMergeResult::Conflict` with the set of conflicted files.
     pub fn jj_try_merge(

@@ -6,15 +6,12 @@
 use crate::{
     apis::ManagedApis,
     environment::ErrorAccumulator,
-    git::{
-        GitRevision, git_first_commit_for_file, git_is_ancestor, git_ls_tree,
-        git_merge_base_head, git_show_file,
-    },
     spec_files_generic::{
         ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
         GitStubKey, SpecFileInfo, parse_versioned_file_name,
-        parse_versioned_git_stub_file_name, resolve_git_stub_contents,
+        parse_versioned_git_stub_file_name,
     },
+    vcs::{RepoVcs, VcsRevision},
 };
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -169,9 +166,9 @@ impl BlessedGitStub {
     ///
     /// For `Known` variants, this validates that the stored commit is an
     /// ancestor of the merge base. If it is not (e.g., after a rebase or
-    /// force-push), the correct commit is recomputed via `git log`. For
-    /// `Lazy` variants, this always calls `git log` to find the first commit
-    /// that introduced the file.
+    /// force-push), the correct commit is recomputed via the VCS backend.
+    /// For `Lazy` variants, this always queries the VCS to find the first
+    /// commit that introduced the file.
     ///
     /// If `merge_base` is `None` (directory-based loading), `Known` commits
     /// are trusted as-is.
@@ -179,6 +176,7 @@ impl BlessedGitStub {
         &self,
         repo_root: &Utf8Path,
         merge_base: Option<GitCommitHash>,
+        vcs: &RepoVcs,
     ) -> anyhow::Result<GitStub> {
         match self {
             BlessedGitStub::Known { commit, path } => {
@@ -186,8 +184,8 @@ impl BlessedGitStub {
                     // Check that the stored commit is still an ancestor
                     // of the merge base. If not, the commit is stale
                     // (e.g., after a rebase) and needs to be recomputed.
-                    if !git_is_ancestor(repo_root, *commit, merge_base)? {
-                        let commit = git_first_commit_for_file(
+                    if !vcs.is_ancestor(repo_root, *commit, merge_base)? {
+                        let commit = vcs.first_commit_for_file(
                             repo_root, merge_base, path,
                         )?;
                         return Ok(GitStub::new(commit, path.clone())?);
@@ -197,7 +195,7 @@ impl BlessedGitStub {
             }
             BlessedGitStub::Lazy { commit, path } => {
                 let commit =
-                    git_first_commit_for_file(repo_root, *commit, path)?;
+                    vcs.first_commit_for_file(repo_root, *commit, path)?;
                 Ok(GitStub::new(commit, path.clone())?)
             }
         }
@@ -255,10 +253,11 @@ pub struct BlessedFiles {
     files: BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>,
     /// Git stubs for each blessed file, keyed by (ident, version).
     git_stubs: BTreeMap<GitStubKey, BlessedGitStub>,
-    /// The merge base used when loading blessed files from git.
+    /// The merge base used when loading blessed files from VCS history.
     ///
-    /// This is `Some` when loaded via `load_from_git_parent_branch` or
-    /// `load_from_git_revision`, and `None` when loaded from a directory.
+    /// This is `Some` when loaded via [`load_from_vcs_parent_branch`] or
+    /// [`load_from_vcs_revision`], and `None` when loaded from a
+    /// directory.
     merge_base: Option<GitCommitHash>,
 }
 
@@ -327,7 +326,7 @@ enum BlessedFileResult {
 
 // ---- Phase 1: parallel read + filename parse + deserialization ----
 
-/// Process a single path from `git ls-tree`.
+/// Process a single path from a VCS.
 ///
 /// This is called in parallel.
 fn process_blessed_entry(
@@ -336,6 +335,7 @@ fn process_blessed_entry(
     commit: GitCommitHash,
     directory: &Utf8Path,
     apis: &ManagedApis,
+    vcs: &RepoVcs,
 ) -> BlessedFileResult {
     let kind = match BlessedPathKind::parse(f) {
         Ok(kind) => kind,
@@ -367,7 +367,7 @@ fn process_blessed_entry(
 
             let git_path = format!("{directory}/{f}");
             let contents =
-                match git_show_file(repo_root, commit, git_path.as_ref()) {
+                match vcs.show_file(repo_root, commit, git_path.as_ref()) {
                     Ok(c) => c,
                     Err(err) => {
                         return BlessedFileResult::Error(err);
@@ -399,7 +399,7 @@ fn process_blessed_entry(
 
             let git_path = format!("{directory}/{f}");
             let contents =
-                match git_show_file(repo_root, commit, git_path.as_ref()) {
+                match vcs.show_file(repo_root, commit, git_path.as_ref()) {
                     Ok(c) => c,
                     Err(err) => {
                         return BlessedFileResult::Error(err);
@@ -420,7 +420,7 @@ fn process_blessed_entry(
 
             // Read the actual JSON contents.
             let json_contents =
-                match resolve_git_stub_contents(&git_stub, repo_root) {
+                match vcs.resolve_stub_contents(&git_stub, repo_root) {
                     Ok(c) => c,
                     Err(err) => {
                         return BlessedFileResult::Error(err.context(format!(
@@ -458,41 +458,46 @@ impl BlessedFiles {
     /// and you're on `B2`, `main` refers to `M4`, but you want to be looking at
     /// `M1` for blessed documents because you haven't yet merged in commits M2,
     /// M3, and M4.
-    pub fn load_from_git_parent_branch(
+    pub fn load_from_vcs_parent_branch(
         repo_root: &Utf8Path,
-        branch: &GitRevision,
+        branch: &VcsRevision,
         directory: &Utf8Path,
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
+        vcs: &RepoVcs,
     ) -> anyhow::Result<BlessedFiles> {
-        let revision = git_merge_base_head(repo_root, branch)?;
-        Self::load_from_git_revision(
+        let revision = vcs.merge_base_head(repo_root, branch)?;
+        Self::load_from_vcs_revision(
             repo_root,
             revision,
             directory,
             apis,
             error_accumulator,
+            vcs,
         )
     }
 
-    /// Load OpenAPI documents from the given Git revision and directory.
+    /// Load OpenAPI documents from the given VCS revision and directory.
     ///
     /// Work is split into two phases in a map-reduce pattern, similar to
     /// generated and local files.
-    pub fn load_from_git_revision(
+    pub fn load_from_vcs_revision(
         repo_root: &Utf8Path,
         commit: GitCommitHash,
         directory: &Utf8Path,
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
+        vcs: &RepoVcs,
     ) -> anyhow::Result<BlessedFiles> {
-        let files_found = git_ls_tree(repo_root, commit, directory)?;
+        let files_found = vcs.list_files(repo_root, commit, directory)?;
 
         // Phase 1 (map): parallel read + deserialize.
         let results: Vec<BlessedFileResult> = files_found
             .par_iter()
             .map(|f| {
-                process_blessed_entry(f, repo_root, commit, directory, apis)
+                process_blessed_entry(
+                    f, repo_root, commit, directory, apis, vcs,
+                )
             })
             .collect();
 

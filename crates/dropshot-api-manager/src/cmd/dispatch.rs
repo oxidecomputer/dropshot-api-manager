@@ -7,8 +7,8 @@ use crate::{
         list::list_impl,
     },
     environment::{BlessedSource, Environment, GeneratedSource, ResolvedEnv},
-    git::GitRevision,
     output::OutputOpts,
+    vcs::VcsRevision,
 };
 use anyhow::Result;
 use camino::Utf8PathBuf;
@@ -68,38 +68,60 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct BlessedSourceArgs {
-    /// Loads blessed OpenAPI documents from the given Git REVISION.
+    /// Loads blessed OpenAPI documents from the given VCS REVISION.
     ///
     /// The REVISION is not used as-is; instead, the tool always looks at
-    /// the merge-base between HEAD and REVISION. So if you provide
-    /// `main`, then it will look at the merge-base of HEAD and `main`.
+    /// the merge-base between the current working state and REVISION.
+    /// So if you provide `main`, then it will look at the merge-base
+    /// of the working copy with `main`.
     ///
-    /// REVISION is optional and defaults to the `default_git_branch`
-    /// provided by the OpenAPI manager binary (typically `origin/main`).
+    /// REVISION is optional and defaults to the `default_blessed_branch`
+    /// provided by the OpenAPI manager binary (typically `origin/main`
+    /// for Git, `trunk()` for Jujutsu).
     ///
     /// The path within the revision defaults to `default_openapi_dir`
     /// provided by the OpenAPI manager binary. To override it, use
     /// `--blessed-from-vcs-path`.
-    #[clap(long, env("OPENAPI_MGR_BLESSED_FROM_GIT"), value_name("REVISION"))]
-    pub blessed_from_git: Option<String>,
+    ///
+    /// As a fallback, the `OPENAPI_MGR_BLESSED_FROM_GIT` environment
+    /// variable can also be used.
+    // Environment variable handling is done manually in
+    // `resolve_blessed_from_vcs` because clap's `env()` only supports a
+    // single variable, and we need two.
+    #[clap(
+        long = "blessed-from-vcs",
+        alias = "blessed-from-git",
+        env(BLESSED_FROM_VCS_ENV),
+        value_name("REVISION")
+    )]
+    pub blessed_from_vcs: Option<String>,
 
     /// Overrides the path within the VCS revision to load blessed
     /// OpenAPI documents from.
-    #[clap(long, env("OPENAPI_MGR_BLESSED_FROM_VCS_PATH"), value_name("PATH"))]
+    #[clap(long, env(BLESSED_FROM_VCS_PATH_ENV), value_name("PATH"))]
     pub blessed_from_vcs_path: Option<Utf8PathBuf>,
 
     /// Loads blessed OpenAPI documents from a local directory (instead of
-    /// the default, from Git).
+    /// the default, from VCS).
     ///
     /// This is intended for testing and debugging this tool.
     #[clap(
         long,
-        conflicts_with("blessed_from_git"),
+        conflicts_with("blessed_from_vcs"),
         env("OPENAPI_MGR_BLESSED_FROM_DIR"),
         value_name("DIRECTORY")
     )]
     pub blessed_from_dir: Option<Utf8PathBuf>,
 }
+
+/// Environment variable for the blessed VCS revision.
+const BLESSED_FROM_VCS_ENV: &str = "OPENAPI_MGR_BLESSED_FROM_VCS";
+
+/// Environment variable for the blessed VCS path within a revision.
+const BLESSED_FROM_VCS_PATH_ENV: &str = "OPENAPI_MGR_BLESSED_FROM_VCS_PATH";
+
+/// Environment variable for the blessed VCS revision (legacy fallback).
+const BLESSED_FROM_GIT_ENV: &str = "OPENAPI_MGR_BLESSED_FROM_GIT";
 
 impl BlessedSourceArgs {
     pub(crate) fn to_blessed_source(
@@ -107,7 +129,7 @@ impl BlessedSourceArgs {
         env: &ResolvedEnv,
     ) -> Result<BlessedSource, anyhow::Error> {
         assert!(
-            self.blessed_from_dir.is_none() || self.blessed_from_git.is_none()
+            self.blessed_from_dir.is_none() || self.blessed_from_vcs.is_none()
         );
 
         if let Some(local_directory) = &self.blessed_from_dir {
@@ -116,19 +138,46 @@ impl BlessedSourceArgs {
             });
         }
 
-        let revision_str = match &self.blessed_from_git {
-            None => env.default_git_branch.as_str(),
+        let resolved =
+            resolve_blessed_from_vcs(self.blessed_from_vcs.as_deref());
+        let revision_str = match &resolved {
             Some(revision) => revision.as_str(),
+            None => env.default_blessed_branch.as_str(),
         };
-        let revision = GitRevision::from(String::from(revision_str));
+        let revision = VcsRevision::from(String::from(revision_str));
         let directory = match &self.blessed_from_vcs_path {
             Some(path) => path.clone(),
-            // We must use the relative directory path for Git
+            // We must use the relative directory path for VCS
             // commands.
             None => Utf8PathBuf::from(env.openapi_rel_dir()),
         };
-        Ok(BlessedSource::GitRevisionMergeBase { revision, directory })
+        Ok(BlessedSource::VcsRevisionMergeBase { revision, directory })
     }
+}
+
+/// Resolve the blessed-from-vcs value from the CLI flag or environment
+/// variables.
+///
+/// Returns `Some` if a value was provided via the CLI flag or an
+/// environment variable. The priority is:
+///
+/// 1. CLI flag (`cli_value`)
+/// 2. `OPENAPI_MGR_BLESSED_FROM_VCS` (done automatically by clap and
+///    stored in `cli_value`)
+/// 3. `OPENAPI_MGR_BLESSED_FROM_GIT` (legacy fallback)
+///
+/// Returns `None` if none of these are set, meaning the caller should
+/// use the environment's default blessed branch or revset.
+fn resolve_blessed_from_vcs(cli_value: Option<&str>) -> Option<String> {
+    if let Some(v) = cli_value {
+        return Some(v.to_owned());
+    }
+
+    if let Ok(v) = std::env::var(BLESSED_FROM_GIT_ENV) {
+        return Some(v);
+    }
+
+    None
 }
 
 #[derive(Debug, Args)]
@@ -270,11 +319,13 @@ pub const FAILURE_EXIT_CODE: u8 = 100;
 
 #[cfg(test)]
 mod test {
-    use super::{
-        App, BlessedSourceArgs, CheckArgs, Command, GeneratedSourceArgs,
-        LocalSourceArgs,
+    use super::*;
+    use crate::{
+        environment::{
+            BlessedSource, Environment, GeneratedSource, ResolvedEnv,
+        },
+        vcs::VcsRevision,
     };
-    use crate::environment::{BlessedSource, Environment, GeneratedSource};
     use assert_matches::assert_matches;
     use camino::{Utf8Path, Utf8PathBuf};
     use clap::Parser;
@@ -288,7 +339,7 @@ mod test {
             Command::Check(CheckArgs {
                 local: LocalSourceArgs { dir: None },
                 blessed: BlessedSourceArgs {
-                    blessed_from_git: None,
+                    blessed_from_vcs: None,
                     blessed_from_vcs_path: None,
                     blessed_from_dir: None
                 },
@@ -301,7 +352,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
-                BlessedSourceArgs { blessed_from_git: None, blessed_from_vcs_path: None, blessed_from_dir: None },
+                BlessedSourceArgs { blessed_from_vcs: None, blessed_from_vcs_path: None, blessed_from_dir: None },
             generated: GeneratedSourceArgs { generated_from_dir: None },
         }) if local_dir == "foo");
 
@@ -317,7 +368,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
-                BlessedSourceArgs { blessed_from_git: None, blessed_from_vcs_path: None, blessed_from_dir: None },
+                BlessedSourceArgs { blessed_from_vcs: None, blessed_from_vcs_path: None, blessed_from_dir: None },
             generated: GeneratedSourceArgs { generated_from_dir: Some(generated_dir) },
         }) if local_dir == "foo" && generated_dir == "bar");
 
@@ -335,7 +386,7 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: Some(local_dir) },
             blessed:
-                BlessedSourceArgs { blessed_from_git: None, blessed_from_vcs_path: None, blessed_from_dir: Some(blessed_dir) },
+                BlessedSourceArgs { blessed_from_vcs: None, blessed_from_vcs_path: None, blessed_from_dir: Some(blessed_dir) },
             generated: GeneratedSourceArgs { generated_from_dir: Some(generated_dir) },
         }) if local_dir == "foo" && generated_dir == "bar" && blessed_dir == "baz");
 
@@ -349,24 +400,24 @@ mod test {
         assert_matches!(app.command, Command::Check(CheckArgs {
             local: LocalSourceArgs { dir: None },
             blessed:
-                BlessedSourceArgs { blessed_from_git: Some(git), blessed_from_vcs_path: None, blessed_from_dir: None },
+                BlessedSourceArgs { blessed_from_vcs: Some(git), blessed_from_vcs_path: None, blessed_from_dir: None },
             generated: GeneratedSourceArgs { generated_from_dir: None },
         }) if git == "some/other/upstream");
 
-        // Error case: specifying both --blessed-from-git and --blessed-from-dir
+        // Error case: specifying both --blessed-from-vcs and --blessed-from-dir
         let error = App::try_parse_from([
             "dummy",
             "check",
-            "--blessed-from-git",
-            "git_revision",
+            "--blessed-from-vcs",
+            "vcs_revision",
             "--blessed-from-dir",
             "dir",
         ])
         .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         assert!(error.to_string().contains(
-            "error: the argument '--blessed-from-git <REVISION>' cannot \
-             be used with '--blessed-from-dir <DIRECTORY>"
+            "error: the argument '--blessed-from-vcs <REVISION>' \
+             cannot be used with '--blessed-from-dir <DIRECTORY>"
         ));
     }
 
@@ -379,7 +430,7 @@ mod test {
         const ABS_DIR: &str = "C:\\tmp";
 
         {
-            let env = Environment::new(
+            let env = Environment::new_for_test(
                 "cargo openapi".to_owned(),
                 Utf8PathBuf::from(ABS_DIR),
                 Utf8PathBuf::from("foo"),
@@ -393,7 +444,7 @@ mod test {
         }
 
         {
-            let error = Environment::new(
+            let error = Environment::new_for_test(
                 "cargo openapi".to_owned(),
                 Utf8PathBuf::from(ABS_DIR),
                 Utf8PathBuf::from(ABS_DIR),
@@ -413,7 +464,7 @@ mod test {
             let current_dir =
                 Utf8PathBuf::try_from(std::env::current_dir().unwrap())
                     .unwrap();
-            let env = Environment::new(
+            let env = Environment::new_for_test(
                 "cargo openapi".to_owned(),
                 current_dir.clone(),
                 Utf8PathBuf::from("foo"),
@@ -452,13 +503,24 @@ mod test {
         #[cfg(windows)]
         const ABS_DIR: &str = "C:\\tmp";
 
-        let env = Environment::new("cargo openapi", ABS_DIR, "foo-openapi")
-            .unwrap()
-            .with_default_git_branch("upstream/dev".to_owned());
+        // Clear env vars so they don't interfere with these tests.
+        //
+        // SAFETY:
+        // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
+        unsafe {
+            std::env::remove_var(BLESSED_FROM_VCS_ENV);
+            std::env::remove_var(BLESSED_FROM_VCS_PATH_ENV);
+            std::env::remove_var(BLESSED_FROM_GIT_ENV);
+        }
+
+        let env =
+            Environment::new_for_test("cargo openapi", ABS_DIR, "foo-openapi")
+                .unwrap()
+                .with_default_git_branch("upstream/dev".to_owned());
         let env = env.resolve(None).unwrap();
 
         let source = BlessedSourceArgs {
-            blessed_from_git: None,
+            blessed_from_vcs: None,
             blessed_from_vcs_path: None,
             blessed_from_dir: None,
         }
@@ -466,13 +528,13 @@ mod test {
         .unwrap();
         assert_matches!(
             source,
-            BlessedSource::GitRevisionMergeBase { revision, directory }
+            BlessedSource::VcsRevisionMergeBase { revision, directory }
                 if *revision == "upstream/dev" && directory == "foo-openapi"
         );
 
         // Override branch only.
         let source = BlessedSourceArgs {
-            blessed_from_git: Some(String::from("my/other/main")),
+            blessed_from_vcs: Some(String::from("my/other/main")),
             blessed_from_vcs_path: None,
             blessed_from_dir: None,
         }
@@ -480,13 +542,13 @@ mod test {
         .unwrap();
         assert_matches!(
             source,
-            BlessedSource::GitRevisionMergeBase { revision, directory}
+            BlessedSource::VcsRevisionMergeBase { revision, directory}
                 if *revision == "my/other/main" && directory == "foo-openapi"
         );
 
         // Override branch and directory.
         let source = BlessedSourceArgs {
-            blessed_from_git: Some(String::from("my/other/main")),
+            blessed_from_vcs: Some(String::from("my/other/main")),
             blessed_from_vcs_path: Some(Utf8PathBuf::from("other_openapi/bar")),
             blessed_from_dir: None,
         }
@@ -494,14 +556,14 @@ mod test {
         .unwrap();
         assert_matches!(
             source,
-            BlessedSource::GitRevisionMergeBase { revision, directory}
+            BlessedSource::VcsRevisionMergeBase { revision, directory}
                 if *revision == "my/other/main" &&
                      directory == "other_openapi/bar"
         );
 
         // Override with a local directory.
         let source = BlessedSourceArgs {
-            blessed_from_git: None,
+            blessed_from_vcs: None,
             blessed_from_vcs_path: None,
             blessed_from_dir: Some(Utf8PathBuf::from("/tmp")),
         }
@@ -511,6 +573,121 @@ mod test {
             source,
             BlessedSource::Directory { local_directory }
                 if local_directory == "/tmp"
+        );
+    }
+
+    /// Helper: parse CLI args through clap and resolve the blessed
+    /// source.
+    ///
+    /// This exercises the full env var resolution path, including
+    /// clap's `env()` attribute on `blessed_from_vcs`.
+    fn parse_blessed_source(
+        env: &ResolvedEnv,
+        extra_args: &[&str],
+    ) -> BlessedSource {
+        let mut args = vec!["dummy", "check"];
+        args.extend_from_slice(extra_args);
+        let app = App::parse_from(args);
+        match app.command {
+            Command::Check(check_args) => {
+                check_args.blessed.to_blessed_source(env).unwrap()
+            }
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    // Test that env vars flow through `to_blessed_source` correctly.
+    //
+    // Uses `parse_blessed_source` to route through clap parsing, so
+    // that clap's `env()` attribute on `blessed_from_vcs` is
+    // exercised. Constructing `BlessedSourceArgs` manually would
+    // bypass this and miss the `OPENAPI_MGR_BLESSED_FROM_VCS` env
+    // var.
+    #[test]
+    fn test_blessed_args_from_env_vars() {
+        #[cfg(unix)]
+        const ABS_DIR: &str = "/tmp";
+        #[cfg(windows)]
+        const ABS_DIR: &str = "C:\\tmp";
+
+        let env =
+            Environment::new_for_test("cargo openapi", ABS_DIR, "foo-openapi")
+                .unwrap()
+                .with_default_git_branch("upstream/dev".to_owned());
+        let env = env.resolve(None).unwrap();
+
+        // SAFETY:
+        // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
+        unsafe {
+            std::env::remove_var(BLESSED_FROM_VCS_ENV);
+            std::env::remove_var(BLESSED_FROM_VCS_PATH_ENV);
+            std::env::remove_var(BLESSED_FROM_GIT_ENV);
+        }
+
+        // OPENAPI_MGR_BLESSED_FROM_VCS overrides the default.
+        unsafe {
+            std::env::set_var(BLESSED_FROM_VCS_ENV, "env-trunk");
+        }
+        assert_eq!(
+            parse_blessed_source(&env, &[]),
+            BlessedSource::VcsRevisionMergeBase {
+                revision: VcsRevision::from("env-trunk".to_owned()),
+                directory: Utf8PathBuf::from("foo-openapi"),
+            },
+        );
+
+        // OPENAPI_MGR_BLESSED_FROM_VCS_PATH overrides the path.
+        unsafe {
+            std::env::set_var(BLESSED_FROM_VCS_ENV, "env-trunk");
+            std::env::set_var(BLESSED_FROM_VCS_PATH_ENV, "custom-dir");
+        }
+        assert_eq!(
+            parse_blessed_source(&env, &[]),
+            BlessedSource::VcsRevisionMergeBase {
+                revision: VcsRevision::from("env-trunk".to_owned()),
+                directory: Utf8PathBuf::from("custom-dir"),
+            },
+        );
+
+        // Clean up path env var for remaining tests.
+        unsafe {
+            std::env::remove_var(BLESSED_FROM_VCS_PATH_ENV);
+        }
+
+        // OPENAPI_MGR_BLESSED_FROM_GIT as legacy fallback.
+        unsafe {
+            std::env::remove_var(BLESSED_FROM_VCS_ENV);
+            std::env::set_var(BLESSED_FROM_GIT_ENV, "origin/dev");
+        }
+        assert_eq!(
+            parse_blessed_source(&env, &[]),
+            BlessedSource::VcsRevisionMergeBase {
+                revision: VcsRevision::from("origin/dev".to_owned()),
+                directory: Utf8PathBuf::from("foo-openapi"),
+            },
+        );
+
+        // Both env vars set: OPENAPI_MGR_BLESSED_FROM_VCS is preferred over
+        // OPENAPI_MGR_BLESSED_FROM_GIT.
+        unsafe {
+            std::env::set_var(BLESSED_FROM_VCS_ENV, "env-vcs");
+            std::env::set_var(BLESSED_FROM_GIT_ENV, "env-git");
+        }
+        assert_eq!(
+            parse_blessed_source(&env, &[]),
+            BlessedSource::VcsRevisionMergeBase {
+                revision: VcsRevision::from("env-vcs".to_owned()),
+                directory: Utf8PathBuf::from("foo-openapi"),
+            },
+        );
+
+        // CLI flag overrides both env vars.
+        assert_eq!(
+            parse_blessed_source(&env, &["--blessed-from-vcs", "cli-override"]),
+            BlessedSource::VcsRevisionMergeBase {
+                revision: VcsRevision::from("cli-override".to_owned()),
+                directory: Utf8PathBuf::from("foo-openapi"),
+            },
         );
     }
 }

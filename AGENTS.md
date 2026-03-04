@@ -53,7 +53,7 @@ Every Rust source file must start with:
 
 ### Type system patterns
 
-- **Newtypes** for domain types (e.g., `ApiIdent`, `GitRevision`, `GitCommitHash`, `ApiSpecFileName`)
+- **Newtypes** for domain types (e.g., `ApiIdent`, `VcsRevision`, `GitCommitHash`, `ApiSpecFileName`)
 - **Builder patterns** for complex construction (e.g., `ManagedApi` with `with_extra_validation`, `with_git_stub_storage`)
 - **Type states** encoded in generics when state transitions matter
 - **Lifetimes** used extensively to avoid cloning (e.g., `Problem<'a>`, `Resolution<'a>`, `Fix<'a>`)
@@ -135,7 +135,7 @@ The dropshot-api-manager manages OpenAPI documents corresponding to [Dropshot](h
 
 The tool reconciles OpenAPI documents from three sources:
 
-1. **Blessed source**: Immutable upstream versions from Git (typically the merge-base with main). They form a source of truth. These represent committed/shipped API documents that cannot be changed incompatibly.
+1. **Blessed source**: Immutable upstream versions from VCS history (typically the merge-base with main). They form a source of truth. These represent committed/shipped API documents that cannot be changed incompatibly.
 
 2. **Generated source**: Documents generated fresh from the current API trait definitions. Rust code is the source for these.
 
@@ -199,7 +199,7 @@ Problems are either **fixable** (tool can auto-correct) or **unfixable** (requir
 
 3. **Atomic file operations**—uses `atomicwrites` crate to prevent corruption on interruption.
 
-4. **Git integration**—blessed versions are loaded from Git history. Git stub storage optionally stores older versions as `.gitstub` files containing commit references rather than full JSON.
+4. **VCS integration**—blessed versions are loaded from VCS history (Git or Jujutsu). The `RepoVcs` abstraction (`vcs.rs`) wraps both backends, with Git-specific operations in `git.rs` and Jujutsu-specific operations in `jj.rs`. Git stub storage optionally stores older versions as `.gitstub` files containing commit references rather than full JSON.
 
 5. **UTF-8 paths throughout**—uses `camino` crate (`Utf8Path`, `Utf8PathBuf`) for easier path handling.
 
@@ -216,7 +216,11 @@ crates/
 │   │   ├── resolved.rs            # Resolution logic, Problem enum, Fix enum
 │   │   ├── compatibility.rs       # Wire compatibility checking via drift
 │   │   ├── validation.rs          # OpenAPI document validation
-│   │   ├── git.rs                 # Git operations and types
+│   │   ├── vcs/                   # VCS abstraction (RepoVcs: Git/Jujutsu dispatch)
+│   │   │   ├── mod.rs             # Module re-exports
+│   │   │   ├── imp.rs             # RepoVcs, VcsRevision, command helpers
+│   │   │   ├── git.rs             # Git-specific operations
+│   │   │   └── jj.rs              # Jujutsu-specific operations
 │   │   ├── output.rs              # User-facing output formatting
 │   │   ├── spec_files_blessed.rs  # Blessed source file handling
 │   │   ├── spec_files_generated.rs # Generated source file handling
