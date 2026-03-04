@@ -156,8 +156,9 @@ pub enum BlessedGitStub {
     /// The Git stub needs to be computed. Obtained through JSON files, and
     /// only resolved if conversions are required.
     Lazy {
-        /// The git revision to search within (typically the merge-base).
-        revision: GitRevision,
+        /// The resolved commit hash to search within (typically the
+        /// merge-base).
+        commit: GitCommitHash,
         /// The path within the repository, relative to the repo root.
         path: Utf8PathBuf,
     },
@@ -177,7 +178,7 @@ impl BlessedGitStub {
     pub fn to_git_stub(
         &self,
         repo_root: &Utf8Path,
-        merge_base: Option<&GitRevision>,
+        merge_base: Option<GitCommitHash>,
     ) -> anyhow::Result<GitStub> {
         match self {
             BlessedGitStub::Known { commit, path } => {
@@ -185,8 +186,7 @@ impl BlessedGitStub {
                     // Check that the stored commit is still an ancestor
                     // of the merge base. If not, the commit is stale
                     // (e.g., after a rebase) and needs to be recomputed.
-                    let commit_rev = GitRevision::from(*commit);
-                    if !git_is_ancestor(repo_root, &commit_rev, merge_base)? {
+                    if !git_is_ancestor(repo_root, *commit, merge_base)? {
                         let commit = git_first_commit_for_file(
                             repo_root, merge_base, path,
                         )?;
@@ -195,9 +195,9 @@ impl BlessedGitStub {
                 }
                 Ok(GitStub::new(*commit, path.clone())?)
             }
-            BlessedGitStub::Lazy { revision, path } => {
+            BlessedGitStub::Lazy { commit, path } => {
                 let commit =
-                    git_first_commit_for_file(repo_root, revision, path)?;
+                    git_first_commit_for_file(repo_root, *commit, path)?;
                 Ok(GitStub::new(commit, path.clone())?)
             }
         }
@@ -259,7 +259,7 @@ pub struct BlessedFiles {
     ///
     /// This is `Some` when loaded via `load_from_git_parent_branch` or
     /// `load_from_git_revision`, and `None` when loaded from a directory.
-    merge_base: Option<GitRevision>,
+    merge_base: Option<GitCommitHash>,
 }
 
 impl Deref for BlessedFiles {
@@ -288,8 +288,8 @@ impl BlessedFiles {
     ///
     /// This is `Some` when loaded from git, and `None` when loaded from a
     /// directory.
-    pub fn merge_base(&self) -> Option<&GitRevision> {
-        self.merge_base.as_ref()
+    pub fn merge_base(&self) -> Option<GitCommitHash> {
+        self.merge_base
     }
 }
 
@@ -333,7 +333,7 @@ enum BlessedFileResult {
 fn process_blessed_entry(
     f: &Utf8Path,
     repo_root: &Utf8Path,
-    commit: &GitRevision,
+    commit: GitCommitHash,
     directory: &Utf8Path,
     apis: &ManagedApis,
 ) -> BlessedFileResult {
@@ -468,7 +468,7 @@ impl BlessedFiles {
         let revision = git_merge_base_head(repo_root, branch)?;
         Self::load_from_git_revision(
             repo_root,
-            &revision,
+            revision,
             directory,
             apis,
             error_accumulator,
@@ -481,7 +481,7 @@ impl BlessedFiles {
     /// generated and local files.
     pub fn load_from_git_revision(
         repo_root: &Utf8Path,
-        commit: &GitRevision,
+        commit: GitCommitHash,
         directory: &Utf8Path,
         apis: &ManagedApis,
         error_accumulator: &mut ErrorAccumulator,
@@ -532,7 +532,7 @@ impl BlessedFiles {
                         git_stubs.insert(
                             GitStubKey { ident, version },
                             BlessedGitStub::Lazy {
-                                revision: commit.clone(),
+                                commit,
                                 path: Utf8PathBuf::from(&git_path),
                             },
                         );
@@ -585,7 +585,7 @@ impl BlessedFiles {
         }
 
         let files = api_files.into_map();
-        Ok(BlessedFiles { files, git_stubs, merge_base: Some(commit.clone()) })
+        Ok(BlessedFiles { files, git_stubs, merge_base: Some(commit) })
     }
 }
 
