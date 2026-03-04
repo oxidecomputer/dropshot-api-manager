@@ -32,7 +32,7 @@ fn test_conversion() -> Result<()> {
 
     env.generate_documents(&apis)?;
     env.commit_documents()?;
-    let first_commit = env.get_current_commit_hash_full()?;
+    let first_commit = env.get_current_commit_hash()?;
     let original_v1 =
         env.read_versioned_document("versioned-health", "1.0.0")?;
 
@@ -63,7 +63,7 @@ fn test_conversion() -> Result<()> {
 
     env.make_unrelated_commit("unrelated change 1")?;
     env.make_unrelated_commit("unrelated change 2")?;
-    let current_commit = env.get_current_commit_hash_full()?;
+    let current_commit = env.get_current_commit_hash()?;
     assert_ne!(
         first_commit, current_commit,
         "current commit should have advanced past the first commit"
@@ -240,12 +240,12 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
     let v1_v2_no_git_stub = versioned_health_reduced_apis()?;
     env.generate_documents(&v1_v2_no_git_stub)?;
     env.commit_documents()?;
-    let first_commit = env.get_current_commit_hash_full()?;
+    let first_commit = env.get_current_commit_hash()?;
 
     let v1_v2_v3_no_git_stub = versioned_health_apis()?;
     env.generate_documents(&v1_v2_v3_no_git_stub)?;
     env.commit_documents()?;
-    let second_commit = env.get_current_commit_hash_full()?;
+    let second_commit = env.get_current_commit_hash()?;
     assert_ne!(first_commit, second_commit);
 
     assert!(env.versioned_local_document_exists("versioned-health", "1.0.0")?);
@@ -289,14 +289,14 @@ fn test_git_stub_check_after_conversion() -> Result<()> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("between v2 and v3")?;
 
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3_apis)?;
     env.commit_documents()?;
-    let v3_commit = env.get_current_commit_hash_full()?;
+    let v3_commit = env.get_current_commit_hash()?;
     assert_ne!(v1_v2_commit, v3_commit, "v1/v2 and v3 in different commits");
 
     env.make_unrelated_commit("after v3")?;
@@ -597,7 +597,7 @@ fn test_remove_readd() -> Result<()> {
     let v1_v2_v3 = versioned_health_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
-    let commit_1 = env.get_current_commit_hash_full()?;
+    let commit_1 = env.get_current_commit_hash()?;
 
     let v1_path_before = env
         .find_versioned_document_path("versioned-health", "1.0.0")?
@@ -606,7 +606,7 @@ fn test_remove_readd() -> Result<()> {
     let v2_v3_only = versioned_health_no_v1_apis()?;
     env.generate_documents(&v2_v3_only)?;
     env.commit_documents()?;
-    let commit_2 = env.get_current_commit_hash_full()?;
+    let commit_2 = env.get_current_commit_hash()?;
 
     assert!(
         !env.versioned_local_document_exists("versioned-health", "1.0.0")?,
@@ -616,7 +616,7 @@ fn test_remove_readd() -> Result<()> {
     let v1_v2_v3_again = versioned_health_apis()?;
     env.generate_documents(&v1_v2_v3_again)?;
     env.commit_documents()?;
-    let commit_3 = env.get_current_commit_hash_full()?;
+    let commit_3 = env.get_current_commit_hash()?;
 
     let v1_path_after = env
         .find_versioned_document_path("versioned-health", "1.0.0")?
@@ -679,7 +679,7 @@ fn test_latest_removed() -> Result<()> {
     let v1_v2 = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("between v2 and v3")?;
 
@@ -691,7 +691,7 @@ fn test_latest_removed() -> Result<()> {
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
 
     env.commit_documents()?;
-    let v3_commit = env.get_current_commit_hash_full()?;
+    let v3_commit = env.get_current_commit_hash()?;
     assert_ne!(v1_v2_commit, v3_commit);
 
     env.make_unrelated_commit("between v3 and v4")?;
@@ -750,7 +750,7 @@ fn test_latest_removed_same_commit() -> Result<()> {
     let v1_only = versioned_health_v1_only_apis()?;
     env.generate_documents(&v1_only)?;
     env.commit_documents()?;
-    let v1_commit = env.get_current_commit_hash_full()?;
+    let v1_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("between v1 and v2/v3")?;
 
@@ -763,7 +763,7 @@ fn test_latest_removed_same_commit() -> Result<()> {
     assert!(env.versioned_local_document_exists("versioned-health", "3.0.0")?);
 
     env.commit_documents()?;
-    let v2_v3_commit = env.get_current_commit_hash_full()?;
+    let v2_v3_commit = env.get_current_commit_hash()?;
     assert_ne!(v1_commit, v2_v3_commit);
 
     env.make_unrelated_commit("between v3 and v4")?;
@@ -1034,7 +1034,7 @@ fn no_conflict_setup(env: &mut TestEnvironment) -> Result<String> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("unrelated A")?;
     env.create_branch("branch_a")?;
@@ -1279,7 +1279,7 @@ fn rename_conflict_v3_v4_setup(
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("unrelated A")?;
     env.create_branch("branch_a")?;
@@ -1577,7 +1577,7 @@ fn rename_conflict_blessed_setup(
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.create_branch("branch_b")?;
 
@@ -1672,7 +1672,7 @@ fn test_unparseable_git_stub_regenerated() -> Result<()> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("intermediate")?;
 
@@ -1738,7 +1738,7 @@ fn test_non_canonical_git_stub_regenerated() -> Result<()> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("intermediate")?;
 
@@ -1897,7 +1897,7 @@ fn test_unresolvable_git_stub_regenerated() -> Result<()> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.make_unrelated_commit("intermediate")?;
 
@@ -2158,7 +2158,7 @@ fn dependent_branch_setup(env: &mut TestEnvironment) -> Result<String> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     // Step 2: Create branch_a off main and add v3.
     env.create_branch("branch_a")?;
@@ -2442,7 +2442,7 @@ fn successive_changes_setup(
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash_full()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
 
     env.create_branch("feature")?;
 
@@ -2557,7 +2557,7 @@ fn test_stale_git_stub_commit() -> Result<()> {
     let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
-    let original_commit = env.get_current_commit_hash_full()?;
+    let original_commit = env.get_current_commit_hash()?;
 
     // Step 2: create a divergent branch from the current commit. This
     // branch's commit will exist in git's object store but will not be an
@@ -2566,7 +2566,7 @@ fn test_stale_git_stub_commit() -> Result<()> {
     env.create_branch("diverged")?;
     env.checkout_branch("diverged")?;
     env.make_unrelated_commit("divergent work")?;
-    let divergent_commit = env.get_current_commit_hash_full()?;
+    let divergent_commit = env.get_current_commit_hash()?;
     env.checkout_branch("main")?;
 
     // Step 3: advance main past the branch point. The divergent commit is
@@ -2666,12 +2666,12 @@ fn test_stale_git_stub_commit_with_duplicate() -> Result<()> {
     let v1_v2_v3 = versioned_health_git_stub_apis()?;
     env.generate_documents(&v1_v2_v3)?;
     env.commit_documents()?;
-    let original_commit = env.get_current_commit_hash_full()?;
+    let original_commit = env.get_current_commit_hash()?;
 
     env.create_branch("diverged")?;
     env.checkout_branch("diverged")?;
     env.make_unrelated_commit("divergent work")?;
-    let divergent_commit = env.get_current_commit_hash_full()?;
+    let divergent_commit = env.get_current_commit_hash()?;
     env.checkout_branch("main")?;
 
     env.make_unrelated_commit("advance main")?;

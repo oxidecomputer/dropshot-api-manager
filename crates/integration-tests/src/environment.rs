@@ -478,17 +478,8 @@ impl TestEnvironment {
         Ok(!output.trim().is_empty())
     }
 
-    /// Get the current git commit hash (short form).
+    /// Get the current git commit hash.
     pub fn get_current_commit_hash(&self) -> Result<String> {
-        let output = Self::run_git_command(
-            &self.workspace_root,
-            &["rev-parse", "--short", "HEAD"],
-        )?;
-        Ok(output.trim().to_string())
-    }
-
-    /// Get the current git commit hash (full form).
-    pub fn get_current_commit_hash_full(&self) -> Result<String> {
         let output = Self::run_git_command(
             &self.workspace_root,
             &["rev-parse", "HEAD"],
