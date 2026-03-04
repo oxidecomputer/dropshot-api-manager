@@ -6,7 +6,6 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{ApiCompatIssue, api_compatible},
     environment::ResolvedEnv,
-    git::GitRevision,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
     spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitStub},
@@ -1525,7 +1524,7 @@ fn resolve_api_version<'a>(
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
     latest_first_commit: LatestFirstCommit,
-    merge_base: Option<&GitRevision>,
+    merge_base: Option<GitCommitHash>,
 ) -> Resolution<'a> {
     match blessed {
         Some(blessed) => resolve_api_version_blessed(
@@ -1559,7 +1558,7 @@ fn resolve_api_version_blessed<'a>(
     generated: &'a GeneratedApiSpecFile,
     local: &'a [LocalApiSpecFile],
     latest_first_commit: LatestFirstCommit,
-    merge_base: Option<&GitRevision>,
+    merge_base: Option<GitCommitHash>,
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
     let is_latest = version.is_latest;

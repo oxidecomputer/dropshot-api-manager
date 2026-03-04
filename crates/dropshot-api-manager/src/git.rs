@@ -19,12 +19,6 @@ NewtypeDerefMut! { () pub struct GitRevision(String); }
 NewtypeDisplay! { () pub struct GitRevision(String); }
 NewtypeFrom! { () pub struct GitRevision(String); }
 
-impl From<GitCommitHash> for GitRevision {
-    fn from(hash: GitCommitHash) -> Self {
-        GitRevision::from(hash.to_string())
-    }
-}
-
 /// Given a revision, return its merge base with the current working state.
 ///
 /// If we're in the middle of a merge (MERGE_HEAD exists), we compute merge
@@ -43,7 +37,7 @@ impl From<GitCommitHash> for GitRevision {
 pub fn git_merge_base_head(
     repo_root: &Utf8Path,
     revision: &GitRevision,
-) -> anyhow::Result<GitRevision> {
+) -> anyhow::Result<GitCommitHash> {
     if git_merge_head_exists(repo_root) {
         // We're in a merge. Compute merge bases for both HEAD and MERGE_HEAD.
         let mb_head = git_merge_base(repo_root, "HEAD", revision)?;
@@ -52,7 +46,7 @@ pub fn git_merge_base_head(
         // Use whichever merge base is the descendant (more recent). If mb_head
         // is an ancestor of mb_merge_head, use mb_merge_head (it's newer).
         // Otherwise, use mb_head (either it's newer, or they're parallel).
-        if git_is_ancestor(repo_root, &mb_head, &mb_merge_head)? {
+        if git_is_ancestor(repo_root, mb_head, mb_merge_head)? {
             Ok(mb_merge_head)
         } else {
             Ok(mb_head)
@@ -67,7 +61,7 @@ fn git_merge_base(
     repo_root: &Utf8Path,
     base_ref: &str,
     revision: &GitRevision,
-) -> anyhow::Result<GitRevision> {
+) -> anyhow::Result<GitCommitHash> {
     let mut cmd = git_start(repo_root);
     cmd.arg("merge-base").arg("--all").arg(base_ref).arg(revision.as_str());
     let label = cmd_label(&cmd);
@@ -80,21 +74,23 @@ fn git_merge_base(
             label
         );
     }
-    Ok(GitRevision::from(stdout.to_owned()))
+    stdout.parse().with_context(|| {
+        format!("git merge-base returned invalid commit hash: {:?}", stdout)
+    })
 }
 
 /// Check if `potential_ancestor` is an ancestor of `commit`.
 pub(crate) fn git_is_ancestor(
     repo_root: &Utf8Path,
-    potential_ancestor: &GitRevision,
-    commit: &GitRevision,
+    potential_ancestor: GitCommitHash,
+    commit: GitCommitHash,
 ) -> anyhow::Result<bool> {
     let mut cmd = git_start(repo_root);
     cmd.args([
         "merge-base",
         "--is-ancestor",
-        potential_ancestor.as_str(),
-        commit.as_str(),
+        &potential_ancestor.to_string(),
+        &commit.to_string(),
     ]);
     let output =
         cmd.output().context("running git merge-base --is-ancestor")?;
@@ -108,8 +104,8 @@ pub(crate) fn git_is_ancestor(
             Err(anyhow::anyhow!(
                 "git merge-base --is-ancestor exited with unexpected \
                  code {code} (args: {} {}): {}",
-                potential_ancestor.as_str(),
-                commit.as_str(),
+                potential_ancestor,
+                commit,
                 stderr.trim(),
             ))
         }
@@ -118,8 +114,8 @@ pub(crate) fn git_is_ancestor(
             Err(anyhow::anyhow!(
                 "git merge-base --is-ancestor terminated by signal \
                  (args: {} {}): {}",
-                potential_ancestor.as_str(),
-                commit.as_str(),
+                potential_ancestor,
+                commit,
                 stderr.trim(),
             ))
         }
@@ -137,7 +133,7 @@ fn git_merge_head_exists(repo_root: &Utf8Path) -> bool {
 /// List files recursively under some path `path` in Git revision `revision`.
 pub fn git_ls_tree(
     repo_root: &Utf8Path,
-    revision: &GitRevision,
+    revision: GitCommitHash,
     directory: &Utf8Path,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let mut cmd = git_start(repo_root);
@@ -146,7 +142,7 @@ pub fn git_ls_tree(
         .arg("-z")
         .arg("--name-only")
         .arg("--full-tree")
-        .arg(revision.as_str())
+        .arg(revision.to_string())
         .arg(directory);
     let label = cmd_label(&cmd);
     let stdout = do_run(&mut cmd)?;
@@ -174,7 +170,7 @@ pub fn git_ls_tree(
 /// `revision`.
 pub fn git_show_file(
     repo_root: &Utf8Path,
-    revision: &GitRevision,
+    revision: GitCommitHash,
     path: &Utf8Path,
 ) -> anyhow::Result<Vec<u8>> {
     let mut cmd = git_start(repo_root);
@@ -195,7 +191,7 @@ pub fn git_show_file(
 /// file.
 pub fn git_first_commit_for_file(
     repo_root: &Utf8Path,
-    revision: &GitRevision,
+    revision: GitCommitHash,
     path: &Utf8Path,
 ) -> anyhow::Result<GitCommitHash> {
     // Use --diff-filter=A to find the commit that *added* the file, limiting
@@ -213,7 +209,7 @@ pub fn git_first_commit_for_file(
         .arg("-m")
         .arg("--diff-filter=A")
         .arg("--format=%H")
-        .arg(revision.as_str())
+        .arg(revision.to_string())
         .arg("--")
         .arg(path);
     let stdout = do_run(&mut cmd)?;
