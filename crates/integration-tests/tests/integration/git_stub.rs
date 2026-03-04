@@ -927,8 +927,8 @@ fn test_shallow_clone_without_git_stubs() -> Result<()> {
 /// See [`no_conflict_setup`] for the test scenario.
 #[test]
 fn test_no_merge_conflict() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = no_conflict_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = no_conflict_setup(&mut env)?;
 
     env.merge_branch_without_renames("branch_a")?;
 
@@ -942,8 +942,8 @@ fn test_no_merge_conflict() -> Result<()> {
 /// [`no_conflict_setup`] for the test scenario.
 #[test]
 fn test_no_rebase_conflict() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = no_conflict_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = no_conflict_setup(&mut env)?;
 
     env.checkout_branch("branch_a")?;
     let rebase_result = env.try_rebase_onto("branch_b")?;
@@ -967,8 +967,8 @@ fn test_jj_no_merge_conflict() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = no_conflict_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = no_conflict_setup(&mut env)?;
     env.jj_init()?;
 
     let merge_result = env.jj_try_merge("branch_a", "branch_b", "merge")?;
@@ -992,8 +992,8 @@ fn test_jj_no_rebase_conflict() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = no_conflict_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = no_conflict_setup(&mut env)?;
     env.jj_init()?;
 
     let rebase_result = env.jj_try_rebase("branch_a", "branch_b")?;
@@ -1030,7 +1030,7 @@ fn test_jj_no_rebase_conflict() -> Result<()> {
 ///
 /// Returns the commit hash where v1/v2 were added. Leaves the environment on
 /// branch_b.
-fn no_conflict_setup(env: &TestEnvironment) -> Result<String> {
+fn no_conflict_setup(env: &mut TestEnvironment) -> Result<String> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
     env.commit_documents()?;
@@ -1132,8 +1132,9 @@ fn no_conflict_verify(env: &TestEnvironment, v1_v2_commit: &str) -> Result<()> {
 /// See [`rename_conflict_v3_v4_setup`] for the test scenario.
 #[test]
 fn test_rename_conflict_resolved_by_generate() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let (v1_v2_commit, expected_conflicts) = rename_conflict_v3_v4_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let (v1_v2_commit, expected_conflicts) =
+        rename_conflict_v3_v4_setup(&mut env)?;
 
     let merge_result = env.try_merge_branch("branch_a")?;
     let MergeResult::Conflict(conflicted_files) = merge_result else {
@@ -1159,8 +1160,9 @@ fn test_rename_conflict_resolved_by_generate() -> Result<()> {
 /// See [`rename_conflict_v3_v4_setup`] for the test scenario.
 #[test]
 fn test_rebase_rename_conflict_resolved_by_generate() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let (v1_v2_commit, expected_conflicts) = rename_conflict_v3_v4_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let (v1_v2_commit, expected_conflicts) =
+        rename_conflict_v3_v4_setup(&mut env)?;
 
     env.checkout_branch("branch_a")?;
     let rebase_result = env.try_rebase_onto("branch_b")?;
@@ -1195,8 +1197,9 @@ fn test_jj_symlink_conflict_v3_v4_merge() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    let (v1_v2_commit, expected_conflicts) = rename_conflict_v3_v4_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let (v1_v2_commit, expected_conflicts) =
+        rename_conflict_v3_v4_setup(&mut env)?;
     env.jj_init()?;
 
     let merge_result = env.jj_try_merge("branch_a", "branch_b", "merge")?;
@@ -1225,8 +1228,9 @@ fn test_jj_symlink_conflict_v3_v4_rebase() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    let (v1_v2_commit, expected_conflicts) = rename_conflict_v3_v4_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let (v1_v2_commit, expected_conflicts) =
+        rename_conflict_v3_v4_setup(&mut env)?;
     env.jj_init()?;
 
     let rebase_result = env.jj_try_rebase("branch_a", "branch_b")?;
@@ -1270,7 +1274,7 @@ fn test_jj_symlink_conflict_v3_v4_rebase() -> Result<()> {
 /// Returns the commit hash where v1/v2 were added and the expected conflicted
 /// files with their conflict kinds. Leaves the environment on branch_b.
 fn rename_conflict_v3_v4_setup(
-    env: &TestEnvironment,
+    env: &mut TestEnvironment,
 ) -> Result<(String, ExpectedConflicts)> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
@@ -1374,9 +1378,9 @@ fn rename_conflict_v3_v4_verify(
 /// See [`rename_conflict_blessed_setup`] for the test scenario.
 #[test]
 fn test_rename_conflict_blessed_versions() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_conflicts) =
-        rename_conflict_blessed_setup(&env)?;
+        rename_conflict_blessed_setup(&mut env)?;
 
     let merge_result = env.try_merge_branch("main")?;
     let MergeResult::Conflict(conflicted_files) = merge_result else {
@@ -1406,9 +1410,9 @@ fn test_rename_conflict_blessed_versions() -> Result<()> {
 /// See [`rename_conflict_blessed_setup`] for the test scenario.
 #[test]
 fn test_rebase_rename_conflict_blessed_versions() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_conflicts) =
-        rename_conflict_blessed_setup(&env)?;
+        rename_conflict_blessed_setup(&mut env)?;
 
     let rebase_result = env.try_rebase_onto("main")?;
     let RebaseResult::Conflict(conflicted_files) = rebase_result else {
@@ -1445,9 +1449,9 @@ fn test_jj_symlink_conflict_blessed_merge() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_conflicts) =
-        rename_conflict_blessed_setup(&env)?;
+        rename_conflict_blessed_setup(&mut env)?;
     env.jj_init()?;
 
     let merge_result = env.jj_try_merge("main", "branch_b", "merge")?;
@@ -1477,9 +1481,9 @@ fn test_jj_symlink_conflict_blessed_rebase() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_conflicts) =
-        rename_conflict_blessed_setup(&env)?;
+        rename_conflict_blessed_setup(&mut env)?;
     env.jj_init()?;
 
     let rebase_result = env.jj_try_rebase("branch_b", "main")?;
@@ -1509,9 +1513,9 @@ fn test_jj_symlink_conflict_blessed_rebase() -> Result<()> {
 /// See [`rename_conflict_blessed_setup`] for the test scenario.
 #[test]
 fn test_rename_conflict_blessed_versions_main_first() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_conflicts) =
-        rename_conflict_blessed_setup(&env)?;
+        rename_conflict_blessed_setup(&mut env)?;
 
     // Setup leaves us on branch_b. Switch to main and merge branch_b into it.
     env.checkout_branch("main")?;
@@ -1568,7 +1572,7 @@ fn test_rename_conflict_blessed_versions_main_first() -> Result<()> {
 /// Returns the commit hash where v1/v2 were added and the expected conflicted
 /// files with their conflict kinds. Leaves the environment on branch_b.
 fn rename_conflict_blessed_setup(
-    env: &TestEnvironment,
+    env: &mut TestEnvironment,
 ) -> Result<(String, ExpectedConflicts)> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
@@ -1957,8 +1961,8 @@ fn test_unresolvable_git_stub_regenerated() -> Result<()> {
 /// See [`dependent_branch_setup`] for the test scenario.
 #[test]
 fn test_dependent_branch_merge() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = dependent_branch_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&mut env)?;
 
     // Merge branch_a into main first.
     env.checkout_branch("main")?;
@@ -1996,8 +2000,8 @@ fn test_dependent_branch_merge() -> Result<()> {
 /// [`dependent_branch_setup`] for the test scenario.
 #[test]
 fn test_dependent_branch_rebase() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = dependent_branch_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&mut env)?;
 
     // Merge branch_a into main first.
     env.checkout_branch("main")?;
@@ -2039,8 +2043,8 @@ fn test_jj_dependent_branch_merge() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = dependent_branch_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&mut env)?;
     env.jj_init()?;
 
     // Create a merge of branch_a into main using jj.
@@ -2088,8 +2092,8 @@ fn test_jj_dependent_branch_rebase() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    let v1_v2_commit = dependent_branch_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    let v1_v2_commit = dependent_branch_setup(&mut env)?;
     env.jj_init()?;
 
     // First, rebase branch_a onto main (this should be clean since branch_a is
@@ -2149,7 +2153,7 @@ fn test_jj_dependent_branch_rebase() -> Result<()> {
 ///
 /// Returns the commit hash where v1/v2 were added. Leaves the environment on
 /// branch_b.
-fn dependent_branch_setup(env: &TestEnvironment) -> Result<String> {
+fn dependent_branch_setup(env: &mut TestEnvironment) -> Result<String> {
     // Step 1: Create v1, v2 on main.
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
@@ -2353,9 +2357,9 @@ fn dependent_branch_after_generate_verify(
 /// See [`successive_changes_setup`] for the scenario.
 #[test]
 fn test_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_first_conflicts, expected_second_conflicts) =
-        successive_changes_setup(&env)?;
+        successive_changes_setup(&mut env)?;
 
     let rebase_result = env.try_rebase_onto("main")?;
     let RebaseResult::Conflict(conflicted_files) = rebase_result else {
@@ -2396,9 +2400,9 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (v1_v2_commit, expected_first_conflicts, expected_second_conflicts) =
-        successive_changes_setup(&env)?;
+        successive_changes_setup(&mut env)?;
     env.jj_init()?;
 
     let rebase_result = env.jj_try_rebase("feature", "main")?;
@@ -2433,7 +2437,7 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version() -> Result<()> {
 ///                          (v1,v2 -> gitstub)
 /// ```
 fn successive_changes_setup(
-    env: &TestEnvironment,
+    env: &mut TestEnvironment,
 ) -> Result<(String, ExpectedConflicts, ExpectedConflicts)> {
     let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
     env.generate_documents(&v1_v2_apis)?;
@@ -2547,7 +2551,7 @@ fn successive_changes_verify(
 /// what happens after a rebase.
 #[test]
 fn test_stale_git_stub_commit() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
 
     // Step 1: generate v1-v3 and commit them.
     let v1_v2_v3 = versioned_health_git_stub_apis()?;
@@ -2656,7 +2660,7 @@ fn test_stale_git_stub_commit() -> Result<()> {
 /// problems should be fixed in a single `generate` invocation.
 #[test]
 fn test_stale_git_stub_commit_with_duplicate() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
 
     // Set up v1-v3, then create a divergent branch for the stale commit.
     let v1_v2_v3 = versioned_health_git_stub_apis()?;
@@ -2819,7 +2823,7 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
 /// non-latest blessed version with Git stub storage enabled.
 #[test]
 fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
 
     // Step 1: Generate and commit v1 and v2 on main.
     let v2_apis = versioned_health_reduced_git_stub_apis()?;
@@ -2936,7 +2940,7 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
 ///
 /// Returns the environment positioned on `feature2`.
 fn blessed_version_missing_local_git_stub_setup(
-    env: &TestEnvironment,
+    env: &mut TestEnvironment,
 ) -> Result<()> {
     let v2_apis = versioned_health_reduced_git_stub_apis()?;
     let v3_apis = versioned_health_git_stub_apis()?;
@@ -3034,8 +3038,8 @@ fn blessed_version_missing_local_git_stub_verify(
 /// Rebase test: blessed version missing local with Git stub storage.
 #[test]
 fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_git_stub_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&mut env)?;
 
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
@@ -3054,8 +3058,8 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
 /// Merge test: blessed version missing local with Git stub storage.
 #[test]
 fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_git_stub_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&mut env)?;
 
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
@@ -3078,8 +3082,8 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_git_stub_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&mut env)?;
     env.jj_init()?;
 
     let v4_trivial_apis =
@@ -3105,8 +3109,8 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_git_stub_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_git_stub_setup(&mut env)?;
     env.jj_init()?;
 
     let v4_trivial_apis =

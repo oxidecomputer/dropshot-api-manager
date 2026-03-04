@@ -585,7 +585,7 @@ impl TestEnvironment {
     }
 
     /// Checkout a branch.
-    pub fn checkout_branch(&self, name: &str) -> Result<()> {
+    pub fn checkout_branch(&mut self, name: &str) -> Result<()> {
         Self::run_git_command(&self.workspace_root, &["checkout", name])?;
         Ok(())
     }
