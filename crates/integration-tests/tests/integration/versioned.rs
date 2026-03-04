@@ -1068,9 +1068,9 @@ fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
 #[test]
 fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
 {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (expected_first_conflicts, expected_second_conflicts) =
-        successive_changes_concrete_setup(&env)?;
+        successive_changes_concrete_setup(&mut env)?;
 
     let rebase_result = env.try_rebase_onto("main")?;
     let RebaseResult::Conflict(conflicted_files) = rebase_result else {
@@ -1111,7 +1111,7 @@ fn test_rebase_successive_changes_to_nonblessed_version_concrete() -> Result<()>
 ///             feature: [add v3 alt-1] -- [v3 alt-1 -> alt-2]
 /// ```
 fn successive_changes_concrete_setup(
-    env: &TestEnvironment,
+    env: &mut TestEnvironment,
 ) -> Result<(ExpectedConflicts, ExpectedConflicts)> {
     let v1_v2_apis =
         versioned_health_reduced_apis_with_storage(Storage::Concrete)?;
@@ -1205,9 +1205,9 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let (expected_first_conflicts, expected_second_conflicts) =
-        successive_changes_concrete_setup(&env)?;
+        successive_changes_concrete_setup(&mut env)?;
     env.jj_init()?;
 
     let rebase_result = env.jj_try_rebase("feature", "main")?;
@@ -1241,7 +1241,7 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
 /// Direct test: verify that `BlessedVersionMissingLocal` is fixable.
 #[test]
 fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
-    let env = TestEnvironment::new()?;
+    let mut env = TestEnvironment::new()?;
     let v3_apis = versioned_health_apis()?;
 
     // Generate and commit v1,v2,v3 on main. This makes v3 blessed.
@@ -1332,7 +1332,9 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
 /// ```
 ///
 /// Returns the environment positioned on `feature2`.
-fn blessed_version_missing_local_setup(env: &TestEnvironment) -> Result<()> {
+fn blessed_version_missing_local_setup(
+    env: &mut TestEnvironment,
+) -> Result<()> {
     let v2_apis = versioned_health_reduced_apis()?;
     let v3_apis = versioned_health_apis()?;
     let v4_trivial_apis =
@@ -1402,8 +1404,8 @@ fn blessed_version_missing_local_verify(env: &TestEnvironment) -> Result<()> {
 /// its place. The tool should detect this as fixable and restore it.
 #[test]
 fn test_rebase_blessed_version_missing_local() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&mut env)?;
 
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
@@ -1422,8 +1424,8 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
 /// Merge test: dependent-PR scenario with trivial changes + git merge.
 #[test]
 fn test_merge_blessed_version_missing_local() -> Result<()> {
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&mut env)?;
 
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
@@ -1446,8 +1448,8 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&mut env)?;
     env.jj_init()?;
 
     let v4_trivial_apis =
@@ -1473,8 +1475,8 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
         return Ok(());
     }
 
-    let env = TestEnvironment::new()?;
-    blessed_version_missing_local_setup(&env)?;
+    let mut env = TestEnvironment::new()?;
+    blessed_version_missing_local_setup(&mut env)?;
     env.jj_init()?;
 
     let v4_trivial_apis =
