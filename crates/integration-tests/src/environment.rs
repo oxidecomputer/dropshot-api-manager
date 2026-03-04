@@ -3,7 +3,6 @@
 //! Test environment infrastructure for integration tests.
 
 use anyhow::{Context, Result, anyhow};
-use atomicwrites::AtomicFile;
 use camino::{Utf8Path, Utf8PathBuf};
 use camino_tempfile::Utf8TempDir;
 use camino_tempfile_ext::{fixture::ChildPath, prelude::*};
@@ -14,7 +13,6 @@ use git_stub_vcs::Vcs;
 use std::{
     collections::BTreeSet,
     fs,
-    io::Write,
     process::{Command, ExitCode, ExitStatus},
 };
 
@@ -517,18 +515,9 @@ impl TestEnvironment {
     /// Make an unrelated commit (useful for advancing HEAD without changing
     /// API documents).
     pub fn make_unrelated_commit(&self, message: &str) -> Result<()> {
-        // Create or update a dummy file.
-        let dummy_path = self.workspace_root.join("dummy.txt");
-        let content = format!("{}\n{}\n", message, chrono::Utc::now());
-        AtomicFile::new(
-            &dummy_path,
-            atomicwrites::OverwriteBehavior::AllowOverwrite,
-        )
-        .write(|f| f.write_all(content.as_bytes()))?;
-        Self::run_git_command(&self.workspace_root, &["add", "dummy.txt"])?;
         Self::run_git_command(
             &self.workspace_root,
-            &["commit", "-m", message],
+            &["commit", "--allow-empty", "-m", message],
         )?;
         Ok(())
     }
@@ -807,6 +796,30 @@ impl TestEnvironment {
         Ok(output.status)
     }
 
+    /// Helper to run jj commands in a directory.
+    fn run_jj_command(cwd: &Utf8Path, args: &[&str]) -> Result<String> {
+        let jj = std::env::var("JJ").unwrap_or_else(|_| "jj".to_string());
+        let output = Command::new(&jj)
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .context("failed to execute jj command")?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "jj command failed: jj {}\nstdout: {}\nstderr: {}",
+                args.join(" "),
+                stdout,
+                stderr
+            ));
+        }
+
+        String::from_utf8(output.stdout)
+            .context("jj command output was not valid UTF-8")
+    }
+
     /// List all files in the documents directory.
     pub fn list_document_files(&self) -> Result<Vec<Utf8PathBuf>> {
         let mut files = Vec::new();
@@ -858,7 +871,10 @@ impl TestEnvironment {
 
     /// Initialize jj in the existing git repository (colocated mode).
     pub fn jj_init(&self) -> Result<()> {
-        self.run_jj_command(&["git", "init", "--colocate"])?;
+        Self::run_jj_command(
+            &self.workspace_root,
+            &["git", "init", "--colocate"],
+        )?;
         Ok(())
     }
 
@@ -874,7 +890,10 @@ impl TestEnvironment {
         message: &str,
     ) -> Result<JjMergeResult> {
         // Create a merge commit with jj new.
-        self.run_jj_command(&["new", branch1, branch2, "-m", message])?;
+        Self::run_jj_command(
+            &self.workspace_root,
+            &["new", branch1, branch2, "-m", message],
+        )?;
 
         // Check if the resulting commit has conflicts.
         if self.jj_has_conflicts("@")? {
@@ -897,7 +916,10 @@ impl TestEnvironment {
         dest: &str,
     ) -> Result<JjRebaseResult> {
         // Rebase the entire branch from common ancestor onto dest.
-        self.run_jj_command(&["rebase", "-b", branch, "-d", dest])?;
+        Self::run_jj_command(
+            &self.workspace_root,
+            &["rebase", "-b", branch, "-d", dest],
+        )?;
 
         // Check if the rebased tip has conflicts.
         if self.jj_has_conflicts(branch)? {
@@ -916,7 +938,10 @@ impl TestEnvironment {
     /// 3. Verifies the result has no conflicts
     pub fn jj_resolve_conflicts(&self, apis: &ManagedApis) -> Result<()> {
         self.generate_documents(apis)?;
-        self.run_jj_command(&["commit", "-m", "resolve conflicts"])?;
+        Self::run_jj_command(
+            &self.workspace_root,
+            &["commit", "-m", "resolve conflicts"],
+        )?;
 
         // Verify the parent commit (the resolved merge/rebase) has no conflicts.
         if self.jj_has_conflicts("@-")? {
@@ -930,20 +955,19 @@ impl TestEnvironment {
 
     /// Check if a jj revision has conflicts.
     fn jj_has_conflicts(&self, rev: &str) -> Result<bool> {
-        let output = self.run_jj_command(&[
-            "log",
-            "-r",
-            rev,
-            "-T",
-            "conflict",
-            "--no-graph",
-        ])?;
+        let output = Self::run_jj_command(
+            &self.workspace_root,
+            &["log", "-r", rev, "-T", "conflict", "--no-graph"],
+        )?;
         Ok(output.trim() == "true")
     }
 
     /// Set a jj bookmark to a specific revision.
     pub fn jj_set_bookmark(&self, name: &str, rev: &str) -> Result<()> {
-        self.run_jj_command(&["bookmark", "set", name, "-r", rev])?;
+        Self::run_jj_command(
+            &self.workspace_root,
+            &["bookmark", "set", name, "-r", rev],
+        )?;
         Ok(())
     }
 
@@ -951,7 +975,7 @@ impl TestEnvironment {
     ///
     /// This is equivalent to `jj new -r <rev>`.
     pub fn jj_new(&self, rev: &str) -> Result<()> {
-        self.run_jj_command(&["new", "-r", rev])?;
+        Self::run_jj_command(&self.workspace_root, &["new", "-r", rev])?;
         Ok(())
     }
 
@@ -959,7 +983,7 @@ impl TestEnvironment {
     ///
     /// This is equivalent to `jj squash`.
     pub fn jj_squash(&self) -> Result<()> {
-        self.run_jj_command(&["squash"])?;
+        Self::run_jj_command(&self.workspace_root, &["squash"])?;
         Ok(())
     }
 
@@ -982,7 +1006,10 @@ impl TestEnvironment {
             return Ok(BTreeSet::new());
         }
 
-        let output = self.run_jj_command(&["resolve", "--list", "-r", rev])?;
+        let output = Self::run_jj_command(
+            &self.workspace_root,
+            &["resolve", "--list", "-r", rev],
+        )?;
 
         let mut conflicts = BTreeSet::new();
         for line in output.lines() {
@@ -1020,30 +1047,6 @@ impl TestEnvironment {
         }
 
         Ok(())
-    }
-
-    /// Helper to run jj commands in the workspace root.
-    fn run_jj_command(&self, args: &[&str]) -> Result<String> {
-        let jj = std::env::var("JJ").unwrap_or_else(|_| "jj".to_string());
-        let output = Command::new(&jj)
-            .current_dir(&self.workspace_root)
-            .args(args)
-            .output()
-            .context("failed to execute jj command")?;
-
-        if !output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!(
-                "jj command failed: jj {}\nstdout: {}\nstderr: {}",
-                args.join(" "),
-                stdout,
-                stderr
-            ));
-        }
-
-        String::from_utf8(output.stdout)
-            .context("jj command output was not valid UTF-8")
     }
 }
 
