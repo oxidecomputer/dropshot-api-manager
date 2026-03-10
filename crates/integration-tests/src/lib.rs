@@ -8,7 +8,7 @@ mod fixtures;
 use camino::Utf8PathBuf;
 pub use environment::{
     JjMergeResult, JjRebaseResult, MergeResult, RebaseResult, TestEnvironment,
-    check_jj_available, rel_path_forward_slashes,
+    VcsMode, check_jj_available, rel_path_forward_slashes,
 };
 pub use fixtures::*;
 use std::collections::{BTreeMap, BTreeSet};

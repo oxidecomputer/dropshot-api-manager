@@ -45,7 +45,7 @@ fn check_apis_impl(
     let env = env.resolve(None)?;
 
     let blessed_source = BlessedSourceArgs {
-        blessed_from_git: None,
+        blessed_from_vcs: None,
         blessed_from_vcs_path: None,
         blessed_from_dir: None,
     }

@@ -305,8 +305,8 @@ pub struct ManagedApis {
     validation: Option<Box<DynValidationFn>>,
 
     /// If true, store non-latest blessed API versions as Git stubs instead
-    /// of full JSON files. This saves disk space but requires git access to
-    /// read the contents.
+    /// of full JSON files. This saves disk space but requires VCS access
+    /// (Git or Jujutsu) to read the contents.
     ///
     /// The default is false.
     use_git_stub_storage: bool,

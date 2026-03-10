@@ -4,15 +4,14 @@
 //! repository
 
 use crate::{apis::ManagedApis, environment::ErrorAccumulator};
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
 use dropshot_api_manager_types::{
     ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
     VersionedApiSpecFileName, VersionedApiSpecKind,
 };
-use git_stub::{GitCommitHash, GitStub};
-use git_stub_vcs::Vcs;
+use git_stub::GitCommitHash;
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
 use std::{
@@ -41,15 +40,6 @@ pub struct UnparseableFile {
     /// The path to the file on disk, relative to the OpenAPI documents
     /// directory.
     pub path: Utf8PathBuf,
-}
-
-/// Resolve a parsed [`GitStub`] to its JSON document contents.
-pub(crate) fn resolve_git_stub_contents(
-    git_stub: &GitStub,
-    repo_root: &Utf8Path,
-) -> anyhow::Result<Vec<u8>> {
-    let vcs = Vcs::git().context("initializing Git VCS")?;
-    Ok(vcs.read_git_stub_contents(git_stub, repo_root)?)
 }
 
 /// Attempts to parse the given file basename as a `VersionedApiSpecFileName`.
