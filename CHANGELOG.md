@@ -3,6 +3,15 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+The Dropshot API manager now works in non-colocated Jujutsu repositories, for example [Jujutsu workspaces](https://docs.jj-vcs.dev/latest/working-copy/#workspaces).
+
+### Changed
+
+- The `--blessed-from-git` command-line option has been renamed to `--blessed-from-vcs`, and in Jujutsu repos it now accepts Jujutsu revsets. (The old name, as well as the old `OPENAPI_MGR_BLESSED_FROM_GIT` environment variable, are still supported for backwards compatibility.)
+- The `--blessed-from-vcs` command-line argument's `REVISION:PATH` format has been split into `--blessed-from-vcs` and `--blessed-from-vcs-path`. This change was made so `REVISION` could be a Jujutsu revset. Revsets often have embedded colons.
+
 ## [0.5.2] - 2026-02-28
 
 ### Changed
