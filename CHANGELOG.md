@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.6.0] - 2026-03-10
+
 ### Added
 
 The Dropshot API manager now works in non-colocated Jujutsu repositories, for example [Jujutsu workspaces](https://docs.jj-vcs.dev/latest/working-copy/#workspaces).
@@ -118,6 +120,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.6.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.6.0
 [0.5.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.2
 [0.5.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.1
 [0.5.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.5.0
