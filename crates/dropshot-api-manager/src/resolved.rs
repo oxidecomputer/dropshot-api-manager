@@ -1712,17 +1712,6 @@ fn resolve_api_version_blessed<'a>(
                 git_stub: None,
             });
         }
-
-        // Report non-matching local files as extra.
-        problems.extend(non_matching.into_iter().map(|s| {
-            Problem::BlessedVersionExtraLocalSpec {
-                spec_file_name: s
-                    .spec_file_name()
-                    .as_versioned()
-                    .expect("blessed extra spec is versioned")
-                    .clone(),
-            }
-        }));
     } else if !use_git_stub_storage || is_latest {
         // Fast path: Git stub storage disabled or this is the latest version.
         // We know we always want JSON in this case, so we can avoid computing
@@ -1756,16 +1745,6 @@ fn resolve_api_version_blessed<'a>(
                     .push(Problem::GitStubShouldBeJson { local_file, blessed });
             }
         }
-
-        problems.extend(non_matching.into_iter().map(|s| {
-            Problem::BlessedVersionExtraLocalSpec {
-                spec_file_name: s
-                    .spec_file_name()
-                    .as_versioned()
-                    .expect("blessed extra spec is versioned")
-                    .clone(),
-            }
-        }));
     } else {
         // Slow path: Git stub storage enabled and not latest. Compute what
         // storage format this version should use.
@@ -1876,17 +1855,18 @@ fn resolve_api_version_blessed<'a>(
                 }
             }
         }
-
-        problems.extend(non_matching.into_iter().map(|s| {
-            Problem::BlessedVersionExtraLocalSpec {
-                spec_file_name: s
-                    .spec_file_name()
-                    .as_versioned()
-                    .expect("blessed extra spec is versioned")
-                    .clone(),
-            }
-        }));
     }
+
+    // Report non-matching local files as extra.
+    problems.extend(non_matching.into_iter().map(|s| {
+        Problem::BlessedVersionExtraLocalSpec {
+            spec_file_name: s
+                .spec_file_name()
+                .as_versioned()
+                .expect("blessed extra spec is versioned")
+                .clone(),
+        }
+    }));
 
     Resolution::new_blessed(problems)
 }
