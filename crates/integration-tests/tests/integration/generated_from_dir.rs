@@ -5,7 +5,9 @@
 use anyhow::Result;
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use dropshot_api_manager::test_util::{
-    CheckResult, check_apis_up_to_date, check_apis_with_generated_from_dir,
+    CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
+    check_apis_with_generated_from_dir,
+    check_apis_with_generated_from_dir_and_summaries,
 };
 use integration_tests::*;
 use std::io::Write;
@@ -32,12 +34,32 @@ fn test_generated_from_empty_dir_does_not_panic() -> Result<()> {
 
     // The missing API should be reported as an unfixable problem, not a
     // panic.
-    let result = check_apis_with_generated_from_dir(
+    let (result, summaries) = check_apis_with_generated_from_dir_and_summaries(
         env.environment(),
         &apis,
         empty_dir,
     )?;
     assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        vec![
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+        ],
+    );
     Ok(())
 }
 
@@ -58,12 +80,52 @@ fn test_generated_from_partial_dir_does_not_panic() -> Result<()> {
 
     // The versioned APIs have no generated source, so they should be
     // reported as failures.
-    let result = check_apis_with_generated_from_dir(
+    let (result, summaries) = check_apis_with_generated_from_dir_and_summaries(
         env.environment(),
         &apis,
         partial_dir,
     )?;
     assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        vec![
+            ProblemSummary::new(
+                "counter",
+                "1.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "1.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "2.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "3.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+        ],
+    );
     Ok(())
 }
 
@@ -105,12 +167,32 @@ fn test_generated_from_dir_partial_versions() -> Result<()> {
 
     // Should not panic. Some versions are missing, so the result should
     // be Failures.
-    let result = check_apis_with_generated_from_dir(
+    let (result, summaries) = check_apis_with_generated_from_dir_and_summaries(
         env.environment(),
         &apis_v4,
         gen_dir,
     )?;
     assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        vec![
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GeneratedSourceMissing,
+            ),
+        ],
+    );
     Ok(())
 }
 

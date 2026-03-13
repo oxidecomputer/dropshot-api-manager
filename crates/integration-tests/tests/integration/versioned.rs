@@ -8,7 +8,10 @@
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
-use dropshot_api_manager::test_util::{CheckResult, check_apis_up_to_date};
+use dropshot_api_manager::test_util::{
+    CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
+    check_apis_with_summaries,
+};
 use integration_tests::*;
 use openapiv3::OpenAPI;
 use semver::Version;
@@ -279,8 +282,33 @@ fn blessed_document_lifecycle_impl(env: &TestEnvironment) -> Result<()> {
     let apis = versioned_health_apis()?;
 
     // Initially, APIs should fail the up-to-date check (no documents exist).
-    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkMissing,
+            ),
+        ],
+    );
 
     // Generate the documents.
     env.generate_documents(&apis)?;
@@ -321,8 +349,17 @@ fn test_blessed_api_trivial_changes_fail_for_latest() -> Result<()> {
     // The check should FAIL because the latest version (v3.0.0) has trivial
     // changes that are semantically equivalent but bytewise different. This
     // requires a version bump to make the changes visible in PR review.
-    let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &modified_apis)?;
     assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "3.0.0",
+            ProblemKind::BlessedLatestVersionBytewiseMismatch,
+        )],
+    );
 
     Ok(())
 }
@@ -375,8 +412,23 @@ fn test_blessed_api_trivial_changes_pass_for_older_versions() -> Result<()> {
     // version that needs to be generated. Importantly, v1-v3 should pass
     // despite having trivial changes because they're now older versions
     // (semantic equality only).
-    let result = check_apis_up_to_date(env.environment(), &modified_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &modified_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "4.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     // Generate the new v4 document.
     env.generate_documents(&modified_apis)?;
@@ -399,8 +451,52 @@ fn test_mixed_blessed_document_states() -> Result<()> {
     let combined_apis = multi_versioned_apis()?;
 
     // Initially, combined APIs should need update.
-    let result = check_apis_up_to_date(env.environment(), &combined_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &combined_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkMissing,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "1.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "2.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "3.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-user",
+                ProblemKind::LatestLinkMissing,
+            ),
+        ],
+    );
 
     // Generate only health API documents first.
     let health_apis = versioned_health_apis()?;
@@ -408,8 +504,33 @@ fn test_mixed_blessed_document_states() -> Result<()> {
     env.commit_documents()?;
 
     // Combined APIs should still need update (user API missing).
-    let result = check_apis_up_to_date(env.environment(), &combined_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &combined_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-user",
+                "1.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "2.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-user",
+                "3.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-user",
+                ProblemKind::LatestLinkMissing,
+            ),
+        ],
+    );
 
     // Generate and commit all APIs documents.
     env.generate_documents(&combined_apis)?;
@@ -459,8 +580,23 @@ fn test_removing_api_version_fails_check() -> Result<()> {
     let reduced_apis = versioned_health_reduced_apis()?;
 
     // The check should result in NeedsUpdate when versions are removed.
-    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &reduced_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalSpecFileOrphaned,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     Ok(())
 }
@@ -483,8 +619,23 @@ fn test_adding_new_api_version_passes_check() -> Result<()> {
     let expanded_apis = versioned_health_apis()?;
 
     // Adding versions should require update (new documents to generate).
-    let result = check_apis_up_to_date(env.environment(), &expanded_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &expanded_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     // Generate the new versions.
     env.generate_documents(&expanded_apis)?;
@@ -541,8 +692,23 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
 
     // This check should return NeedsUpdate because the v3.0.0 document exists
     // and needs to be removed.
-    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &reduced_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalSpecFileOrphaned,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     // Generate documents with the retired version.
     env.generate_documents(&reduced_apis)?;
@@ -589,8 +755,16 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
 
     // Delete the latest symlink and ensure that we need to perform updates.
     env.delete_versioned_latest_symlink("versioned-health")?;
-    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &reduced_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::for_api(
+            "versioned-health",
+            ProblemKind::LatestLinkMissing,
+        )],
+    );
 
     // Regenerate documents (i.e. the symlink) and retry.
     env.generate_documents(&reduced_apis)?;
@@ -606,8 +780,23 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
 
     // Verify we can no longer use the old full API against the new blessed
     // documents.
-    let result = check_apis_up_to_date(env.environment(), &full_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &full_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     Ok(())
 }
@@ -656,8 +845,17 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 
     // This check should return NeedsUpdate because the v2.0.0 document exists
     // and needs to be removed.
-    let result = check_apis_up_to_date(env.environment(), &skip_middle_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &skip_middle_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "2.0.0",
+            ProblemKind::LocalSpecFileOrphaned,
+        )],
+    );
 
     // Generate documents with the retired older version.
     env.generate_documents(&skip_middle_apis)?;
@@ -704,8 +902,16 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 
     // Delete the latest symlink and ensure that we need to perform updates.
     env.delete_versioned_latest_symlink("versioned-health")?;
-    let result = check_apis_up_to_date(env.environment(), &skip_middle_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &skip_middle_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::for_api(
+            "versioned-health",
+            ProblemKind::LatestLinkMissing,
+        )],
+    );
 
     // Regenerate documents (i.e. the symlink) and retry.
     env.generate_documents(&skip_middle_apis)?;
@@ -721,8 +927,17 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 
     // Verify we can no longer use the old full API against the new blessed
     // documents.
-    let result = check_apis_up_to_date(env.environment(), &full_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &full_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "2.0.0",
+            ProblemKind::LocalVersionMissingLocal,
+        )],
+    );
 
     Ok(())
 }
@@ -770,8 +985,17 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
     let incompatible_apis = versioned_health_incompat_apis()?;
 
     // This check should return Failures.
-    let result = check_apis_up_to_date(env.environment(), &incompatible_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &incompatible_apis)?;
     assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "3.0.0",
+            ProblemKind::BlessedVersionBroken,
+        )],
+    );
 
     Ok(())
 }
@@ -825,8 +1049,17 @@ fn test_blessed_version_extra_local_spec() -> Result<()> {
         .with_context(|| format!("failed to copy {} to {}", src, dst))?;
     assert!(dst.exists(), "destination path {dst} exists");
 
-    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "3.0.0",
+            ProblemKind::BlessedVersionExtraLocalSpec,
+        )],
+    );
 
     // Regenerating documents should remove the file.
     env.generate_documents(&apis)?;
@@ -1035,11 +1268,19 @@ fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
 
     // The check should not panic. It should report that updates are needed
     // (because the "latest" symlink is effectively missing/malformed).
-    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "malformed symlink should be detected as needing update"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::for_api(
+            "versioned-health",
+            ProblemKind::LatestLinkMissing,
+        )],
     );
 
     // Generate should fix the symlink.
@@ -1263,8 +1504,17 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
         std::fs::remove_file(env.workspace_root().join(&v3_blessed_path))
             .context("failed to delete blessed v3 file")?;
 
-        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        let (result, summaries) =
+            check_apis_with_summaries(env.environment(), &v3_apis)?;
         assert_eq!(result, CheckResult::NeedsUpdate);
+        assert_eq!(
+            summaries,
+            [ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            )],
+        );
 
         env.generate_documents(&v3_apis)?;
 
@@ -1294,8 +1544,28 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
 
     // Check should report NeedsUpdate (not Failure).
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "4.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     // Generate should restore the blessed v3 and create a v4.
     env.generate_documents(&v4_trivial_apis)?;
@@ -1411,8 +1681,24 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
     let rebase_result = env.try_rebase_onto("main")?;
     assert_eq!(rebase_result, RebaseResult::Clean);
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
@@ -1431,8 +1717,24 @@ fn test_merge_blessed_version_missing_local() -> Result<()> {
     let merge_result = env.try_merge_branch("main")?;
     assert_eq!(merge_result, MergeResult::Clean);
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
@@ -1457,8 +1759,24 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
 
     env.jj_new("feature2")?;
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
@@ -1482,8 +1800,24 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
         env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
     assert_eq!(merge_result, JjMergeResult::Clean);
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 

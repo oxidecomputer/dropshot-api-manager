@@ -3,14 +3,17 @@
 //! Test utilities for the Dropshot API manager.
 
 pub use crate::output::CheckResult;
+#[doc(hidden)]
+pub use crate::resolved::{ProblemKind, ProblemSummary};
 use crate::{
     apis::ManagedApis,
     cmd::{
-        check::check_impl,
+        check::check_impl_with_summaries,
         dispatch::{BlessedSourceArgs, GeneratedSourceArgs},
     },
     environment::{Environment, GeneratedSource},
     output::OutputOpts,
+    resolved,
 };
 use camino::Utf8PathBuf;
 
@@ -21,7 +24,8 @@ pub fn check_apis_up_to_date(
     env: &Environment,
     apis: &ManagedApis,
 ) -> Result<CheckResult, anyhow::Error> {
-    check_apis_impl(env, apis, None)
+    let (result, _summaries) = check_apis_with_summaries(env, apis)?;
+    Ok(result)
 }
 
 /// Check that a set of APIs is up-to-date, loading generated documents from
@@ -31,28 +35,78 @@ pub fn check_apis_with_generated_from_dir(
     apis: &ManagedApis,
     generated_from_dir: Utf8PathBuf,
 ) -> Result<CheckResult, anyhow::Error> {
-    check_apis_impl(env, apis, Some(generated_from_dir))
+    let (result, _summaries) =
+        check_apis_with_generated_from_dir_and_summaries(
+            env,
+            apis,
+            generated_from_dir,
+        )?;
+    Ok(result)
 }
 
-fn check_apis_impl(
+/// Like [`check_apis_up_to_date`], but also returns the list of problem
+/// summaries for detailed assertions in tests.
+#[doc(hidden)]
+pub fn check_apis_with_summaries(
     env: &Environment,
     apis: &ManagedApis,
-    generated_from_dir: Option<Utf8PathBuf>,
-) -> Result<CheckResult, anyhow::Error> {
+) -> Result<(CheckResult, Vec<resolved::ProblemSummary>), anyhow::Error> {
+    let env = resolve_env(env)?;
+    let (blessed_source, generated_source, output) =
+        default_sources(&env, None)?;
+    check_impl_with_summaries(
+        apis,
+        &env,
+        &blessed_source,
+        &generated_source,
+        &output,
+    )
+}
+
+/// Like [`check_apis_with_generated_from_dir`], but also returns the list
+/// of problem summaries for detailed assertions in tests.
+#[doc(hidden)]
+pub fn check_apis_with_generated_from_dir_and_summaries(
+    env: &Environment,
+    apis: &ManagedApis,
+    generated_from_dir: Utf8PathBuf,
+) -> Result<(CheckResult, Vec<resolved::ProblemSummary>), anyhow::Error> {
+    let env = resolve_env(env)?;
+    let (blessed_source, generated_source, output) =
+        default_sources(&env, Some(generated_from_dir))?;
+    check_impl_with_summaries(
+        apis,
+        &env,
+        &blessed_source,
+        &generated_source,
+        &output,
+    )
+}
+
+fn resolve_env(
+    env: &Environment,
+) -> Result<crate::environment::ResolvedEnv, anyhow::Error> {
     // env.resolve(None) assumes that env.default_openapi_dir is where the
     // OpenAPI documents live and doesn't need a further override. (If a custom
     // directory is desired, it can always be passed in via `env`.)
-    let env = env.resolve(None)?;
+    env.resolve(None)
+}
 
+fn default_sources(
+    env: &crate::environment::ResolvedEnv,
+    generated_from_dir: Option<Utf8PathBuf>,
+) -> Result<
+    (crate::environment::BlessedSource, GeneratedSource, OutputOpts),
+    anyhow::Error,
+> {
     let blessed_source = BlessedSourceArgs {
         blessed_from_vcs: None,
         blessed_from_vcs_path: None,
         blessed_from_dir: None,
     }
-    .to_blessed_source(&env)?;
+    .to_blessed_source(env)?;
     let generated_source =
         GeneratedSource::from(GeneratedSourceArgs { generated_from_dir });
     let output = OutputOpts { color: clap::ColorChoice::Auto };
-
-    check_impl(apis, &env, &blessed_source, &generated_source, &output)
+    Ok((blessed_source, generated_source, output))
 }

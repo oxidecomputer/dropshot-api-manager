@@ -132,6 +132,77 @@ impl Display for ResolutionKind {
     }
 }
 
+/// Identifies the kind of a `Problem` without carrying borrowed data.
+///
+/// Each variant corresponds 1:1 to a `Problem` variant. The exhaustive
+/// match in `Problem::kind` ensures that adding a new `Problem` variant
+/// without updating this enum causes a compile error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[expect(missing_docs)]
+pub enum ProblemKind {
+    LocalSpecFileOrphaned,
+    UnparseableLocalFile,
+    BlessedVersionMissingLocal,
+    BlessedVersionExtraLocalSpec,
+    BlessedVersionCompareError,
+    BlessedVersionBroken,
+    BlessedLatestVersionBytewiseMismatch,
+    LockstepMissingLocal,
+    LockstepStale,
+    LocalVersionMissingLocal,
+    LocalVersionExtra,
+    LocalVersionStale,
+    GeneratedSourceMissing,
+    GeneratedValidationError,
+    ExtraFileStale,
+    LatestLinkMissing,
+    LatestLinkStale,
+    BlessedVersionShouldBeGitStub,
+    GitStubShouldBeJson,
+    BlessedVersionCorruptedLocal,
+    DuplicateLocalFile,
+    GitStubCommitStale,
+    GitStubFirstCommitUnknown,
+}
+
+/// Owned summary of a `Problem` for test assertions.
+///
+/// Contains just enough information to identify a problem: which API it
+/// belongs to, which version (if any), and its [`ProblemKind`]. Because all
+/// fields are owned and implement `PartialEq`, summaries can be compared
+/// with `assert_eq!`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProblemSummary {
+    /// The API this problem is associated with.
+    pub api_ident: ApiIdent,
+    /// The version this problem is associated with, or `None` for
+    /// non-version-specific problems (e.g. orphaned files, symlinks).
+    pub version: Option<semver::Version>,
+    /// The kind of problem.
+    pub kind: ProblemKind,
+}
+
+impl ProblemSummary {
+    /// Creates a new problem summary for a version-specific problem.
+    pub fn new(api_ident: &str, version: &str, kind: ProblemKind) -> Self {
+        ProblemSummary {
+            api_ident: ApiIdent::from(api_ident),
+            version: Some(version.parse().expect("valid semver")),
+            kind,
+        }
+    }
+
+    /// Creates a new problem summary for a non-version-specific problem
+    /// (e.g. symlink issues, orphaned files).
+    pub fn for_api(api_ident: &str, kind: ProblemKind) -> Self {
+        ProblemSummary {
+            api_ident: ApiIdent::from(api_ident),
+            version: None,
+            kind,
+        }
+    }
+}
+
 /// Describes a problem resolving the blessed spec(s), generated spec(s), and
 /// local spec files for a particular API.
 #[derive(Debug, Error)]
@@ -363,6 +434,72 @@ pub enum Problem<'a> {
 }
 
 impl<'a> Problem<'a> {
+    /// Returns the discriminant of this problem as a [`ProblemKind`].
+    ///
+    /// The match is exhaustive (no wildcard), so adding a new `Problem`
+    /// variant without updating this method causes a compile error.
+    pub fn kind(&self) -> ProblemKind {
+        match self {
+            Problem::LocalSpecFileOrphaned { .. } => {
+                ProblemKind::LocalSpecFileOrphaned
+            }
+            Problem::UnparseableLocalFile { .. } => {
+                ProblemKind::UnparseableLocalFile
+            }
+            Problem::BlessedVersionMissingLocal { .. } => {
+                ProblemKind::BlessedVersionMissingLocal
+            }
+            Problem::BlessedVersionExtraLocalSpec { .. } => {
+                ProblemKind::BlessedVersionExtraLocalSpec
+            }
+            Problem::BlessedVersionCompareError { .. } => {
+                ProblemKind::BlessedVersionCompareError
+            }
+            Problem::BlessedVersionBroken { .. } => {
+                ProblemKind::BlessedVersionBroken
+            }
+            Problem::BlessedLatestVersionBytewiseMismatch { .. } => {
+                ProblemKind::BlessedLatestVersionBytewiseMismatch
+            }
+            Problem::LockstepMissingLocal { .. } => {
+                ProblemKind::LockstepMissingLocal
+            }
+            Problem::LockstepStale { .. } => ProblemKind::LockstepStale,
+            Problem::LocalVersionMissingLocal { .. } => {
+                ProblemKind::LocalVersionMissingLocal
+            }
+            Problem::LocalVersionExtra { .. } => ProblemKind::LocalVersionExtra,
+            Problem::LocalVersionStale { .. } => ProblemKind::LocalVersionStale,
+            Problem::GeneratedSourceMissing { .. } => {
+                ProblemKind::GeneratedSourceMissing
+            }
+            Problem::GeneratedValidationError { .. } => {
+                ProblemKind::GeneratedValidationError
+            }
+            Problem::ExtraFileStale { .. } => ProblemKind::ExtraFileStale,
+            Problem::LatestLinkMissing { .. } => ProblemKind::LatestLinkMissing,
+            Problem::LatestLinkStale { .. } => ProblemKind::LatestLinkStale,
+            Problem::BlessedVersionShouldBeGitStub { .. } => {
+                ProblemKind::BlessedVersionShouldBeGitStub
+            }
+            Problem::GitStubShouldBeJson { .. } => {
+                ProblemKind::GitStubShouldBeJson
+            }
+            Problem::BlessedVersionCorruptedLocal { .. } => {
+                ProblemKind::BlessedVersionCorruptedLocal
+            }
+            Problem::DuplicateLocalFile { .. } => {
+                ProblemKind::DuplicateLocalFile
+            }
+            Problem::GitStubCommitStale { .. } => {
+                ProblemKind::GitStubCommitStale
+            }
+            Problem::GitStubFirstCommitUnknown { .. } => {
+                ProblemKind::GitStubFirstCommitUnknown
+            }
+        }
+    }
+
     pub fn is_fixable(&self) -> bool {
         self.fix().is_some()
     }
@@ -914,7 +1051,7 @@ fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
 /// local spec files for a given API
 pub struct Resolved<'a> {
     notes: Vec<Note>,
-    non_version_problems: Vec<Problem<'a>>,
+    non_version_problems: Vec<(ApiIdent, Option<semver::Version>, Problem<'a>)>,
     api_results: BTreeMap<ApiIdent, ApiResolved<'a>>,
     nexpected_documents: usize,
 }
@@ -961,12 +1098,23 @@ impl<'a> Resolved<'a> {
         // Get the other easy case out of the way: if there are any local spec
         // files for APIs or API versions that aren't supported any more, that's
         // a (fixable) problem.
-        let mut non_version_problems: Vec<Problem<'_>> =
-            resolve_orphaned_local_specs(&supported_versions_by_api, local)
-                .map(|spec_file_name| Problem::LocalSpecFileOrphaned {
-                    spec_file_name: spec_file_name.clone(),
-                })
-                .collect();
+        let mut non_version_problems: Vec<(
+            ApiIdent,
+            Option<semver::Version>,
+            Problem<'_>,
+        )> = resolve_orphaned_local_specs(&supported_versions_by_api, local)
+            .map(|spec_file_name| {
+                let ident = spec_file_name.ident().clone();
+                let version = Some(spec_file_name.version().clone());
+                (
+                    ident,
+                    version,
+                    Problem::LocalSpecFileOrphaned {
+                        spec_file_name: spec_file_name.clone(),
+                    },
+                )
+            })
+            .collect();
 
         // Resolve each of the supported API versions first, so we know what
         // paths will be written. (Do this in parallel across each API version.)
@@ -1039,13 +1187,17 @@ impl<'a> Resolved<'a> {
             }
         }
 
-        for (_ident, api_files) in local.iter() {
+        for (ident, api_files) in local.iter() {
             for unparseable in api_files.unparseable_files() {
                 // Only report if no fix will overwrite this path.
                 if !paths_written.contains(&unparseable.path) {
-                    non_version_problems.push(Problem::UnparseableLocalFile {
-                        unparseable_file: unparseable.clone(),
-                    });
+                    non_version_problems.push((
+                        ident.clone(),
+                        None,
+                        Problem::UnparseableLocalFile {
+                            unparseable_file: unparseable.clone(),
+                        },
+                    ));
                 }
             }
         }
@@ -1067,7 +1219,7 @@ impl<'a> Resolved<'a> {
     }
 
     pub fn general_problems(&self) -> impl Iterator<Item = &Problem<'a>> + '_ {
-        self.non_version_problems.iter()
+        self.non_version_problems.iter().map(|(_, _, problem)| problem)
     }
 
     pub fn resolution_for_api_version(
@@ -1085,6 +1237,46 @@ impl<'a> Resolved<'a> {
     pub fn has_unfixable_problems(&self) -> bool {
         self.general_problems().any(|p| !p.is_fixable())
             || self.api_results.values().any(|a| a.has_unfixable_problems())
+    }
+
+    /// Returns an owned, ordered list of all problems as summaries.
+    ///
+    /// Order: general (non-version-specific) problems first, then per-API
+    /// (sorted by ident), per-version (sorted by semver), then symlink
+    /// problems.
+    pub fn problem_summaries(&self) -> Vec<ProblemSummary> {
+        let mut summaries = Vec::new();
+
+        // General problems.
+        for (ident, version, problem) in &self.non_version_problems {
+            summaries.push(ProblemSummary {
+                api_ident: ident.clone(),
+                version: version.clone(),
+                kind: problem.kind(),
+            });
+        }
+
+        // Per-API problems.
+        for (ident, api_resolved) in &self.api_results {
+            for (version, resolution) in &api_resolved.by_version {
+                for problem in resolution.problems() {
+                    summaries.push(ProblemSummary {
+                        api_ident: ident.clone(),
+                        version: Some(version.clone()),
+                        kind: problem.kind(),
+                    });
+                }
+            }
+            if let Some(symlink) = &api_resolved.symlink {
+                summaries.push(ProblemSummary {
+                    api_ident: ident.clone(),
+                    version: None,
+                    kind: symlink.kind(),
+                });
+            }
+        }
+
+        summaries
     }
 }
 

@@ -9,7 +9,10 @@
 use anyhow::Result;
 use dropshot_api_manager::{
     ManagedApiConfig, ManagedApis,
-    test_util::{CheckResult, check_apis_up_to_date},
+    test_util::{
+        CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
+        check_apis_with_summaries,
+    },
 };
 use integration_tests::*;
 use openapiv3::OpenAPI;
@@ -155,8 +158,17 @@ fn test_unparseable_conflict_markers() -> Result<()> {
 "#;
     env.create_file("documents/health.json", conflict_content)?;
 
-    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "health",
+            "1.0.0",
+            ProblemKind::LockstepMissingLocal,
+        )],
+    );
 
     env.generate_documents(&apis)?;
 
