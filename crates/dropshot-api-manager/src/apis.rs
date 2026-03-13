@@ -134,7 +134,7 @@ impl From<ManagedApiConfig> for ManagedApi {
             api_description,
         } = value;
         ManagedApi {
-            ident: ApiIdent::from(ident.to_owned()),
+            ident: ApiIdent::from(ident),
             versions,
             title,
             metadata,

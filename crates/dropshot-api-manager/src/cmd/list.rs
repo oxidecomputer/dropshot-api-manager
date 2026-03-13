@@ -2,7 +2,7 @@
 
 use crate::{
     apis::ManagedApis,
-    output::{OutputOpts, Styles, display_api_spec, display_error, plural},
+    output::{OutputOpts, display_api_spec, display_error, plural},
 };
 use indent_write::io::IndentWriter;
 use openapiv3::OpenAPI;
@@ -14,10 +14,7 @@ pub(crate) fn list_impl(
     verbose: bool,
     output: &OutputOpts,
 ) -> anyhow::Result<()> {
-    let mut styles = Styles::default();
-    if output.use_color(supports_color::Stream::Stdout) {
-        styles.colorize();
-    }
+    let styles = output.styles(supports_color::Stream::Stdout);
     let mut out = std::io::stdout();
 
     let total = apis.len();

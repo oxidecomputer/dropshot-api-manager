@@ -42,10 +42,7 @@ impl Versions {
 
     /// Returns whether this API is lockstep (as opposed to versioned)
     pub fn is_lockstep(&self) -> bool {
-        match self {
-            Versions::Lockstep { .. } => true,
-            Versions::Versioned { .. } => false,
-        }
+        !self.is_versioned()
     }
 
     /// Iterate over the semver versions of an API that are supported

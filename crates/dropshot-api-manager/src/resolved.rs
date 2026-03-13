@@ -36,7 +36,6 @@ where
     T: Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // slice::join would require the use of unstable Rust.
         let mut iter = self.0.iter();
         if let Some(item) = iter.next() {
             write!(f, "{item}")?;
@@ -1008,7 +1007,7 @@ impl<'a> Resolved<'a> {
                 };
                 let api_local = local.get(&ident);
                 (
-                    api.ident().clone(),
+                    ident,
                     resolve_api(
                         env,
                         api,
@@ -1902,7 +1901,7 @@ fn resolve_api_version_local<'a>(
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
 
-    // alidate the generated API document.
+    // Validate the generated API document.
     validate_generated(env, api, validation, version, generated, &mut problems);
 
     let (matching, non_matching): (Vec<_>, Vec<_>) = local
