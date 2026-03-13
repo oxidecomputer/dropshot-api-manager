@@ -299,17 +299,22 @@ fn discover_local_entries(
     let top_iter =
         dir.read_dir_utf8().with_context(|| format!("readdir {:?}", dir))?;
 
+    // Collect and sort by file name to ensure deterministic ordering
+    // across platforms and filesystems.
+    let mut top_entries = Vec::new();
     for maybe_entry in top_iter {
-        let entry = match maybe_entry {
-            Ok(e) => e,
+        match maybe_entry {
+            Ok(e) => top_entries.push(e),
             Err(error) => {
                 entries.push(LocalDiscoveredEntry::Error(
                     anyhow!(error).context(format!("readdir {:?} entry", dir)),
                 ));
-                continue;
             }
-        };
+        }
+    }
+    top_entries.sort_by(|a, b| a.file_name().cmp(b.file_name()));
 
+    for entry in top_entries {
         let path = entry.path().to_owned();
         let file_name = entry.file_name().to_owned();
         let file_type = match entry.file_type() {
@@ -345,7 +350,7 @@ fn discover_versioned_directory(
     path: &Utf8Path,
     dir_basename: &str,
 ) {
-    let sub_entries = match path
+    let mut sub_entries = match path
         .read_dir_utf8()
         .and_then(|iter| iter.collect::<Result<Vec<_>, _>>())
     {
@@ -357,6 +362,9 @@ fn discover_versioned_directory(
             return;
         }
     };
+    // Sort by file name to ensure deterministic ordering across
+    // platforms and filesystems.
+    sub_entries.sort_by(|a, b| a.file_name().cmp(b.file_name()));
 
     // Construct a temporary ApiIdent so we can use its canonical
     // symlink-detection method. This ident is not validated against the
