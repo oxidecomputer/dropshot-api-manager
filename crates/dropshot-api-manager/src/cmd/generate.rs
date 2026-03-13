@@ -38,10 +38,7 @@ pub(crate) fn generate_impl(
     generated_source: &GeneratedSource,
     output: &OutputOpts,
 ) -> Result<GenerateResult> {
-    let mut styles = Styles::default();
-    if output.use_color(supports_color::Stream::Stderr) {
-        styles.colorize();
-    }
+    let styles = output.styles(supports_color::Stream::Stderr);
 
     let (generated, errors) =
         generated_source.load(apis, &styles, &env.repo_root, &env.vcs)?;

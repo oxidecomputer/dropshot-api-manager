@@ -5,7 +5,7 @@ use crate::{
     environment::{
         BlessedSource, ErrorAccumulator, GeneratedSource, ResolvedEnv,
     },
-    output::{OutputOpts, Styles},
+    output::OutputOpts,
     resolved::Resolved,
     spec_files_generic::{ApiFiles, AsRawFiles},
 };
@@ -19,10 +19,7 @@ pub(crate) fn debug_impl(
     generated_source: &GeneratedSource,
     output: &OutputOpts,
 ) -> anyhow::Result<()> {
-    let mut styles = Styles::default();
-    if output.use_color(supports_color::Stream::Stderr) {
-        styles.colorize();
-    }
+    let styles = output.styles(supports_color::Stream::Stderr);
 
     // Print information about local files.
 

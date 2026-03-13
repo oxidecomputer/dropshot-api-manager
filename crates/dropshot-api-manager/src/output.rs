@@ -37,6 +37,16 @@ impl OutputOpts {
             ColorChoice::Never => false,
         }
     }
+
+    /// Creates a `Styles` instance, colorized if color is enabled for the
+    /// given stream.
+    pub(crate) fn styles(&self, stream: supports_color::Stream) -> Styles {
+        let mut styles = Styles::default();
+        if self.use_color(stream) {
+            styles.colorize();
+        }
+        styles
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -123,14 +133,16 @@ where
 }
 
 pub(crate) fn display_api_spec(api: &ManagedApi, styles: &Styles) -> String {
-    let versions: Vec<_> = api.iter_versions_semver().collect();
-    let latest_version = versions.last().expect("must be at least one version");
+    let mut versions = api.iter_versions_semver();
+    let count = versions.len();
+    let latest_version =
+        versions.next_back().expect("must be at least one version");
     if api.is_versioned() {
         format!(
             "{} ({}, versioned ({} supported), latest = {})",
             api.ident().style(styles.filename),
             api.title(),
-            versions.len(),
+            count,
             latest_version,
         )
     } else {

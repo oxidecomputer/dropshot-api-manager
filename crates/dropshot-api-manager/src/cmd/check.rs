@@ -4,8 +4,8 @@ use crate::{
     apis::ManagedApis,
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
-        CheckResult, OutputOpts, Styles, display_load_problems,
-        display_resolution, headers::*,
+        CheckResult, OutputOpts, display_load_problems, display_resolution,
+        headers::*,
     },
     resolved::Resolved,
 };
@@ -17,10 +17,7 @@ pub(crate) fn check_impl(
     generated_source: &GeneratedSource,
     output: &OutputOpts,
 ) -> anyhow::Result<CheckResult> {
-    let mut styles = Styles::default();
-    if output.use_color(supports_color::Stream::Stderr) {
-        styles.colorize();
-    }
+    let styles = output.styles(supports_color::Stream::Stderr);
 
     eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
 

@@ -150,11 +150,10 @@ fn get_json_value(
 }
 
 fn surround_with_map(
-    pointer: &str,
+    last_component: &str,
     value: &serde_json::Value,
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    let last_component = pointer.split('/').next_back().unwrap_or("");
     map.insert(unescape_pointer_component(last_component), value.clone());
     serde_json::Value::Object(map)
 }

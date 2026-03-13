@@ -407,7 +407,14 @@ fn process_blessed_entry(
                 };
 
             // Read and parse the Git stub contents.
-            let git_stub_str = String::from_utf8_lossy(&contents).to_string();
+            let git_stub_str = match String::from_utf8(contents) {
+                Ok(s) => s,
+                Err(err) => {
+                    return BlessedFileResult::Error(anyhow!(err).context(
+                        format!("Git stub {:?} is not valid UTF-8", git_path,),
+                    ));
+                }
+            };
             let git_stub: GitStub =
                 match git_stub_str.parse() {
                     Ok(g) => g,

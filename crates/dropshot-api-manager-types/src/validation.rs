@@ -198,7 +198,7 @@ impl VersionedApiSpecFileName {
     /// Returns the path of this file relative to the root of the OpenAPI
     /// documents.
     pub fn path(&self) -> Utf8PathBuf {
-        Utf8PathBuf::from_iter([self.ident.deref().clone(), self.basename()])
+        Utf8PathBuf::from_iter([self.ident.as_str(), &self.basename()])
     }
 
     /// Returns the base name of this file path.
@@ -216,28 +216,28 @@ impl VersionedApiSpecFileName {
         }
     }
 
-    /// Converts this filename to its JSON equivalent.
-    ///
-    /// If already JSON, returns a clone of self.
-    pub fn to_json(&self) -> Self {
+    /// Returns a copy of this filename with the given storage kind.
+    fn with_kind(&self, kind: VersionedApiSpecKind) -> Self {
         Self {
             ident: self.ident.clone(),
             version: self.version.clone(),
             hash: self.hash.clone(),
-            kind: VersionedApiSpecKind::Json,
+            kind,
         }
+    }
+
+    /// Converts this filename to its JSON equivalent.
+    ///
+    /// If already JSON, returns a clone of self.
+    pub fn to_json(&self) -> Self {
+        self.with_kind(VersionedApiSpecKind::Json)
     }
 
     /// Converts this filename to its Git stub equivalent.
     ///
     /// If already a Git stub, returns a clone of self.
     pub fn to_git_stub(&self) -> Self {
-        Self {
-            ident: self.ident.clone(),
-            version: self.version.clone(),
-            hash: self.hash.clone(),
-            kind: VersionedApiSpecKind::GitStub,
-        }
+        self.with_kind(VersionedApiSpecKind::GitStub)
     }
 
     /// Returns the basename as a Git stubname.
@@ -245,12 +245,7 @@ impl VersionedApiSpecFileName {
     /// - If already a Git stub, returns `basename()` directly.
     /// - If JSON, returns `basename() + ".gitstub"`.
     pub fn git_stub_basename(&self) -> String {
-        match self.kind {
-            VersionedApiSpecKind::GitStub => self.basename(),
-            VersionedApiSpecKind::Json => {
-                format!("{}.gitstub", self.basename())
-            }
-        }
+        self.to_git_stub().basename()
     }
 
     /// Returns the basename as a JSON filename.
@@ -258,12 +253,7 @@ impl VersionedApiSpecFileName {
     /// - If already JSON, returns `basename()` directly.
     /// - If Git stub, returns the basename without `.gitstub`.
     pub fn json_basename(&self) -> String {
-        match self.kind {
-            VersionedApiSpecKind::Json => self.basename(),
-            VersionedApiSpecKind::GitStub => {
-                format!("{}-{}-{}.json", self.ident, self.version, self.hash)
-            }
-        }
+        self.to_json().basename()
     }
 }
 
@@ -497,8 +487,10 @@ impl ApiIdent {
     }
 
     /// Given an API identifier and a file name, determine if we're looking at
-    /// this API's "latest" symlink
+    /// this API's "latest" symlink.
     pub fn versioned_api_is_latest_symlink(&self, base_name: &str) -> bool {
-        base_name == self.versioned_api_latest_symlink()
+        base_name
+            .strip_prefix(self.0.as_str())
+            .is_some_and(|rest| rest == "-latest.json")
     }
 }

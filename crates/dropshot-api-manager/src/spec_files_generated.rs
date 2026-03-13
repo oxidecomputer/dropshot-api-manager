@@ -206,32 +206,28 @@ impl GeneratedFiles {
             ApiSpecFilesBuilder::new(apis, error_accumulator);
 
         for result in results {
-            match result {
-                GeneratedApiResult::Lockstep { versions } => {
-                    for version_result in versions {
-                        match version_result {
-                            Ok(file) => api_files.load_parsed(file),
-                            Err(error) => api_files.load_error(error),
-                        }
-                    }
-                }
+            let (versions, latest_info) = match result {
+                GeneratedApiResult::Lockstep { versions } => (versions, None),
                 GeneratedApiResult::Versioned { ident, versions, latest } => {
-                    for version_result in versions {
-                        match version_result {
-                            Ok(file) => api_files.load_parsed(file),
-                            Err(error) => api_files.load_error(error),
-                        }
-                    }
-                    match latest {
-                        Some(latest) => {
-                            api_files.load_latest_link(&ident, latest)
-                        }
-                        None => api_files.load_error(anyhow!(
-                            "versioned API {:?} symlink: there is no \
-                             working version (fix above error(s) first)",
-                            ident,
-                        )),
-                    }
+                    (versions, Some((ident, latest)))
+                }
+            };
+
+            for version_result in versions {
+                match version_result {
+                    Ok(file) => api_files.load_parsed(file),
+                    Err(error) => api_files.load_error(error),
+                }
+            }
+
+            if let Some((ident, latest)) = latest_info {
+                match latest {
+                    Some(latest) => api_files.load_latest_link(&ident, latest),
+                    None => api_files.load_error(anyhow!(
+                        "versioned API {:?} symlink: there is no \
+                         working version (fix above error(s) first)",
+                        ident,
+                    )),
                 }
             }
         }
