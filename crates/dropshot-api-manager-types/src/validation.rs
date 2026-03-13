@@ -134,7 +134,8 @@ impl LockstepApiSpecFileName {
 
 impl fmt::Display for LockstepApiSpecFileName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.path().as_str())
+        // For lockstep files, path == basename (no directory prefix).
+        f.write_str(&self.basename())
     }
 }
 
@@ -203,7 +204,12 @@ impl VersionedApiSpecFileName {
 
     /// Returns the base name of this file path.
     pub fn basename(&self) -> String {
-        match self.kind {
+        self.basename_for_kind(self.kind)
+    }
+
+    /// Returns the base name for a specific storage kind.
+    fn basename_for_kind(&self, kind: VersionedApiSpecKind) -> String {
+        match kind {
             VersionedApiSpecKind::Json => {
                 format!("{}-{}-{}.json", self.ident, self.version, self.hash)
             }
@@ -245,7 +251,7 @@ impl VersionedApiSpecFileName {
     /// - If already a Git stub, returns `basename()` directly.
     /// - If JSON, returns `basename() + ".gitstub"`.
     pub fn git_stub_basename(&self) -> String {
-        self.to_git_stub().basename()
+        self.basename_for_kind(VersionedApiSpecKind::GitStub)
     }
 
     /// Returns the basename as a JSON filename.
@@ -253,13 +259,14 @@ impl VersionedApiSpecFileName {
     /// - If already JSON, returns `basename()` directly.
     /// - If Git stub, returns the basename without `.gitstub`.
     pub fn json_basename(&self) -> String {
-        self.to_json().basename()
+        self.basename_for_kind(VersionedApiSpecKind::Json)
     }
 }
 
 impl fmt::Display for VersionedApiSpecFileName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.path().as_str())
+        // path = "{ident}/{basename}".
+        write!(f, "{}/{}", self.ident, self.basename())
     }
 }
 
@@ -288,7 +295,10 @@ pub enum ApiSpecFileName {
 
 impl fmt::Display for ApiSpecFileName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.path().as_str())
+        match self {
+            ApiSpecFileName::Lockstep(l) => fmt::Display::fmt(l, f),
+            ApiSpecFileName::Versioned(v) => fmt::Display::fmt(v, f),
+        }
     }
 }
 

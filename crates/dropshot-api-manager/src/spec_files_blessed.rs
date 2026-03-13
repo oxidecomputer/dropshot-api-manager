@@ -226,16 +226,27 @@ struct UnrecognizedPath;
 impl<'a> BlessedPathKind<'a> {
     /// Parse a path from git ls-tree output into its structural kind.
     fn parse(path: &'a Utf8Path) -> Result<Self, UnrecognizedPath> {
-        let parts: Vec<_> = path.iter().collect();
-        match parts.as_slice() {
-            [_basename] => Ok(BlessedPathKind::Lockstep),
-            [api_dir, basename] if basename.ends_with(".json.gitstub") => {
-                Ok(BlessedPathKind::GitStubFile { api_dir, basename })
-            }
-            [api_dir, basename] => {
-                Ok(BlessedPathKind::VersionedFile { api_dir, basename })
-            }
-            _ => Err(UnrecognizedPath),
+        let mut iter = path.iter();
+        let first = iter.next().ok_or(UnrecognizedPath)?;
+        let Some(second) = iter.next() else {
+            // Single-component path: lockstep file.
+            return Ok(BlessedPathKind::Lockstep);
+        };
+        if iter.next().is_some() {
+            // Three or more components: not recognized.
+            return Err(UnrecognizedPath);
+        }
+        // Two-component path: versioned file or Git stub.
+        if second.ends_with(".json.gitstub") {
+            Ok(BlessedPathKind::GitStubFile {
+                api_dir: first,
+                basename: second,
+            })
+        } else {
+            Ok(BlessedPathKind::VersionedFile {
+                api_dir: first,
+                basename: second,
+            })
         }
     }
 }

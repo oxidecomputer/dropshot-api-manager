@@ -294,28 +294,10 @@ macro_rules! api_versions {
             )*
             $(,)?
         ] ) => {
-        dropshot_api_manager_types::paste! {
-            pub const [<VERSION_ $latest_name>]: $crate::semver::Version =
-                $crate::semver::Version::new($latest_major, 0, 0);
-
-            $(
-                pub const [<VERSION_ $name>]: $crate::semver::Version =
-                    $crate::semver::Version::new($major, 0, 0);
-            )*
-
-            pub fn supported_versions() -> $crate::SupportedVersions {
-                let mut literal_versions = vec![
-                    $crate::SupportedVersion::new([<VERSION_ $latest_name>], stringify!($latest_name)),
-                    $( $crate::SupportedVersion::new([<VERSION_ $name>], stringify!($name)) ),*
-                ];
-                literal_versions.reverse();
-                $crate::SupportedVersions::new(literal_versions)
-            }
-
-            pub const fn latest_version() -> $crate::semver::Version {
-                [<VERSION_ $latest_name>]
-            }
-        }
+        $crate::api_versions_picky!([
+            ($latest_major, 0, 0, $latest_name)
+            $(, ($major, 0, 0, $name))*
+        ]);
     };
 }
 

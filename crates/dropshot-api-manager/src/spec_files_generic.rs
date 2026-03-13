@@ -256,7 +256,7 @@ impl ApiSpecFile {
                 Err(e) => {
                     return Err((
                         ApiSpecFileParseError::JsonParse {
-                            path: spec_file_name.path().to_owned(),
+                            path: spec_file_name.path(),
                             source: e,
                         },
                         contents_buf,
@@ -271,7 +271,7 @@ impl ApiSpecFile {
             Err(e) => {
                 return Err((
                     ApiSpecFileParseError::OpenApiParse {
-                        path: spec_file_name.path().to_owned(),
+                        path: spec_file_name.path(),
                         source: e,
                     },
                     contents_buf,
@@ -285,7 +285,7 @@ impl ApiSpecFile {
             Err(e) => {
                 return Err((
                     ApiSpecFileParseError::VersionParse {
-                        path: spec_file_name.path().to_owned(),
+                        path: spec_file_name.path(),
                         source: e,
                     },
                     contents_buf,
@@ -298,7 +298,7 @@ impl ApiSpecFile {
                 if *v.version() != parsed_version {
                     return Err((
                         ApiSpecFileParseError::VersionMismatch {
-                            path: spec_file_name.path().to_owned(),
+                            path: spec_file_name.path(),
                             file_version: parsed_version,
                         },
                         contents_buf,
@@ -312,7 +312,7 @@ impl ApiSpecFile {
                     if expected_hash != v.hash() {
                         return Err((
                             ApiSpecFileParseError::HashMismatch {
-                                path: spec_file_name.path().to_owned(),
+                                path: spec_file_name.path(),
                                 expected: expected_hash,
                                 actual: v.hash().to_owned(),
                             },
@@ -554,34 +554,12 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         ident: &ApiIdent,
         basename: &str,
     ) -> Option<ApiSpecFileName> {
-        match parse_versioned_file_name(self.apis, ident, basename) {
-            Ok(file_name) => Some(file_name.into()),
-            Err(
-                warning @ (BadVersionedFileName::NoSuchApi
-                | BadVersionedFileName::NotVersioned),
-            ) if T::MISCONFIGURATIONS_ALLOWED => {
-                // See lockstep_file_name().
-                self.load_warning(
-                    anyhow!(warning)
-                        .context(format!("skipping file {}", basename)),
-                );
-                None
-            }
-            Err(warning @ BadVersionedFileName::UnexpectedName { .. }) => {
-                // See lockstep_file_name().
-                self.load_warning(
-                    anyhow!(warning)
-                        .context(format!("skipping file {}", basename)),
-                );
-                None
-            }
-            Err(error) => {
-                self.load_error(
-                    anyhow!(error).context(format!("file {}", basename)),
-                );
-                None
-            }
-        }
+        self.handle_versioned_parse(
+            parse_versioned_file_name(self.apis, ident, basename),
+            &format!("file {basename}"),
+            &format!("skipping file {basename}"),
+        )
+        .map(Into::into)
     }
 
     /// Returns an `ApiSpecFileName` for the given versioned Git stub.
@@ -595,68 +573,62 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         ident: &ApiIdent,
         basename: &str,
     ) -> Option<ApiSpecFileName> {
-        match parse_versioned_git_stub_file_name(self.apis, ident, basename) {
-            Ok(file_name) => Some(file_name.into()),
-            Err(
-                warning @ (BadVersionedFileName::NoSuchApi
-                | BadVersionedFileName::NotVersioned),
-            ) if T::MISCONFIGURATIONS_ALLOWED => {
-                self.load_warning(
-                    anyhow!(warning)
-                        .context(format!("skipping Git stub {}", basename)),
-                );
-                None
-            }
-            Err(warning @ BadVersionedFileName::UnexpectedName { .. }) => {
-                self.load_warning(
-                    anyhow!(warning)
-                        .context(format!("skipping Git stub {}", basename)),
-                );
-                None
-            }
-            Err(error) => {
-                self.load_error(
-                    anyhow!(error).context(format!("Git stub {}", basename)),
-                );
-                None
-            }
-        }
+        self.handle_versioned_parse(
+            parse_versioned_git_stub_file_name(self.apis, ident, basename),
+            &format!("Git stub {basename}"),
+            &format!("skipping Git stub {basename}"),
+        )
+        .map(Into::into)
     }
 
     /// Like `versioned_file_name()`, but the error message for a bogus path
-    /// better communicates that the problem is with the symlink
+    /// better communicates that the problem is with the symlink.
     pub fn symlink_contents(
         &mut self,
         symlink_path: &Utf8Path,
         ident: &ApiIdent,
         basename: &str,
     ) -> Option<VersionedApiSpecFileName> {
-        match parse_versioned_file_name(self.apis, ident, basename) {
+        self.handle_versioned_parse(
+            parse_versioned_file_name(self.apis, ident, basename),
+            &format!("bad symlink {symlink_path} pointing to {basename}"),
+            &format!("ignoring symlink {symlink_path} pointing to {basename}"),
+        )
+    }
+
+    /// Shared error handling for versioned file name parsing.
+    ///
+    /// On success, returns the parsed `VersionedApiSpecFileName`. On
+    /// failure, records a warning or error (depending on the kind of
+    /// failure and whether misconfigurations are allowed) and returns
+    /// `None`.
+    fn handle_versioned_parse(
+        &mut self,
+        result: Result<VersionedApiSpecFileName, BadVersionedFileName>,
+        error_label: &str,
+        warning_label: &str,
+    ) -> Option<VersionedApiSpecFileName> {
+        match result {
             Ok(file_name) => Some(file_name),
             Err(
                 warning @ (BadVersionedFileName::NoSuchApi
                 | BadVersionedFileName::NotVersioned),
             ) if T::MISCONFIGURATIONS_ALLOWED => {
                 // See lockstep_file_name().
-                self.load_warning(anyhow!(warning).context(format!(
-                    "ignoring symlink {} pointing to {}",
-                    symlink_path, basename
-                )));
+                self.load_warning(
+                    anyhow!(warning).context(warning_label.to_owned()),
+                );
                 None
             }
             Err(warning @ BadVersionedFileName::UnexpectedName { .. }) => {
                 // See lockstep_file_name().
-                self.load_warning(anyhow!(warning).context(format!(
-                    "ignoring symlink {} pointing to {}",
-                    symlink_path, basename
-                )));
+                self.load_warning(
+                    anyhow!(warning).context(warning_label.to_owned()),
+                );
                 None
             }
             Err(error) => {
-                self.load_error(anyhow!(error).context(format!(
-                    "bad symlink {} pointing to {}",
-                    symlink_path, basename
-                )));
+                self.load_error(anyhow!(error).context(error_label.to_owned()));
                 None
             }
         }
@@ -702,51 +674,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                 self.load_parsed(file);
             }
             Err((error, contents)) => {
-                match T::make_unparseable(file_name.clone(), contents) {
-                    Some(unparseable) => {
-                        // For local files, track the unparseable file so it
-                        // can be cleaned up during generate. Record a warning
-                        // so the user knows about it.
-                        self.load_warning(
-                            error.context("skipping unparseable file"),
-                        );
-
-                        // Can the file be associated with a version?
-                        if let Some(version) = file_name.version() {
-                            let ident = file_name.ident().clone();
-                            let entry = self
-                                .spec_files
-                                .entry(ident)
-                                .or_insert_with(ApiFiles::new)
-                                .spec_files
-                                .entry(version.clone());
-
-                            match entry {
-                                Entry::Vacant(vacant_entry) => {
-                                    vacant_entry.insert(
-                                        T::unparseable_into_self(unparseable),
-                                    );
-                                }
-                                Entry::Occupied(mut occupied_entry) => {
-                                    occupied_entry
-                                        .get_mut()
-                                        .extend_unparseable(unparseable);
-                                }
-                            }
-                        } else {
-                            // No version info, fall back to old behavior.
-                            self.record_unparseable_file(
-                                file_name.ident().clone(),
-                                UnparseableFile {
-                                    path: file_name.path().to_owned(),
-                                },
-                            );
-                        }
-                    }
-                    None => {
-                        self.load_error(error);
-                    }
-                }
+                self.insert_unparseable(file_name, contents, error);
             }
         }
     }
@@ -761,6 +689,20 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// tracks the file so it can be cleaned up during generate. For other
     /// contexts, the error is recorded.
     pub fn load_unparseable(
+        &mut self,
+        file_name: ApiSpecFileName,
+        contents: Vec<u8>,
+        reason: anyhow::Error,
+    ) {
+        self.insert_unparseable(file_name, contents, reason);
+    }
+
+    /// Shared implementation for recording an unparseable file.
+    ///
+    /// For contexts where unparseable files are allowed (local files), the
+    /// file is tracked so it can be cleaned up during generate. For other
+    /// contexts, the error is recorded.
+    fn insert_unparseable(
         &mut self,
         file_name: ApiSpecFileName,
         contents: Vec<u8>,
@@ -798,7 +740,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                     // No version info, fall back to old behavior.
                     self.record_unparseable_file(
                         file_name.ident().clone(),
-                        UnparseableFile { path: file_name.path().to_owned() },
+                        UnparseableFile { path: file_name.path() },
                     );
                 }
             }
