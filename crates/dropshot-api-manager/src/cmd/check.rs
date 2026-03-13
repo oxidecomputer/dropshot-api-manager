@@ -7,7 +7,7 @@ use crate::{
         CheckResult, OutputOpts, display_load_problems, display_resolution,
         headers::*,
     },
-    resolved::Resolved,
+    resolved::{ProblemSummary, Resolved},
 };
 
 pub(crate) fn check_impl(
@@ -17,6 +17,23 @@ pub(crate) fn check_impl(
     generated_source: &GeneratedSource,
     output: &OutputOpts,
 ) -> anyhow::Result<CheckResult> {
+    let (result, _summaries) = check_impl_with_summaries(
+        apis,
+        env,
+        blessed_source,
+        generated_source,
+        output,
+    )?;
+    Ok(result)
+}
+
+pub(crate) fn check_impl_with_summaries(
+    apis: &ManagedApis,
+    env: &ResolvedEnv,
+    blessed_source: &BlessedSource,
+    generated_source: &GeneratedSource,
+    output: &OutputOpts,
+) -> anyhow::Result<(CheckResult, Vec<ProblemSummary>)> {
     let styles = output.styles(supports_color::Stream::Stderr);
 
     eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
@@ -38,6 +55,9 @@ pub(crate) fn check_impl(
     eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
     let result = display_resolution(env, apis, &resolved, &styles)?;
 
+    // Extract owned summaries before dropping the borrowed resolved state.
+    let summaries = resolved.problem_summaries();
+
     // Release borrows held by `resolved`, then drop the source
     // collections in parallel. Each contains many parsed OpenAPI
     // documents whose sequential drops are costly.
@@ -48,5 +68,5 @@ pub(crate) fn check_impl(
         s.spawn(|| drop(local_files));
     });
 
-    Ok(result)
+    Ok((result, summaries))
 }

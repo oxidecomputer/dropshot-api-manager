@@ -11,7 +11,10 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use dropshot_api_manager::{
     ManagedApis,
-    test_util::{CheckResult, check_apis_up_to_date},
+    test_util::{
+        CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
+        check_apis_with_summaries,
+    },
 };
 use integration_tests::{
     ExpectedConflictKind, ExpectedConflicts, all_conflict_paths,
@@ -268,11 +271,27 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
 
     // v3 is latest (from second_commit) while v1, v2 are from first_commit.
     let v1_v2_v3_git_stub = versioned_health_git_stub_apis()?;
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_git_stub)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_git_stub)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should suggest converting v1, v2 (different first commit)"
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionShouldBeGitStub,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::BlessedVersionShouldBeGitStub,
+            ),
+        ],
     );
 
     env.generate_documents(&v1_v2_v3_git_stub)?;
@@ -444,13 +463,35 @@ fn test_convert_to_json_when_disabled() -> Result<()> {
     );
 
     let extended_without_git_stub = versioned_health_with_v4_apis()?;
-    let result =
-        check_apis_up_to_date(env.environment(), &extended_without_git_stub)?;
+    let (result, summaries) = check_apis_with_summaries(
+        env.environment(),
+        &extended_without_git_stub,
+    )?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update when Git stubs exist but Git stub \
          storage is disabled"
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+        ],
     );
 
     env.generate_documents(&extended_without_git_stub)?;
@@ -547,11 +588,20 @@ fn test_duplicates() -> Result<()> {
         "duplicate JSON should exist"
     );
 
-    let result = check_apis_up_to_date(env.environment(), &extended)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &extended)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update when duplicate files exist"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::DuplicateLocalFile,
+        )],
     );
 
     env.generate_documents(&extended)?;
@@ -858,11 +908,41 @@ fn test_git_error_reports_problem() -> Result<()> {
     }
 
     let v4_apis = versioned_health_with_v4_git_stub_apis()?;
-    let result = check_apis_up_to_date(env.environment(), &v4_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_apis)?;
 
     // Should report a failure due to the unfixable GitStubFirstCommitUnknown
     // problem.
     assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubFirstCommitUnknown,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubFirstCommitUnknown,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GitStubFirstCommitUnknown,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "4.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     Ok(())
 }
@@ -1701,11 +1781,20 @@ def456:documents/versioned-health/new.json\n\
 >>>>>>> branch\n";
     env.create_file(&v1_git_stub_path, corrupted_content)?;
 
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for unparseable Git stub"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal,
+        )],
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
@@ -1770,11 +1859,20 @@ fn test_non_canonical_git_stub_regenerated() -> Result<()> {
     let non_canonical_content = format!("{}:{}", commit, non_canonical_path);
     env.create_file(&v1_git_stub_path, &non_canonical_content)?;
 
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for non-canonical Git stub"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal,
+        )],
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
@@ -1824,11 +1922,20 @@ fn test_empty_git_stub_regenerated() -> Result<()> {
         .expect("v1 Git stub should exist");
     env.create_file(&v1_git_stub_path, "")?;
 
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for empty Git stub"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal,
+        )],
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
@@ -1868,11 +1975,20 @@ fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
         "not-a-valid-hash:documents/versioned-health/file.json\n";
     env.create_file(&v1_git_stub_path, invalid_content)?;
 
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for invalid commit hash"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal,
+        )],
     );
 
     env.generate_documents(&v1_v2_v3_apis)?;
@@ -1926,12 +2042,21 @@ fn test_unresolvable_git_stub_regenerated() -> Result<()> {
     env.create_file(&v1_git_stub_path, &unresolvable_content)?;
 
     // Check should report NeedsUpdate (not Failures).
-    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for unresolvable Git stub, \
          not a hard failure"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal,
+        )],
     );
 
     // Generate should fix the problem by deleting and recreating the gitstub.
@@ -2636,11 +2761,32 @@ fn stale_git_stub_commit_impl(env: &mut TestEnvironment) -> Result<()> {
     }
 
     // Step 6: check should detect the stale commits.
-    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should detect stale Git stub commits"
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubCommitStale,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubCommitStale,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GitStubCommitStale,
+            ),
+        ],
     );
 
     // Step 7: generate should fix the stale Git stubs.
@@ -2730,11 +2876,27 @@ fn test_stale_git_stub_commit_with_duplicate() -> Result<()> {
     );
 
     // Check should detect both issues.
-    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should detect both duplicate and stale commit"
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::DuplicateLocalFile,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubCommitStale,
+            ),
+        ],
     );
 
     // A single generate should fix both: remove the duplicate AND update the
@@ -2814,7 +2976,8 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
         std::env::set_var("FAKE_GIT_FAIL", "is_ancestor");
     }
 
-    let result = check_apis_up_to_date(env.environment(), &v4)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4)?;
 
     // Should report failures: the git_is_ancestor error propagates as an
     // unfixable GitStubFirstCommitUnknown problem for the non-latest blessed
@@ -2823,6 +2986,26 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
         result,
         CheckResult::Failures,
         "check should report failures when git_is_ancestor errors"
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubFirstCommitUnknown,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubFirstCommitUnknown,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GitStubFirstCommitUnknown,
+            ),
+        ],
     );
 
     Ok(())
@@ -2884,8 +3067,17 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
         std::fs::remove_file(env.workspace_root().join(&v3_json_path))
             .context("failed to delete blessed v3 file")?;
 
-        let result = check_apis_up_to_date(env.environment(), &v3_apis)?;
+        let (result, summaries) =
+            check_apis_with_summaries(env.environment(), &v3_apis)?;
         assert_eq!(result, CheckResult::NeedsUpdate);
+        assert_eq!(
+            summaries,
+            [ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            )],
+        );
 
         env.generate_documents(&v3_apis)?;
 
@@ -2918,8 +3110,28 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
         versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
 
     // Check should report NeedsUpdate (not Failure).
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "4.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
 
     // Generate should restore v3 as a Git stub (not JSON, since v4 is now
     // latest and Git stub storage is enabled).
@@ -3062,8 +3274,24 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
     let rebase_result = env.try_rebase_onto("main")?;
     assert_eq!(rebase_result, RebaseResult::Clean);
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
@@ -3082,8 +3310,24 @@ fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
     let merge_result = env.try_merge_branch("main")?;
     assert_eq!(merge_result, MergeResult::Clean);
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
@@ -3108,8 +3352,24 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
 
     env.jj_new("feature2")?;
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
@@ -3133,8 +3393,24 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
         env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
     assert_eq!(merge_result, JjMergeResult::Clean);
 
-    let result = check_apis_up_to_date(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalSpec,
+            ),
+        ],
+    );
 
     env.generate_documents(&v4_trivial_apis)?;
 
