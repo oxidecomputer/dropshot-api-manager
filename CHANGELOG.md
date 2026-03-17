@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Changed
+
+- Dropshot updated to 0.17.0.
+
 ## [0.6.0] - 2026-03-10
 
 ### Added
