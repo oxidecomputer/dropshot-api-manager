@@ -52,9 +52,10 @@ In API traits, always import `latest` and `vN` modules with `use foo_versions::{
 3. Don't add types to the API crate. All types should live in the versions crate.
 4. Don't put functional (non-conversion-related) code next to versioned types. Put them in the `impls` module in the versions crate.
 5. The `vN::` impl signatures must exactly match the trait signatures (`vN::` paths).
-6. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**, not the versions crate.
-7. Retain all existing comments. Don't add useless comments. Be extremely sparing with added prose.
-8. Don't make unrelated changes. Focus only on the new version being added.
+6. If a prior-version endpoint delegates to a helper function that exclusively serves that old version, the helper's signature must also use `vN::` paths — not floating identifiers from the types crate.
+7. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**, not the versions crate.
+8. Retain all existing comments. Don't add useless comments. Be extremely sparing with added prose.
+9. Don't make unrelated changes. Focus only on the new version being added.
 
 **Order of operations:**
 
@@ -431,6 +432,10 @@ If the prior version is a provided method (the common case), no other changes ar
 #### For *removed* endpoints
 
 The method name has changed, so perform the corresponding updates in the implementation. Remember also to update `latest::` paths to versioned identifiers, mirroring the pattern used in the API trait.
+
+#### Helper functions for prior-version endpoints
+
+If prior-version endpoint implementations delegate to helper functions that exclusively serve old versions, update those helpers to use `vN::` paths as well — not floating identifiers from the types crate.
 
 ### Move non-conversion-related methods to newer types
 

@@ -43,11 +43,12 @@ In API traits and their implementations, always import `latest` and `vN` modules
 3. Don't create new re-exports from the API crate.
 4. Don't put functional (non-conversion-related) code next to versioned types. Put them in an `impls` module in the versions crate.
 5. The `vN::` impl signatures must exactly match the trait signatures (`vN::` paths).
-6. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**.
-7. For other types, strongly prefer retaining existing imports. If an existing module imports `iddqd::IdOrdMap` and uses it as `IdOrdMap`, maintain the same pattern in the destination.
-8. Retain all existing comments. Don't add useless comments like "parameter moved from params.rs". Be extremely sparing with added prose.
-9. Don't make any semantic changes. Move code AS IS, as far as possible. This is purely a reorganization.
-10. Do NOT delete any tests. Most tests in the types crate should move into the versions crate's `impls` module. Tests specifically for conversion between versions should be moved to version modules. Tests that use unpublished types can stay in the types crate.
+6. If a prior-version endpoint delegates to a helper function that exclusively serves that old version, the helper's signature must also use `vN::` paths — not floating identifiers from the types crate. Floating identifiers resolve to the latest version today, but will break when the type changes in a future version.
+7. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**.
+8. For other types, strongly prefer retaining existing imports. If an existing module imports `iddqd::IdOrdMap` and uses it as `IdOrdMap`, maintain the same pattern in the destination.
+9. Retain all existing comments. Don't add useless comments like "parameter moved from params.rs". Be extremely sparing with added prose.
+10. Don't make any semantic changes. Move code AS IS, as far as possible. This is purely a reorganization.
+11. Do NOT delete any tests. Most tests in the types crate should move into the versions crate's `impls` module. Tests specifically for conversion between versions should be moved to version modules. Tests that use unpublished types can stay in the types crate.
 
 **Order of operations:**
 
@@ -404,6 +405,8 @@ impl MyApi for MyApiImpl {
 ```
 
 If a prior version is turned into a provided method, **remove it from all implementations**.
+
+If the implementation delegates to helper functions that exclusively serve prior-version endpoints (e.g. `bgp_admin::get_neighbors_v4`), those helpers must also use `vN::` paths for their parameter and return types — not floating identifiers imported from the types crate.
 
 ## Update replace statements in client crates
 
