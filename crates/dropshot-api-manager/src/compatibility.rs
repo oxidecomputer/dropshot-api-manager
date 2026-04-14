@@ -272,54 +272,39 @@ fn normalize_old_websocket_responses(
         return;
     };
 
-    // Collect the paths and methods that need updating. We need a two-pass
-    // approach because we can't borrow generated while mutating blessed.
-    let updates: Vec<(String, String, serde_json::Value)> = blessed_paths
-        .iter()
-        .flat_map(|(path, item)| {
-            let item = item.as_object()?;
-            Some(item.iter().filter_map(move |(method, operation)| {
-                let op = operation.as_object()?;
-                // Only process websocket operations.
-                if !op.contains_key("x-dropshot-websocket") {
-                    return None;
-                }
-                // Only process old-format responses (has "default" key).
-                let responses = op.get("responses")?.as_object()?;
-                if !responses.contains_key("default") {
-                    return None;
-                }
-                // Look up the corresponding operation in the generated spec
-                // and grab its responses. Only copy if the generated
-                // operation is also a websocket endpoint.
-                let gen_op = generated
-                    .pointer(&format!(
-                        "/paths/{}/{}",
-                        escape_json_pointer(path),
-                        method
-                    ))?
-                    .as_object()?;
-                if !gen_op.contains_key("x-dropshot-websocket") {
-                    return None;
-                }
-                let gen_responses = gen_op.get("responses")?.clone();
-                Some((path.clone(), method.clone(), gen_responses))
-            }))
-        })
-        .flatten()
-        .collect();
-
-    // Apply the updates.
-    for (path, method, new_responses) in updates {
-        if let Some(op) = blessed
-            .pointer_mut(&format!(
-                "/paths/{}/{}",
-                escape_json_pointer(&path),
-                &method
-            ))
-            .and_then(|v| v.as_object_mut())
-        {
-            op.insert("responses".to_string(), new_responses);
+    for (path, item) in blessed_paths.iter_mut() {
+        let Some(item) = item.as_object_mut() else { continue };
+        for (method, operation) in item.iter_mut() {
+            let Some(op) = operation.as_object_mut() else {
+                continue;
+            };
+            if !op.contains_key("x-dropshot-websocket") {
+                continue;
+            }
+            let Some(responses) =
+                op.get("responses").and_then(|v| v.as_object())
+            else {
+                continue;
+            };
+            if !responses.contains_key("default") {
+                continue;
+            }
+            let Some(gen_op) = generated
+                .pointer(&format!(
+                    "/paths/{}/{}",
+                    escape_json_pointer(path),
+                    method,
+                ))
+                .and_then(|v| v.as_object())
+            else {
+                continue;
+            };
+            if !gen_op.contains_key("x-dropshot-websocket") {
+                continue;
+            }
+            if let Some(gen_responses) = gen_op.get("responses") {
+                op.insert("responses".to_string(), gen_responses.clone());
+            }
         }
     }
 }
