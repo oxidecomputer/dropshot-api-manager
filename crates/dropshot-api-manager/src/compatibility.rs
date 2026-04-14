@@ -239,7 +239,7 @@ fn escape_json_pointer(s: &str) -> String {
 /// new format used by the generated spec.
 ///
 /// Dropshot 0.17 changed how websocket endpoints are represented in OpenAPI
-/// (see oxidecomputer/dropshot#1554):
+/// (see https://github.com/oxidecomputer/dropshot/pull/1554):
 ///
 /// Old format (0.16 and earlier):
 /// ```json
@@ -290,16 +290,19 @@ fn normalize_old_websocket_responses(
                     return None;
                 }
                 // Look up the corresponding operation in the generated spec
-                // and grab its responses.
-                let gen_responses = generated
+                // and grab its responses. Only copy if the generated
+                // operation is also a websocket endpoint.
+                let gen_op = generated
                     .pointer(&format!(
                         "/paths/{}/{}",
                         escape_json_pointer(path),
                         method
                     ))?
-                    .as_object()?
-                    .get("responses")?
-                    .clone();
+                    .as_object()?;
+                if !gen_op.contains_key("x-dropshot-websocket") {
+                    return None;
+                }
+                let gen_responses = gen_op.get("responses")?.clone();
                 Some((path.clone(), method.clone(), gen_responses))
             }))
         })
@@ -325,13 +328,15 @@ pub fn api_compatible(
     blessed: &serde_json::Value,
     generated: &serde_json::Value,
 ) -> anyhow::Result<Vec<ApiCompatIssue>> {
+    let mut blessed = blessed.clone();
+
     // Normalize old-format websocket responses in the blessed spec before
     // comparison. Dropshot 0.17 changed how websocket endpoints are
     // represented: from a `default` response with `*/*` content to explicit
     // `101`/`4XX`/`5XX` responses. This is purely a spec-generation change,
     // not a wire-format change.
-    let mut blessed = blessed.clone();
     normalize_old_websocket_responses(&mut blessed, generated);
+
     let changes = drift::compare(&blessed, generated)?;
     let changes = changes
         .into_iter()
@@ -766,6 +771,121 @@ mod test {
             issues.is_empty(),
             "old ws format should be compatible after normalization, \
              but got: {issues:?}",
+        );
+    }
+
+    #[test]
+    fn test_normalize_ws_to_http_still_detects_incompatibility() {
+        // If a blessed websocket endpoint is replaced by a normal HTTP
+        // endpoint at the same path/method, normalization should not
+        // mask the change. The normalizer copies responses from the
+        // generated operation, but drift still detects the removal of
+        // the `default` response (the generated operation lacks one).
+        let blessed = serde_json::json!({
+            "openapi": "3.0.3",
+            "info": { "title": "Test", "version": "1.0.0" },
+            "paths": {
+                "/subscribe": {
+                    "get": {
+                        "operationId": "subscribe",
+                        "responses": {
+                            "default": {
+                                "description": "",
+                                "content": {
+                                    "*/*": { "schema": {} }
+                                }
+                            }
+                        },
+                        "x-dropshot-websocket": {}
+                    }
+                }
+            },
+            "components": {
+                "responses": {
+                    "Error": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                },
+                "schemas": {
+                    "Error": {
+                        "description": "Error information from a response.",
+                        "type": "object",
+                        "properties": {
+                            "message": { "type": "string" },
+                            "request_id": { "type": "string" }
+                        },
+                        "required": ["message", "request_id"]
+                    }
+                }
+            }
+        });
+
+        // Same path/method, but now a normal HTTP endpoint (no
+        // x-dropshot-websocket), with a regular 200 response.
+        let generated = serde_json::json!({
+            "openapi": "3.0.3",
+            "info": { "title": "Test", "version": "1.0.0" },
+            "paths": {
+                "/subscribe": {
+                    "get": {
+                        "operationId": "subscribe",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "content": {
+                                    "application/json": {
+                                        "schema": { "type": "string" }
+                                    }
+                                }
+                            },
+                            "4XX": {
+                                "$ref": "#/components/responses/Error"
+                            },
+                            "5XX": {
+                                "$ref": "#/components/responses/Error"
+                            }
+                        }
+                    }
+                }
+            },
+            "components": {
+                "responses": {
+                    "Error": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                }
+                            }
+                        }
+                    }
+                },
+                "schemas": {
+                    "Error": {
+                        "description": "Error information from a response.",
+                        "type": "object",
+                        "properties": {
+                            "message": { "type": "string" },
+                            "request_id": { "type": "string" }
+                        },
+                        "required": ["message", "request_id"]
+                    }
+                }
+            }
+        });
+
+        let issues = api_compatible(&blessed, &generated).unwrap();
+        assert!(
+            !issues.is_empty(),
+            "websocket-to-HTTP change should be detected as incompatible",
         );
     }
 }

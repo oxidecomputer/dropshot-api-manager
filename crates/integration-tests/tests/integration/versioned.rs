@@ -1917,7 +1917,12 @@ fn rewrite_versioned_doc_ws_format(
             std::fs::remove_file(env.workspace_root().join(&latest_link))?;
             #[cfg(unix)]
             std::os::unix::fs::symlink(
-                new_filename,
+                &new_filename,
+                env.workspace_root().join(&latest_link),
+            )?;
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_file(
+                &new_filename,
                 env.workspace_root().join(&latest_link),
             )?;
         }
