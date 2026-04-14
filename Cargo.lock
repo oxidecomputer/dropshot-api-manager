@@ -1246,13 +1246,12 @@ dependencies = [
  "dropshot-api-manager-types",
  "git-stub",
  "git-stub-vcs",
- "hex",
+ "http",
  "openapiv3",
  "schemars",
  "semver 1.0.27",
  "serde",
  "serde_json",
- "sha2",
 ]
 
 [[package]]

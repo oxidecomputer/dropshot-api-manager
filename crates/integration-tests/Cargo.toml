@@ -16,6 +16,7 @@ chrono.workspace = true
 clap.workspace = true
 dropshot.workspace = true
 dropshot-api-manager.workspace = true
+http.workspace = true
 dropshot-api-manager-types.workspace = true
 git-stub.workspace = true
 git-stub-vcs.workspace = true
@@ -29,8 +30,6 @@ serde_json.workspace = true
 assert_matches.workspace = true
 atomicwrites.workspace = true
 drift.workspace = true
-hex.workspace = true
-sha2.workspace = true
 
 [package.metadata.release]
 release = false
