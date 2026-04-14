@@ -28,6 +28,9 @@ serde_json.workspace = true
 [dev-dependencies]
 assert_matches.workspace = true
 atomicwrites.workspace = true
+drift.workspace = true
+hex.workspace = true
+sha2.workspace = true
 
 [package.metadata.release]
 release = false
