@@ -330,11 +330,9 @@ pub fn api_compatible(
     // represented: from a `default` response with `*/*` content to explicit
     // `101`/`4XX`/`5XX` responses. This is purely a spec-generation change,
     // not a wire-format change.
-    let generated = generated.clone();
-    let changes =
-        drift::compare_with_normalizer(blessed, &generated, |blessed| {
-            normalize_old_websocket_responses(blessed, &generated)
-        })?;
+    let mut blessed = blessed.clone();
+    normalize_old_websocket_responses(&mut blessed, generated);
+    let changes = drift::compare(&blessed, generated)?;
     let changes = changes
         .into_iter()
         .filter_map(|change| match change.class {
@@ -356,9 +354,9 @@ pub fn api_compatible(
                 ))
                 .or_insert_with(|| {
                     CompatIssueData::new(
-                        blessed,
+                        &blessed,
                         blessed_pointer,
-                        &generated,
+                        generated,
                         generated_pointer,
                     )
                 })
