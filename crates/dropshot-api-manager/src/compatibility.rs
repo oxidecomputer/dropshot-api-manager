@@ -266,6 +266,30 @@ fn normalize_old_websocket_responses(
     blessed: &mut serde_json::Value,
     generated: &serde_json::Value,
 ) {
+    // Exact JSON for the old and new websocket response formats. We only
+    // normalize when both sides match exactly, to avoid accidentally
+    // papering over a real incompatibility.
+    let old_ws_responses = serde_json::json!({
+        "default": {
+            "description": "",
+            "content": {
+                "*/*": { "schema": {} }
+            }
+        }
+    });
+    let new_ws_responses = serde_json::json!({
+        "101": {
+            "description":
+                "Negotiating protocol upgrade from HTTP/1.1 to WebSocket"
+        },
+        "4XX": {
+            "$ref": "#/components/responses/Error"
+        },
+        "5XX": {
+            "$ref": "#/components/responses/Error"
+        }
+    });
+
     let Some(blessed_paths) =
         blessed.pointer_mut("/paths").and_then(|v| v.as_object_mut())
     else {
@@ -281,12 +305,7 @@ fn normalize_old_websocket_responses(
             if !op.contains_key("x-dropshot-websocket") {
                 continue;
             }
-            let Some(responses) =
-                op.get("responses").and_then(|v| v.as_object())
-            else {
-                continue;
-            };
-            if !responses.contains_key("default") {
+            if op.get("responses") != Some(&old_ws_responses) {
                 continue;
             }
             let Some(gen_op) = generated
@@ -302,9 +321,10 @@ fn normalize_old_websocket_responses(
             if !gen_op.contains_key("x-dropshot-websocket") {
                 continue;
             }
-            if let Some(gen_responses) = gen_op.get("responses") {
-                op.insert("responses".to_string(), gen_responses.clone());
+            if gen_op.get("responses") != Some(&new_ws_responses) {
+                continue;
             }
+            op.insert("responses".to_string(), new_ws_responses.clone());
         }
     }
 }

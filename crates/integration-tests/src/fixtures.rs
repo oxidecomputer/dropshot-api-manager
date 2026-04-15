@@ -1010,15 +1010,13 @@ pub mod versioned_ws {
 
 /// Response type that produces the pre-0.17 websocket OpenAPI
 /// representation: a `default` response with `*/*` content, instead of the
-/// current `101`/`4XX`/`5XX` responses. Used only for generating test
-/// fixtures; never instantiated at runtime.
+/// current `101`/`4XX`/`5XX` responses.
 pub enum OldWebsocketResponse {}
 
 impl dropshot::HttpResponse for OldWebsocketResponse {
     fn to_result(
         self,
     ) -> Result<http::Response<dropshot::Body>, dropshot::HttpError> {
-        // Zero-variant enum: this can never be constructed.
         match self {}
     }
     fn response_metadata() -> dropshot::ApiEndpointResponse {
