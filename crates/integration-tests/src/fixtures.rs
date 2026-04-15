@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use dropshot::{
     HttpError, HttpResponseOk, Path, Query, RequestContext, TypedBody,
+    WebsocketConnection,
 };
 use dropshot_api_manager::{ManagedApi, ManagedApiConfig, ManagedApis};
 use dropshot_api_manager_types::{
@@ -945,6 +946,144 @@ pub mod versioned_health_skip_middle {
     };
 }
 
+/// Versioned API with a websocket endpoint, for testing spec format changes
+/// across dropshot versions. The websocket response format changed between
+/// dropshot 0.16 and 0.17 (from a `default` response to explicit `101`/`4XX`/
+/// `5XX` responses), and this fixture exercises that scenario.
+pub mod versioned_ws {
+    use super::*;
+    use dropshot_api_manager_types::api_versions;
+
+    api_versions!([(2, WITH_METRICS), (1, INITIAL),]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedWsApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<HealthStatus>, HttpError>;
+
+        /// Subscribe to live updates (all versions).
+        #[channel {
+            protocol = WEBSOCKETS,
+            path = "/subscribe",
+            operation_id = "subscribe",
+            versions = "1.0.0"..
+        }]
+        async fn subscribe(
+            rqctx: RequestContext<Self::Context>,
+            upgraded: WebsocketConnection,
+        ) -> dropshot::WebsocketChannelResult;
+
+        /// Get service metrics (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "2.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<ServiceMetrics>, HttpError>;
+    }
+
+    /// Health status response.
+    #[derive(JsonSchema, Serialize)]
+    pub struct HealthStatus {
+        pub status: String,
+    }
+
+    /// Service metrics response (v2+).
+    #[derive(JsonSchema, Serialize)]
+    pub struct ServiceMetrics {
+        pub requests_per_second: f64,
+    }
+}
+
+/// Response type that produces the pre-0.17 websocket OpenAPI
+/// representation: a `default` response with `*/*` content, instead of the
+/// current `101`/`4XX`/`5XX` responses.
+pub enum OldWebsocketResponse {}
+
+impl dropshot::HttpResponse for OldWebsocketResponse {
+    fn to_result(
+        self,
+    ) -> Result<http::Response<dropshot::Body>, dropshot::HttpError> {
+        match self {}
+    }
+    fn response_metadata() -> dropshot::ApiEndpointResponse {
+        dropshot::ApiEndpointResponse {
+            schema: None,
+            headers: vec![],
+            success: None,
+            description: None,
+        }
+    }
+    fn status_code(&self) -> http::StatusCode {
+        match *self {}
+    }
+}
+
+/// Same API as [`versioned_ws`] but using the old websocket response format
+/// (pre-dropshot 0.17). The websocket endpoint uses `#[endpoint]` with
+/// [`WebsocketUpgrade`](dropshot::WebsocketUpgrade) and [`OldWebsocketResponse`] instead of `#[channel]`,
+/// producing the old `default` response in the generated OpenAPI document.
+pub mod versioned_ws_old {
+    use super::*;
+    use dropshot::WebsocketUpgrade;
+    use dropshot_api_manager_types::api_versions;
+
+    // Same versions as versioned_ws.
+    api_versions!([(2, WITH_METRICS), (1, INITIAL),]);
+
+    #[dropshot::api_description { module = "api_mod" }]
+    pub trait VersionedWsOldApi {
+        type Context;
+
+        /// Check if the service is healthy (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/health",
+            operation_id = "health_check",
+            versions = "1.0.0"..
+        }]
+        async fn health_check(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<versioned_ws::HealthStatus>, HttpError>;
+
+        /// Subscribe to live updates (all versions).
+        #[endpoint {
+            method = GET,
+            path = "/subscribe",
+            operation_id = "subscribe",
+            versions = "1.0.0"..
+        }]
+        async fn subscribe(
+            rqctx: RequestContext<Self::Context>,
+            upgraded: WebsocketUpgrade,
+        ) -> Result<OldWebsocketResponse, HttpError>;
+
+        /// Get service metrics (v2+).
+        #[endpoint {
+            method = GET,
+            path = "/metrics",
+            operation_id = "get_metrics",
+            versions = "2.0.0"..
+        }]
+        async fn get_metrics(
+            rqctx: RequestContext<Self::Context>,
+        ) -> Result<HttpResponseOk<versioned_ws::ServiceMetrics>, HttpError>;
+    }
+}
+
 /// Versioned health API with incompatible changes - this breaks backward
 /// compatibility by changing the response schema of an existing endpoint.
 pub mod versioned_health_incompat {
@@ -1281,6 +1420,57 @@ pub fn create_mixed_test_apis() -> Result<ManagedApis> {
         versioned_user_api(),
     ];
     ManagedApis::new(configs).context("failed to create mixed ManagedApis")
+}
+
+/// Create a versioned websocket API for testing spec format normalization.
+pub fn versioned_ws_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-ws",
+        versions: Versions::Versioned {
+            supported_versions: versioned_ws::supported_versions(),
+        },
+        title: "Versioned WebSocket API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned API with websocket endpoints for testing",
+            ),
+            ..Default::default()
+        },
+        api_description: versioned_ws::api_mod::stub_api_description,
+    }
+}
+
+/// Create versioned websocket APIs for testing.
+pub fn versioned_ws_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_ws_api()])
+        .context("failed to create versioned websocket ManagedApis")
+}
+
+/// Create a versioned websocket API that generates old-format (pre-0.17)
+/// OpenAPI documents. Same ident and versions as [`versioned_ws_api`] so it
+/// can serve as the blessed source against which the new-format generated
+/// source is checked.
+pub fn versioned_ws_old_api() -> ManagedApiConfig {
+    ManagedApiConfig {
+        ident: "versioned-ws",
+        versions: Versions::Versioned {
+            supported_versions: versioned_ws_old::supported_versions(),
+        },
+        title: "Versioned WebSocket API",
+        metadata: ManagedApiMetadata {
+            description: Some(
+                "A versioned API with websocket endpoints for testing",
+            ),
+            ..Default::default()
+        },
+        api_description: versioned_ws_old::api_mod::stub_api_description,
+    }
+}
+
+/// Create versioned websocket APIs with old-format documents.
+pub fn versioned_ws_old_apis() -> Result<ManagedApis> {
+    ManagedApis::new(vec![versioned_ws_old_api()])
+        .context("failed to create old-format versioned websocket ManagedApis")
 }
 
 /// Create versioned health API with a trivial change (title/metadata updated).

@@ -8,9 +8,12 @@
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
-use dropshot_api_manager::test_util::{
-    CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
-    check_apis_with_summaries,
+use dropshot_api_manager::{
+    ManagedApi, ManagedApis,
+    test_util::{
+        CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
+        check_apis_with_summaries,
+    },
 };
 use integration_tests::*;
 use openapiv3::OpenAPI;
@@ -1822,4 +1825,109 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
     env.generate_documents(&v4_trivial_apis)?;
 
     blessed_version_missing_local_verify(&env)
+}
+
+// --- Websocket spec format normalization tests ---
+
+/// Verify that without normalization, old-format websocket blessed specs
+/// would be detected as incompatible by drift. This proves the normalizer
+/// is necessary.
+#[test]
+fn test_blessed_ws_old_format_fails_without_normalizer() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+
+    // Generate old-format and new-format v1 specs from their respective
+    // API traits and compare directly with drift.
+    let old_apis = versioned_ws_old_apis()?;
+    env.generate_documents(&old_apis)?;
+    let old_doc_path = env
+        .find_versioned_document_path("versioned-ws", "1.0.0")?
+        .expect("v1 doc should exist");
+    let old_content = env.read_file(&old_doc_path)?;
+
+    let new_apis = versioned_ws_apis()?;
+    env.generate_documents(&new_apis)?;
+    let new_doc_path = env
+        .find_versioned_document_path("versioned-ws", "1.0.0")?
+        .expect("v1 doc should exist");
+    let new_content = env.read_file(&new_doc_path)?;
+
+    let old_spec: serde_json::Value = serde_json::from_str(&old_content)?;
+    let new_spec: serde_json::Value = serde_json::from_str(&new_content)?;
+
+    // Raw drift comparison (no normalizer) should find issues.
+    let changes = drift::compare(&old_spec, &new_spec)?;
+    let non_trivial: Vec<_> = changes
+        .iter()
+        .filter(|c| !matches!(c.class, drift::ChangeClass::Trivial))
+        .collect();
+    assert!(
+        !non_trivial.is_empty(),
+        "without normalization, old ws format should be incompatible \
+         with new format",
+    );
+
+    Ok(())
+}
+
+/// Test that blessed documents with old websocket response format (pre-0.17
+/// dropshot) are normalized during compatibility checking. Older (non-latest)
+/// blessed versions pass because they use semantic equality. The latest version
+/// still fails because it requires bytewise equality — the normalized spec
+/// format differs from the old committed format.
+#[test]
+fn test_blessed_ws_old_format_normalized_older_versions_pass() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+
+    // Generate old-format documents and commit them as blessed.
+    let old_apis = versioned_ws_old_apis()?;
+    env.generate_documents(&old_apis)?;
+    env.commit_documents()?;
+
+    // Check with the new-format API trait.
+    // v1 (older version) passes: normalization makes it wire-compatible,
+    // and older versions only need semantic equality.
+    // v2 (latest version) fails: the bytewise check catches the format
+    // difference even after normalization passes.
+    let new_apis = versioned_ws_apis()?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &new_apis)?;
+    assert_eq!(result, CheckResult::Failures);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-ws",
+            "2.0.0",
+            ProblemKind::BlessedLatestVersionBytewiseMismatch,
+        )],
+    );
+
+    Ok(())
+}
+
+/// Test that blessed documents with old websocket format pass fully when
+/// `allow_trivial_changes_for_latest` is set, because the normalization
+/// makes them wire-compatible and the bytewise check is disabled.
+#[test]
+fn test_blessed_ws_old_format_passes_with_trivial_changes_allowed() -> Result<()>
+{
+    let env = TestEnvironment::new_git()?;
+
+    // Generate old-format documents and commit them as blessed.
+    let old_apis = versioned_ws_old_apis()?;
+    env.generate_documents(&old_apis)?;
+    env.commit_documents()?;
+
+    // Check with new-format API + allow_trivial_changes_for_latest.
+    let config = versioned_ws_api();
+    let new_apis = ManagedApis::new(vec![
+        ManagedApi::from(config).allow_trivial_changes_for_latest(),
+    ])?;
+
+    // Everything should pass: normalization handles wire compatibility,
+    // and the bytewise check is disabled for the latest version.
+    let result = check_apis_up_to_date(env.environment(), &new_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
 }
