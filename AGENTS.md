@@ -290,8 +290,9 @@ cargo test --doc
 # Format code (REQUIRED before committing)
 cargo xfmt
 
-# Lint
+# Before pushing, run all of these — they are checked in CI:
 cargo clippy --all-features --all-targets
+just rustdoc
 
 # Build
 cargo build --all-targets --all-features

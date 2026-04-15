@@ -1036,7 +1036,7 @@ impl dropshot::HttpResponse for OldWebsocketResponse {
 
 /// Same API as [`versioned_ws`] but using the old websocket response format
 /// (pre-dropshot 0.17). The websocket endpoint uses `#[endpoint]` with
-/// [`WebsocketUpgrade`] and [`OldWebsocketResponse`] instead of `#[channel]`,
+/// [`WebsocketUpgrade`](dropshot::WebsocketUpgrade) and [`OldWebsocketResponse`] instead of `#[channel]`,
 /// producing the old `default` response in the generated OpenAPI document.
 pub mod versioned_ws_old {
     use super::*;
