@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Added
+
+Normalize WebSocket response JSON schema changes between Dropshot 0.16 and 0.17. (The changes are wire-compatible but the JSON schema is different.)
+
 ## [0.7.0] - 2026-03-17
 
 ### Changed
