@@ -88,7 +88,7 @@ pub mod versioned {
     }
 
     #[derive(Serialize, JsonSchema)]
-    struct ThingV1 {
+    pub struct ThingV1 {
         thing_str: &'static str,
         // EXERCISE: Comment out the line above, and uncomment the line below, to
         // introduce a breaking change to the blessed 1.0.0 version of this
@@ -97,7 +97,7 @@ pub mod versioned {
     }
 
     #[derive(Serialize, JsonSchema)]
-    struct ThingV2 {
+    pub struct ThingV2 {
         // Note: this was originally `thing_number: u32`, but a wrapper type was
         // added afterwards to test out wire-compatible changes to the schema.
         // This trivial change caused THREE_DOT_OH to be generated.
