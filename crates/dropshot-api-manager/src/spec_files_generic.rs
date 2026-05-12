@@ -1018,7 +1018,7 @@ pub(crate) fn hash_contents(contents: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::ManagedApiConfig;
     use anyhow::Context;

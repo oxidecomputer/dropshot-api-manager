@@ -420,7 +420,7 @@ pub fn change_class_str(class: &ChangeClass) -> &'static str {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

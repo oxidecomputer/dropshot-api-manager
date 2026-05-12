@@ -37,7 +37,7 @@ pub fn iter_only<T: Debug>(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use assert_matches::assert_matches;
 
