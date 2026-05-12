@@ -1859,7 +1859,15 @@ fn test_blessed_ws_old_format_fails_without_normalizer() -> Result<()> {
     let changes = drift::compare(&old_spec, &new_spec)?;
     let non_trivial: Vec<_> = changes
         .iter()
-        .filter(|c| !matches!(c.class, drift::ChangeClass::Trivial))
+        .filter(|c| {
+            c.changes.iter().any(|info| match info.class {
+                drift::ChangeClass::BackwardIncompatible
+                | drift::ChangeClass::ForwardIncompatible
+                | drift::ChangeClass::Incompatible
+                | drift::ChangeClass::Unhandled => true,
+                drift::ChangeClass::Trivial => false,
+            })
+        })
         .collect();
     assert!(
         !non_trivial.is_empty(),

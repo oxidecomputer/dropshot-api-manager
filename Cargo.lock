@@ -444,9 +444,9 @@ dependencies = [
 
 [[package]]
 name = "drift"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44cc7f4e6337c9c0d0402e2dccaeaea63fc38467a3e5ab3f465372dafce2cd89"
+checksum = "a453bee38ca50a50f5b9dd2a3802e6972020bbff0f0040701b28f002a2490d27"
 dependencies = [
  "anyhow",
  "indexmap",

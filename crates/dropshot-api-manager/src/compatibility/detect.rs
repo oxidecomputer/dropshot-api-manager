@@ -2,7 +2,7 @@
 
 //! Determine if one OpenAPI document is a subset of another
 
-use drift::{Change, ChangeClass};
+use drift::{Change, ChangeClass, ChangeInfo};
 use std::{collections::BTreeMap, fmt};
 
 /// A compatibility error between two OpenAPI documents, indexed by the blessed
@@ -52,11 +52,10 @@ impl fmt::Display for ApiCompatIssue {
         }
 
         if self.data.changes.len() == 1 {
-            let Change {
+            let ChangeInfo {
                 message,
-                old_path: _,
-                new_path: _,
-                comparison: _,
+                old_subpath: _,
+                new_subpath: _,
                 class,
                 details: _,
             } = &self.data.changes[0];
@@ -64,11 +63,10 @@ impl fmt::Display for ApiCompatIssue {
         } else {
             writeln!(f)?;
             for error in &self.data.changes {
-                let Change {
+                let ChangeInfo {
                     message,
-                    old_path: _,
-                    new_path: _,
-                    comparison: _,
+                    old_subpath: _,
+                    new_subpath: _,
                     class,
                     details: _,
                 } = error;
@@ -89,7 +87,7 @@ impl fmt::Display for ApiCompatIssue {
 struct CompatIssueData {
     blessed_value: Option<serde_json::Value>,
     generated_value: Option<serde_json::Value>,
-    changes: Vec<Change>,
+    changes: Vec<ChangeInfo>,
 }
 
 impl CompatIssueData {
@@ -343,39 +341,61 @@ pub fn api_compatible(
     normalize_old_websocket_responses(&mut blessed, generated);
 
     let changes = drift::compare(&blessed, generated)?;
-    let changes = changes
+
+    // drift 0.2.0 groups multiple paths and multiple inner changes under a
+    // single `Change`. Flatten back to (path, info) pairs and aggregate by
+    // (blessed_pointer, generated_pointer) to preserve the existing
+    // grouping and rendering.
+    let aggregated = changes
         .into_iter()
-        .filter_map(|change| match change.class {
-            ChangeClass::BackwardIncompatible
-            | ChangeClass::ForwardIncompatible
-            | ChangeClass::Incompatible
-            | ChangeClass::Unhandled => Some(change),
-            ChangeClass::Trivial => None,
+        .flat_map(|Change { paths, changes: change_infos }| {
+            // Filter trivial here so an entry whose only inner changes are
+            // trivial doesn't create empty groups.
+            let non_trivial: Vec<ChangeInfo> = change_infos
+                .into_iter()
+                .filter(|info| match info.class {
+                    ChangeClass::BackwardIncompatible
+                    | ChangeClass::ForwardIncompatible
+                    | ChangeClass::Incompatible
+                    | ChangeClass::Unhandled => true,
+                    ChangeClass::Trivial => false,
+                })
+                .collect();
+            paths
+                .into_iter()
+                .flat_map(move |path| {
+                    let blessed_pointer =
+                        path.old.iter().next().unwrap_or("").to_owned();
+                    let generated_pointer =
+                        path.new.iter().next().unwrap_or("").to_owned();
+                    non_trivial.clone().into_iter().map(move |info| {
+                        (
+                            blessed_pointer.clone(),
+                            generated_pointer.clone(),
+                            info,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
         })
         .fold(
-            // BTreeMap of (blessed_pointer, generated_pointer) => data
             BTreeMap::<(String, String), CompatIssueData>::new(),
-            |mut acc, change| {
-                let blessed_pointer = change.old_path.iter().next().unwrap();
-                let generated_pointer = change.new_path.iter().next().unwrap();
-                acc.entry((
-                    blessed_pointer.to_owned(),
-                    generated_pointer.to_owned(),
-                ))
-                .or_insert_with(|| {
-                    CompatIssueData::new(
-                        &blessed,
-                        blessed_pointer,
-                        generated,
-                        generated_pointer,
-                    )
-                })
-                .changes
-                .push(change);
+            |mut acc, (blessed_pointer, generated_pointer, info)| {
+                acc.entry((blessed_pointer.clone(), generated_pointer.clone()))
+                    .or_insert_with(|| {
+                        CompatIssueData::new(
+                            &blessed,
+                            &blessed_pointer,
+                            generated,
+                            &generated_pointer,
+                        )
+                    })
+                    .changes
+                    .push(info);
                 acc
             },
         );
-    Ok(changes
+    Ok(aggregated
         .into_iter()
         .map(|((blessed_pointer, generated_pointer), data)| ApiCompatIssue {
             blessed_pointer,
