@@ -318,7 +318,7 @@ pub const NEEDS_UPDATE_EXIT_CODE: u8 = 4;
 pub const FAILURE_EXIT_CODE: u8 = 100;
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::{
         environment::{
