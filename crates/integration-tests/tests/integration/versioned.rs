@@ -972,6 +972,17 @@ fn test_blessed_api_endpoint_removed_render() -> Result<()> {
     )
 }
 
+/// Snapshot the rendered output when the same compatibility issue arises
+/// under two different APIs.
+#[test]
+fn test_cross_api_dedup_render() -> Result<()> {
+    render_blessed_version_broken_snapshot(
+        versioned_health_pair_apis()?,
+        versioned_health_pair_incompat_apis()?,
+        "cross_api_dedup.txt",
+    )
+}
+
 /// Shared body for the `BlessedVersionBroken` snapshot tests: commit `blessed`
 /// as the upstream shape, then check against `generated` and snapshot the
 /// rendered output to `snapshot_name` under `tests/output/integration/`.
