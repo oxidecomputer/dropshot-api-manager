@@ -15,7 +15,7 @@
                     @@ -1,11 +1,22 @@
                      {
                        "get": {
-                    +    "description": "Adds a required query parameter `verbose` relative to the blessed shape — see `DetailedFilter` below.",
+                    +    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
                          "operationId": "detailed_health_check",
                     +    "parameters": [
                     +      {
@@ -75,7 +75,7 @@
                     @@ -1,11 +1,22 @@
                      {
                        "get": {
-                    +    "description": "Adds a required query parameter `verbose` relative to the blessed shape — see `DetailedFilter` below.",
+                    +    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
                          "operationId": "detailed_health_check",
                     +    "parameters": [
                     +      {

@@ -978,7 +978,6 @@ fn test_incompatible_blessed_api_change_render() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn test_incompatible_blessed_api_change() -> Result<()> {
     let env = TestEnvironment::new_git()?;
