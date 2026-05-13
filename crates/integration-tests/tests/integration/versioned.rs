@@ -969,7 +969,8 @@ fn test_incompatible_blessed_api_change_render() -> Result<()> {
     // on Windows. The placeholder restores the quotes so the line still
     // reads naturally.
     let documents_dir_debug = format!("{:?}", env.documents_dir());
-    let normalized = rendered.replace(&documents_dir_debug, "\"<documents dir>\"");
+    let normalized =
+        rendered.replace(&documents_dir_debug, "\"<documents dir>\"");
 
     let snapshot_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/output/integration/blessed_version_broken.txt");
