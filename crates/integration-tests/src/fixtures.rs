@@ -1108,6 +1108,9 @@ pub mod versioned_health_incompat {
         ) -> Result<HttpResponseOk<HealthStatusV1>, HttpError>;
 
         /// Get detailed health status (v2+).
+        ///
+        /// Adds a required query parameter `verbose` relative to the
+        /// blessed shape. See `DetailedFilter` below.
         #[endpoint {
             method = GET,
             path = "/health/detailed",
@@ -1116,6 +1119,7 @@ pub mod versioned_health_incompat {
         }]
         async fn detailed_health_check(
             rqctx: RequestContext<Self::Context>,
+            query: Query<DetailedFilter>,
         ) -> Result<HttpResponseOk<DetailedHealthStatus>, HttpError>;
 
         /// Get service metrics (v3+).
@@ -1157,6 +1161,15 @@ pub mod versioned_health_incompat {
     pub use super::versioned_health::{
         DependencyStatus, DetailedHealthStatus, HealthStatusV1, ServiceMetrics,
     };
+
+    /// Required query parameter added to `detailed_health_check`. This is
+    /// drift's second asymmetric-path case (operation on the missing side,
+    /// parameter on the present side) — see comments on the test that
+    /// exercises this fixture.
+    #[derive(Debug, Deserialize, JsonSchema)]
+    pub struct DetailedFilter {
+        pub verbose: bool,
+    }
 }
 
 /// Versioned health API with 4 versions (adds v4 to the base API). Used to test

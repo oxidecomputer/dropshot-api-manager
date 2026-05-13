@@ -978,6 +978,7 @@ fn test_incompatible_blessed_api_change_render() -> Result<()> {
     Ok(())
 }
 
+
 #[test]
 fn test_incompatible_blessed_api_change() -> Result<()> {
     let env = TestEnvironment::new_git()?;
@@ -1016,8 +1017,10 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
         .unwrap()
     );
 
-    // Now introduce incompatible changes. This adds a new endpoint, which
-    // (while forward-compatible) we treat as a breaking change.
+    // Now introduce incompatible changes. The incompat fixture adds a new
+    // endpoint to v3.0.0 and adds a new required query parameter to
+    // `detailed_health_check` (which is in v2.0.0+), so both v2.0.0 and
+    // v3.0.0 are reported as broken.
     let incompatible_apis = versioned_health_incompat_apis()?;
 
     // This check should return Failures.
@@ -1026,11 +1029,18 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
     assert_eq!(result, CheckResult::Failures);
     assert_eq!(
         summaries,
-        [ProblemSummary::new(
-            "versioned-health",
-            "3.0.0",
-            ProblemKind::BlessedVersionBroken,
-        )],
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::BlessedVersionBroken,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionBroken,
+            ),
+        ],
     );
 
     Ok(())
