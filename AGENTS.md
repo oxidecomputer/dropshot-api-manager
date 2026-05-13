@@ -214,7 +214,11 @@ crates/
 │   │   ├── cmd/                   # CLI commands (dispatch, check, generate, list, debug)
 │   │   ├── environment.rs         # Environment configuration and resolution
 │   │   ├── resolved.rs            # Resolution logic, Problem enum, Fix enum
-│   │   ├── compatibility.rs       # Wire compatibility checking via drift
+│   │   ├── compatibility/         # Wire compatibility checking via drift
+│   │   │   ├── mod.rs             # Module re-exports
+│   │   │   ├── types.rs           # ApiCompatIssue and related data model
+│   │   │   ├── detect.rs          # Bridge from drift output into the data model
+│   │   │   └── display.rs         # Styled CLI rendering of compatibility issues
 │   │   ├── validation.rs          # OpenAPI document validation
 │   │   ├── vcs/                   # VCS abstraction (RepoVcs: Git/Jujutsu dispatch)
 │   │   │   ├── mod.rs             # Module re-exports

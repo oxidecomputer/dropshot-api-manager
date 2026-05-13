@@ -1,0 +1,8 @@
+[31;1mincompatible[0m: schema types changed
+          [2mat[0m: [1mSubType[0m[1m.[0m[1mvalue[0m
+     [2mused by[0m: [32;1mGET[0m [36m/a[0m ([35mlist_a[0m)
+[2m              [0m[2m├─ [0m[1mWrapper[0m.via_a
+[2m              [0m[2m└─ [0m[1mWrapper[0m.via_b
+     [2mused by[0m: [32;1mGET[0m [36m/b[0m ([35mlist_b[0m)
+[2m              [0m[2m├─ [0m[1mWrapper[0m.via_a [2m(*)[0m
+[2m              [0m[2m└─ [0m[1mWrapper[0m.via_b [2m(*)[0m
