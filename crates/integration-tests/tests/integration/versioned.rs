@@ -973,10 +973,7 @@ fn test_blessed_api_endpoint_removed_render() -> Result<()> {
 }
 
 /// Snapshot the rendered output when the same compatibility issue arises
-/// under two different APIs. Both `versioned-health` and `versioned-monitor`
-/// are built from the same underlying trait, so any incompatibility shows up
-/// identically under both idents — exercising the cross-API axis of compat
-/// issue dedup.
+/// under two different APIs.
 #[test]
 fn test_cross_api_dedup_render() -> Result<()> {
     render_blessed_version_broken_snapshot(

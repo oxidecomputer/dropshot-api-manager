@@ -1694,12 +1694,6 @@ pub fn versioned_health_incompat_apis() -> Result<ManagedApis> {
 
 /// A pair of versioned APIs that share the [`versioned_health`] trait,
 /// differing only by ident, title, and description.
-///
-/// Both APIs generate identical endpoint and schema shapes, so any
-/// incompatibility introduced in their generated counterpart shows up under
-/// both idents. This is the cross-API axis for compatibility-issue dedup
-/// tests: the same `BlessedVersionBroken` issue is reported under both
-/// `versioned-health` and `versioned-monitor`.
 pub fn versioned_health_pair_apis() -> Result<ManagedApis> {
     let primary = ManagedApiConfig {
         ident: "versioned-health",
@@ -1735,9 +1729,7 @@ pub fn versioned_health_pair_apis() -> Result<ManagedApis> {
         .context("failed to create versioned health pair ManagedApis")
 }
 
-/// Incompatible counterpart of [`versioned_health_pair_apis`]: the same two
-/// idents, both using the `versioned_health_incompat` trait, so the same
-/// compat issues appear under both APIs.
+/// Incompatible counterpart of [`versioned_health_pair_apis`].
 pub fn versioned_health_pair_incompat_apis() -> Result<ManagedApis> {
     let primary = ManagedApiConfig {
         ident: "versioned-health",
