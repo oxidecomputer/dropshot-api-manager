@@ -93,10 +93,13 @@ where
     'diff: 'old + 'new + 'bufs,
     T: DiffableStr + ?Sized,
 {
-    // The "a/" (/ courtesy full_path) and "b/" make it feel more like git diff.
-    let a = Utf8Path::new("a").join(path1);
+    // The "a/" and "b/" prefixes make this feel more like a git diff. We
+    // assemble the header by hand (and normalize any backslashes in the
+    // path) so the output is forward-slashed regardless of host OS, which
+    // is the convention every diff/patch tool expects.
+    let a = format_diff_path("a", path1);
     writeln!(out, "{}", format!("--- {a}").style(styles.diff_before))?;
-    let b = Utf8Path::new("b").join(path2);
+    let b = format_diff_path("b", path2);
     writeln!(out, "{}", format!("+++ {b}").style(styles.diff_after))?;
 
     let mut udiff = diff.unified_diff();
@@ -130,6 +133,17 @@ where
     }
 
     Ok(())
+}
+
+/// Format a `prefix/path` header for unified diff output, normalizing
+/// path separators to `/` so the rendered output is identical on Windows
+/// and Unix (and matches the diff/patch convention).
+fn format_diff_path(prefix: &str, path: &Utf8Path) -> String {
+    if std::path::MAIN_SEPARATOR == '/' {
+        format!("{prefix}/{path}")
+    } else {
+        format!("{prefix}/{}", path.as_str().replace('\\', "/"))
+    }
 }
 
 pub(crate) fn display_api_spec(api: &ManagedApi, styles: &Styles) -> String {

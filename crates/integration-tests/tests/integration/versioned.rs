@@ -962,12 +962,14 @@ fn test_incompatible_blessed_api_change_render() -> Result<()> {
     assert_eq!(result, CheckResult::Failures);
 
     // The "Loading local OpenAPI documents from <abs_dir>" line embeds the
-    // tempdir path, which varies per run. Replace the entire path with a
-    // stable placeholder — replacing only the workspace prefix would leave
-    // a trailing `/documents` (or `\documents` on Windows) that's
-    // separator-sensitive.
-    let documents_dir = env.documents_dir().as_str();
-    let normalized = rendered.replace(documents_dir, "<documents dir>");
+    // tempdir path, which varies per run. The path is rendered with `{:?}`
+    // (Debug), which on Windows escapes backslashes — so we have to match
+    // the Debug-formatted form (which includes surrounding quotes), not
+    // the raw `as_str()` form, otherwise the replacement silently no-ops
+    // on Windows. The placeholder restores the quotes so the line still
+    // reads naturally.
+    let documents_dir_debug = format!("{:?}", env.documents_dir());
+    let normalized = rendered.replace(&documents_dir_debug, "\"<documents dir>\"");
 
     let snapshot_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/output/integration/blessed_version_broken.txt");
