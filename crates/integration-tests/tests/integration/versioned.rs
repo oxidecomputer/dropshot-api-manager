@@ -951,14 +951,41 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 /// see exactly how the user-visible output changes.
 #[test]
 fn test_incompatible_blessed_api_change_render() -> Result<()> {
+    render_blessed_version_broken_snapshot(
+        versioned_health_apis()?,
+        versioned_health_incompat_apis()?,
+        "blessed_version_broken.txt",
+    )
+}
+
+/// Companion to `test_incompatible_blessed_api_change_render` that runs the
+/// fixtures in reverse: the `versioned_health_incompat` shape is blessed, and
+/// the current code regresses to the plain `versioned_health` shape. This
+/// exercises endpoint and required-parameter removal, the symmetric counterpart
+/// of the addition cases the forward direction covers.
+#[test]
+fn test_blessed_api_endpoint_removed_render() -> Result<()> {
+    render_blessed_version_broken_snapshot(
+        versioned_health_incompat_apis()?,
+        versioned_health_apis()?,
+        "blessed_version_endpoint_removed.txt",
+    )
+}
+
+/// Shared body for the `BlessedVersionBroken` snapshot tests: commit `blessed`
+/// as the upstream shape, then check against `generated` and snapshot the
+/// rendered output to `snapshot_name` under `tests/output/integration/`.
+fn render_blessed_version_broken_snapshot(
+    blessed: ManagedApis,
+    generated: ManagedApis,
+    snapshot_name: &str,
+) -> Result<()> {
     let env = TestEnvironment::new_git()?;
-    let original_apis = versioned_health_apis()?;
-    env.generate_documents(&original_apis)?;
+    env.generate_documents(&blessed)?;
     env.commit_documents()?;
 
-    let incompatible_apis = versioned_health_incompat_apis()?;
     let (result, _summaries, rendered) =
-        check_apis_with_render(env.environment(), &incompatible_apis)?;
+        check_apis_with_render(env.environment(), &generated)?;
     assert_eq!(result, CheckResult::Failures);
 
     // The "Loading local OpenAPI documents from <abs_dir>" line embeds the
@@ -973,7 +1000,8 @@ fn test_incompatible_blessed_api_change_render() -> Result<()> {
         rendered.replace(&documents_dir_debug, "\"<documents dir>\"");
 
     let snapshot_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/output/integration/blessed_version_broken.txt");
+        .join("tests/output/integration")
+        .join(snapshot_name);
     expectorate::assert_contents(snapshot_path, &normalized);
     Ok(())
 }
