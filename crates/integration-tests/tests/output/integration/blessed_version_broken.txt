@@ -5,7 +5,36 @@
      -------
     Checking 3 OpenAPI documents...
        Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
-       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+     Failure versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+           error: OpenAPI document generated from the current code is not
+                  compatible with the blessed document (from upstream)
+                  - at .paths."/health/detailed".get: backward-incompatible
+                    change: A new, required parameter 'verbose' was added
+                    --- a/blessed
+                    +++ b/generated
+                    @@ -1,11 +1,22 @@
+                     {
+                       "get": {
+                    +    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
+                         "operationId": "detailed_health_check",
+                    +    "parameters": [
+                    +      {
+                    +        "in": "query",
+                    +        "name": "verbose",
+                    +        "required": true,
+                    +        "schema": {
+                    +          "type": "boolean"
+                    +        }
+                    +      }
+                    +    ],
+                         "responses": {
+                           "200": {
+                             "content": {
+                               "application/json": {
+                                 "schema": {
+                                   "$ref": "#/components/schemas/DetailedHealthStatus"
+                                 }
+                               }
      Failure versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
            error: OpenAPI document generated from the current code is not
                   compatible with the blessed document (from upstream)
@@ -39,7 +68,34 @@
                     +    "summary": "Get system info (v3+): new endpoint added to existing version."
                     +  }
                     +}
+                  - at .paths."/health/detailed".get: backward-incompatible
+                    change: A new, required parameter 'verbose' was added
+                    --- a/blessed
+                    +++ b/generated
+                    @@ -1,11 +1,22 @@
+                     {
+                       "get": {
+                    +    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
+                         "operationId": "detailed_health_check",
+                    +    "parameters": [
+                    +      {
+                    +        "in": "query",
+                    +        "name": "verbose",
+                    +        "required": true,
+                    +        "schema": {
+                    +          "type": "boolean"
+                    +        }
+                    +      }
+                    +    ],
+                         "responses": {
+                           "200": {
+                             "content": {
+                               "application/json": {
+                                 "schema": {
+                                   "$ref": "#/components/schemas/DetailedHealthStatus"
+                                 }
+                               }
        Fresh versioned-health "latest" symlink
      -------
-     Failure 3 documents checked: 3 fresh, 0 stale, 1 failed, 0 other problems
+     Failure 3 documents checked: 2 fresh, 0 stale, 2 failed, 0 other problems
              (fix failures, then run test-openapi-manager generate to update)
