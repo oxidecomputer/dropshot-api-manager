@@ -4,56 +4,74 @@ use crate::{
     apis::ManagedApis,
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
-        CheckResult, OutputOpts, display_load_problems, display_resolution,
+        CheckResult, Styles, display_load_problems, display_resolution,
         headers::*,
     },
     resolved::{ProblemSummary, Resolved},
 };
+use std::io;
 
 pub(crate) fn check_impl(
+    writer: &mut dyn io::Write,
     apis: &ManagedApis,
     env: &ResolvedEnv,
     blessed_source: &BlessedSource,
     generated_source: &GeneratedSource,
-    output: &OutputOpts,
+    styles: &Styles,
 ) -> anyhow::Result<CheckResult> {
     let (result, _summaries) = check_impl_with_summaries(
+        writer,
         apis,
         env,
         blessed_source,
         generated_source,
-        output,
+        styles,
     )?;
     Ok(result)
 }
 
+/// Run the check pipeline, rendering all user-visible output to `writer`.
+///
+/// Production callers (the CLI dispatch path) pass `&mut
+/// std::io::stderr().lock()` along with [`OutputOpts::styles`]; tests pass a
+/// `Vec<u8>` and `Styles::default()` to capture the same output into a
+/// `String`.
 pub(crate) fn check_impl_with_summaries(
+    writer: &mut dyn io::Write,
     apis: &ManagedApis,
     env: &ResolvedEnv,
     blessed_source: &BlessedSource,
     generated_source: &GeneratedSource,
-    output: &OutputOpts,
+    styles: &Styles,
 ) -> anyhow::Result<(CheckResult, Vec<ProblemSummary>)> {
-    let styles = output.styles(supports_color::Stream::Stderr);
+    writeln!(writer, "{:>HEADER_WIDTH$}", SEPARATOR)?;
 
-    eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
+    let (generated, errors) = generated_source.load(
+        writer,
+        apis,
+        styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
+    display_load_problems(writer, &errors, styles)?;
 
-    let (generated, errors) =
-        generated_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
-    display_load_problems(&errors, &styles)?;
-
-    let (local_files, errors) =
-        env.local_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
-    display_load_problems(&errors, &styles)?;
+    let (local_files, errors) = env.local_source.load(
+        writer,
+        apis,
+        styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
+    display_load_problems(writer, &errors, styles)?;
 
     let (blessed, errors) =
-        blessed_source.load(&env.repo_root, apis, &styles, &env.vcs)?;
-    display_load_problems(&errors, &styles)?;
+        blessed_source.load(writer, &env.repo_root, apis, styles, &env.vcs)?;
+    display_load_problems(writer, &errors, styles)?;
 
     let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);
 
-    eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
-    let result = display_resolution(env, apis, &resolved, &styles)?;
+    writeln!(writer, "{:>HEADER_WIDTH$}", SEPARATOR)?;
+    let result = display_resolution(writer, env, apis, &resolved, styles)?;
 
     // Extract owned summaries before dropping the borrowed resolved state.
     let summaries = resolved.problem_summaries();

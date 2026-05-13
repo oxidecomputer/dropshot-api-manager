@@ -30,6 +30,7 @@ dropshot = "0.17.0"
 dropshot-api-manager = { path = "crates/dropshot-api-manager", version = "0.7.1" }
 dropshot-api-manager-types = { path = "crates/dropshot-api-manager-types", version = "0.7.1" }
 e2e-example-apis = { path = "e2e-example/apis" }
+expectorate = "1.2.0"
 fs-err = "3.1.1"
 git-stub = "1.0.0"
 git-stub-vcs = "0.1.0"

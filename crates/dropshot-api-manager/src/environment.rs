@@ -18,6 +18,7 @@ use crate::{
 use anyhow::Context;
 use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use owo_colors::OwoColorize;
+use std::io;
 
 /// Default Git branch for the blessed source.
 const DEFAULT_GIT_BRANCH: &str = "origin/main";
@@ -289,6 +290,7 @@ impl BlessedSource {
     /// Load the blessed OpenAPI documents.
     pub fn load(
         &self,
+        writer: &mut dyn io::Write,
         repo_root: &Utf8Path,
         apis: &ManagedApis,
         styles: &Styles,
@@ -297,11 +299,12 @@ impl BlessedSource {
         let mut errors = ErrorAccumulator::new();
         match self {
             BlessedSource::Directory { local_directory } => {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} blessed OpenAPI documents from {:?}",
                     "Loading".style(styles.success_header),
                     local_directory,
-                );
+                )?;
                 let api_files: ApiSpecFilesBuilder<'_, BlessedApiSpecFile> =
                     walk_local_directory(
                         local_directory,
@@ -313,13 +316,14 @@ impl BlessedSource {
                 Ok((BlessedFiles::from(api_files), errors))
             }
             BlessedSource::VcsRevisionMergeBase { revision, directory } => {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} blessed OpenAPI documents from VCS \
                      revision {:?} path {:?}",
                     "Loading".style(styles.success_header),
                     revision,
                     directory
-                );
+                )?;
                 Ok((
                     BlessedFiles::load_from_vcs_parent_branch(
                         repo_root,
@@ -352,6 +356,7 @@ impl GeneratedSource {
     /// Load the generated OpenAPI documents (i.e., generating them as needed).
     pub fn load(
         &self,
+        writer: &mut dyn io::Write,
         apis: &ManagedApis,
         styles: &Styles,
         repo_root: &Utf8Path,
@@ -360,20 +365,22 @@ impl GeneratedSource {
         let mut errors = ErrorAccumulator::new();
         match self {
             GeneratedSource::Generated => {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} OpenAPI documents from API \
                      definitions ... ",
                     GENERATING.style(styles.success_header)
-                );
+                )?;
                 Ok((GeneratedFiles::generate(apis, &mut errors)?, errors))
             }
             GeneratedSource::Directory { local_directory } => {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} \"generated\" OpenAPI documents from \
                      {:?} ... ",
                     "Loading".style(styles.success_header),
                     local_directory,
-                );
+                )?;
                 let api_files = walk_local_directory(
                     local_directory,
                     apis,
@@ -406,6 +413,7 @@ impl LocalSource {
     /// The `repo_root` parameter is needed to resolve `.gitstub` files.
     pub fn load(
         &self,
+        writer: &mut dyn io::Write,
         apis: &ManagedApis,
         styles: &Styles,
         repo_root: &Utf8Path,
@@ -416,7 +424,7 @@ impl LocalSource {
         // Shallow clones and Git stub storage are incompatible.
         let any_uses_git_stub =
             apis.iter_apis().any(|a| apis.uses_git_stub_storage(a));
-        if any_uses_git_stub && vcs.is_shallow_clone(repo_root) {
+        if any_uses_git_stub && vcs.is_shallow_clone(writer, repo_root) {
             errors.error(anyhow::anyhow!(
                 "this repository is a shallow clone, but Git stub storage is \
                  enabled for some APIs. Git stubs cannot be resolved in a \
@@ -430,12 +438,13 @@ impl LocalSource {
 
         match self {
             LocalSource::Directory { abs_dir, .. } => {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} local OpenAPI documents from \
                      {:?} ... ",
                     "Loading".style(styles.success_header),
                     abs_dir,
-                );
+                )?;
                 Ok((
                     LocalFiles::load_from_directory(
                         abs_dir,

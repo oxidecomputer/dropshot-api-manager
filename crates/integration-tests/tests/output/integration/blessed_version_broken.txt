@@ -1,0 +1,45 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 3 OpenAPI documents...
+       Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+     Failure versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+           error: OpenAPI document generated from the current code is not
+                  compatible with the blessed document (from upstream)
+                  - at .paths."/system/info".get: forward-incompatible change:
+                    The operation get_system_info was added
+                    --- a/blessed
+                    +++ b/generated
+                    @@ -0,0 +1,25 @@
+                    +{
+                    +  "get": {
+                    +    "description": "This breaks backward compatibility by adding a new endpoint to v3.0.0.",
+                    +    "operationId": "get_system_info",
+                    +    "responses": {
+                    +      "200": {
+                    +        "content": {
+                    +          "application/json": {
+                    +            "schema": {
+                    +              "$ref": "#/components/schemas/SystemInfo"
+                    +            }
+                    +          }
+                    +        },
+                    +        "description": "successful operation"
+                    +      },
+                    +      "4XX": {
+                    +        "$ref": "#/components/responses/Error"
+                    +      },
+                    +      "5XX": {
+                    +        "$ref": "#/components/responses/Error"
+                    +      }
+                    +    },
+                    +    "summary": "Get system info (v3+): new endpoint added to existing version."
+                    +  }
+                    +}
+       Fresh versioned-health "latest" symlink
+     -------
+     Failure 3 documents checked: 3 fresh, 0 stale, 1 failed, 0 other problems
+             (fix failures, then run test-openapi-manager generate to update)

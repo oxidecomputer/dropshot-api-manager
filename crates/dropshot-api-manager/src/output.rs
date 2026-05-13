@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{
     FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
@@ -93,10 +93,13 @@ where
     'diff: 'old + 'new + 'bufs,
     T: DiffableStr + ?Sized,
 {
-    // The "a/" (/ courtesy full_path) and "b/" make it feel more like git diff.
-    let a = Utf8Path::new("a").join(path1);
+    // The "a/" and "b/" prefixes make this feel more like a git diff. We
+    // assemble the header by hand (and normalize any backslashes in the
+    // path) so the output is forward-slashed regardless of host OS, which
+    // is the convention every diff/patch tool expects.
+    let a = format_diff_path("a", path1);
     writeln!(out, "{}", format!("--- {a}").style(styles.diff_before))?;
-    let b = Utf8Path::new("b").join(path2);
+    let b = format_diff_path("b", path2);
     writeln!(out, "{}", format!("+++ {b}").style(styles.diff_after))?;
 
     let mut udiff = diff.unified_diff();
@@ -130,6 +133,17 @@ where
     }
 
     Ok(())
+}
+
+/// Format a `prefix/path` header for unified diff output, normalizing
+/// path separators to `/` so the rendered output is identical on Windows
+/// and Unix (and matches the diff/patch convention).
+fn format_diff_path(prefix: &str, path: &Utf8Path) -> String {
+    if std::path::MAIN_SEPARATOR == '/' {
+        format!("{prefix}/{path}")
+    } else {
+        format!("{prefix}/{}", path.as_str().replace('\\', "/"))
+    }
 }
 
 pub(crate) fn display_api_spec(api: &ManagedApi, styles: &Styles) -> String {
@@ -223,25 +237,28 @@ impl fmt::Display for MissingNewlineHint {
 }
 
 pub fn display_load_problems(
+    writer: &mut dyn io::Write,
     error_accumulator: &ErrorAccumulator,
     styles: &Styles,
 ) -> anyhow::Result<()> {
     for w in error_accumulator.iter_warnings() {
-        eprintln!(
+        writeln!(
+            writer,
             "{:>HEADER_WIDTH$} {:#}",
             WARNING.style(styles.warning_header),
             w
-        );
+        )?;
     }
 
     let mut nerrors = 0;
     for e in error_accumulator.iter_errors() {
         nerrors += 1;
-        eprintln!(
+        writeln!(
+            writer,
             "{:>HEADER_WIDTH$} {:#}",
             FAILURE.style(styles.failure_header),
             e
-        );
+        )?;
     }
 
     if nerrors > 0 {
@@ -258,6 +275,7 @@ pub fn display_load_problems(
 /// Summarize the results of checking all supported API versions, plus other
 /// problems found during resolution
 pub fn display_resolution(
+    writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     apis: &ManagedApis,
     resolved: &Resolved,
@@ -265,12 +283,13 @@ pub fn display_resolution(
 ) -> anyhow::Result<CheckResult> {
     let total = resolved.nexpected_documents();
 
-    eprintln!(
+    writeln!(
+        writer,
         "{:>HEADER_WIDTH$} {} OpenAPI {}...",
         CHECKING.style(styles.success_header),
         total.style(styles.bold),
         plural::documents(total),
-    );
+    )?;
 
     let mut num_fresh = 0;
     let mut num_stale = 0;
@@ -293,7 +312,7 @@ pub fn display_resolution(
             } else {
                 num_fresh += 1;
             }
-            summarize_one(env, api, version, resolution, styles);
+            summarize_one(writer, env, api, version, resolution, styles)?;
         }
 
         if !api.is_versioned() {
@@ -303,52 +322,58 @@ pub fn display_resolution(
         if let Some(symlink_problem) = resolved.symlink_problem(ident) {
             if symlink_problem.is_fixable() {
                 num_general_problems += 1;
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} {} \"latest\" symlink",
                     STALE.style(styles.warning_header),
                     ident.style(styles.filename),
-                );
+                )?;
                 display_resolution_problems(
+                    writer,
                     env,
                     std::iter::once(symlink_problem),
                     styles,
-                );
+                )?;
             } else {
                 num_failed += 1;
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} {} \"latest\" symlink",
                     FAILURE.style(styles.failure_header),
                     ident.style(styles.filename),
-                );
+                )?;
                 display_resolution_problems(
+                    writer,
                     env,
                     std::iter::once(symlink_problem),
                     styles,
-                );
+                )?;
             }
         } else {
             num_fresh += 1;
-            eprintln!(
+            writeln!(
+                writer,
                 "{:>HEADER_WIDTH$} {} \"latest\" symlink",
                 FRESH.style(styles.success_header),
                 ident.style(styles.filename),
-            );
+            )?;
         }
     }
 
     // Print problems not associated with any supported version, if any.
     let general_problems: Vec<_> = resolved.general_problems().collect();
     num_general_problems += if !general_problems.is_empty() {
-        eprintln!(
+        writeln!(
+            writer,
             "\n{:>HEADER_WIDTH$} problems not associated with a specific \
              supported API version:",
             "Other".style(styles.warning_header),
-        );
+        )?;
 
         let (fixable, unfixable): (Vec<&Problem>, Vec<&Problem>) =
             general_problems.iter().partition(|p| p.is_fixable());
         num_failed += unfixable.len();
-        display_resolution_problems(env, general_problems, styles);
+        display_resolution_problems(writer, env, general_problems, styles)?;
         fixable.len()
     } else {
         0
@@ -359,7 +384,8 @@ pub fn display_resolution(
         let initial_indent =
             format!("{:>HEADER_WIDTH$} ", "Note".style(styles.warning_header));
         let more_indent = " ".repeat(HEADER_WIDTH + " ".len());
-        eprintln!(
+        writeln!(
+            writer,
             "\n{}\n",
             textwrap::fill(
                 &n.to_string(),
@@ -367,7 +393,7 @@ pub fn display_resolution(
                     .initial_indent(&initial_indent)
                     .subsequent_indent(&more_indent)
             )
-        );
+        )?;
     }
 
     // Print a summary line.
@@ -379,8 +405,9 @@ pub fn display_resolution(
         SUCCESS.style(styles.success_header)
     };
 
-    eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
-    eprintln!(
+    writeln!(writer, "{:>HEADER_WIDTH$}", SEPARATOR)?;
+    writeln!(
+        writer,
         "{:>HEADER_WIDTH$} {} {} checked: {} fresh, {} stale, {} failed, \
          {} other {}",
         status_header,
@@ -391,20 +418,22 @@ pub fn display_resolution(
         num_failed.style(styles.bold),
         num_general_problems.style(styles.bold),
         plural::problems(num_general_problems),
-    );
+    )?;
     if num_failed > 0 {
-        eprintln!(
+        writeln!(
+            writer,
             "{:>HEADER_WIDTH$} (fix failures, then run {} to update)",
             "",
             format!("{} generate", env.command).style(styles.bold)
-        );
+        )?;
         Ok(CheckResult::Failures)
     } else if num_stale > 0 || num_general_problems > 0 {
-        eprintln!(
+        writeln!(
+            writer,
             "{:>HEADER_WIDTH$} (run {} to update)",
             "",
             format!("{} generate", env.command).style(styles.bold)
-        );
+        )?;
         Ok(CheckResult::NeedsUpdate)
     } else {
         Ok(CheckResult::Success)
@@ -437,23 +466,26 @@ impl CheckResult {
 
 /// Summarize the "check" status of one supported API version
 fn summarize_one(
+    writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     api: &ManagedApi,
     version: &semver::Version,
     resolution: &Resolution<'_>,
     styles: &Styles,
-) {
+) -> io::Result<()> {
     let problems: Vec<_> = resolution.problems().collect();
     if problems.is_empty() {
         // Success case: file is up-to-date.
-        eprintln!(
+        writeln!(
+            writer,
             "{:>HEADER_WIDTH$} {}",
             FRESH.style(styles.success_header),
             display_api_spec_version(api, version, styles, resolution),
-        );
+        )?;
     } else {
         // There were one or more problems, some of which may be unfixable.
-        eprintln!(
+        writeln!(
+            writer,
             "{:>HEADER_WIDTH$} {}",
             if resolution.has_errors() {
                 FAILURE.style(styles.failure_header)
@@ -462,18 +494,21 @@ fn summarize_one(
                 STALE.style(styles.warning_header)
             },
             display_api_spec_version(api, version, styles, resolution),
-        );
+        )?;
 
-        display_resolution_problems(env, problems, styles);
+        display_resolution_problems(writer, env, problems, styles)?;
     }
+    Ok(())
 }
 
-/// Print a formatted list of Problems
+/// Print a formatted list of Problems to `writer`.
 pub fn display_resolution_problems<'a, T>(
+    writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     problems: T,
     styles: &Styles,
-) where
+) -> io::Result<()>
+where
     T: IntoIterator<Item = &'a Problem<'a>>,
 {
     for p in problems.into_iter() {
@@ -487,7 +522,8 @@ pub fn display_resolution_problems<'a, T>(
             }
         );
         let more_indent = " ".repeat(subheader_width + 2);
-        eprintln!(
+        writeln!(
+            writer,
             "{}",
             textwrap::fill(
                 &InlineErrorChain::new(&p).to_string(),
@@ -495,7 +531,7 @@ pub fn display_resolution_problems<'a, T>(
                     .initial_indent(&first_indent)
                     .subsequent_indent(&more_indent)
             )
-        );
+        )?;
 
         // For BlessedVersionBroken, print each item separately, along with a
         // diff between blessed and generated versions.
@@ -505,7 +541,8 @@ pub fn display_resolution_problems<'a, T>(
                 // "- ".
                 let nested_first_indent = format!("{}- ", more_indent);
                 let nested_more_indent = format!("{}  ", more_indent);
-                eprintln!(
+                writeln!(
+                    writer,
                     "{}",
                     textwrap::fill(
                         &issue.to_string(),
@@ -513,7 +550,7 @@ pub fn display_resolution_problems<'a, T>(
                             .initial_indent(&nested_first_indent)
                             .subsequent_indent(&nested_more_indent)
                     )
-                );
+                )?;
 
                 // Now print a textual diff between the blessed and generated
                 // versions.
@@ -521,9 +558,7 @@ pub fn display_resolution_problems<'a, T>(
                 let generated_json = issue.generated_json();
 
                 let diff = TextDiff::from_lines(&blessed_json, &generated_json);
-                // We don't care about I/O errors here (just as we don't when
-                // using eprintln! above).
-                let _ = write_diff(
+                write_diff(
                     &diff,
                     "blessed".as_ref(),
                     "generated".as_ref(),
@@ -535,9 +570,9 @@ pub fn display_resolution_problems<'a, T>(
                     // Add an indent to align diff with the status message.
                     &mut indent_write::io::IndentWriter::new(
                         &nested_more_indent,
-                        std::io::stderr(),
+                        &mut *writer,
                     ),
-                );
+                )?;
             }
         }
 
@@ -555,7 +590,7 @@ pub fn display_resolution_problems<'a, T>(
             let path2 =
                 env.openapi_abs_dir().join(generated.spec_file_name().path());
             let indent = " ".repeat(HEADER_WIDTH + 1);
-            let _ = write_diff(
+            write_diff(
                 &diff,
                 &path1,
                 &path2,
@@ -563,11 +598,8 @@ pub fn display_resolution_problems<'a, T>(
                 // context_radius: show enough context to understand the changes.
                 3,
                 /* missing_newline_hint */ true,
-                &mut indent_write::io::IndentWriter::new(
-                    &indent,
-                    std::io::stderr(),
-                ),
-            );
+                &mut indent_write::io::IndentWriter::new(&indent, &mut *writer),
+            )?;
         }
 
         let Some(fix) = p.fix() else {
@@ -581,7 +613,8 @@ pub fn display_resolution_problems<'a, T>(
         let fix_str = fix.to_string();
         let steps = fix_str.trim_end().split("\n");
         for s in steps {
-            eprintln!(
+            writeln!(
+                writer,
                 "{}",
                 textwrap::fill(
                     &format!("will {}", s),
@@ -589,7 +622,7 @@ pub fn display_resolution_problems<'a, T>(
                         .initial_indent(&first_indent)
                         .subsequent_indent(&more_indent)
                 )
-            );
+            )?;
         }
 
         // When possible, print a useful diff of changes.
@@ -634,9 +667,7 @@ pub fn display_resolution_problems<'a, T>(
 
         if let Some((diff, path1, path2)) = do_diff {
             let indent = " ".repeat(HEADER_WIDTH + 1);
-            // We don't care about I/O errors here (just as we don't when using
-            // eprintln! above).
-            let _ = write_diff(
+            write_diff(
                 &diff,
                 &path1,
                 &path2,
@@ -646,14 +677,12 @@ pub fn display_resolution_problems<'a, T>(
                 3,
                 /* missing_newline_hint */ true,
                 // Add an indent to align diff with the status message.
-                &mut indent_write::io::IndentWriter::new(
-                    &indent,
-                    std::io::stderr(),
-                ),
-            );
-            eprintln!();
+                &mut indent_write::io::IndentWriter::new(&indent, &mut *writer),
+            )?;
+            writeln!(writer)?;
         }
     }
+    Ok(())
 }
 
 /// Adapter for [`Error`]s that provides a [`std::fmt::Display`] implementation
