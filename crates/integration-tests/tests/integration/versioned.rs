@@ -12,7 +12,7 @@ use dropshot_api_manager::{
     ManagedApi, ManagedApis,
     test_util::{
         CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
-        check_apis_with_summaries,
+        check_apis_with_render, check_apis_with_summaries,
     },
 };
 use integration_tests::*;
@@ -942,6 +942,36 @@ fn test_retiring_older_blessed_version() -> Result<()> {
         )],
     );
 
+    Ok(())
+}
+
+/// Snapshot the rendered `BlessedVersionBroken` output. The fixture is the
+/// same one that drives `test_incompatible_blessed_api_change`. The snapshot
+/// is intended to evolve alongside the rendering code, so that reviewers can
+/// see exactly how the user-visible output changes.
+#[test]
+fn test_incompatible_blessed_api_change_render() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let original_apis = versioned_health_apis()?;
+    env.generate_documents(&original_apis)?;
+    env.commit_documents()?;
+
+    let incompatible_apis = versioned_health_incompat_apis()?;
+    let (result, _summaries, rendered) =
+        check_apis_with_render(env.environment(), &incompatible_apis)?;
+    assert_eq!(result, CheckResult::Failures);
+
+    // The "Loading local OpenAPI documents from <abs_dir>" line embeds the
+    // tempdir path, which varies per run. Replace the entire path with a
+    // stable placeholder — replacing only the workspace prefix would leave
+    // a trailing `/documents` (or `\documents` on Windows) that's
+    // separator-sensitive.
+    let documents_dir = env.documents_dir().as_str();
+    let normalized = rendered.replace(documents_dir, "<documents dir>");
+
+    let snapshot_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/output/integration/blessed_version_broken.txt");
+    expectorate::assert_contents(snapshot_path, &normalized);
     Ok(())
 }
 

@@ -20,21 +20,37 @@ pub(crate) fn debug_impl(
     output: &OutputOpts,
 ) -> anyhow::Result<()> {
     let styles = output.styles(supports_color::Stream::Stderr);
+    let mut stderr = std::io::stderr().lock();
 
     // Print information about local files.
 
-    let (local_files, errors) =
-        env.local_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
+    let (local_files, errors) = env.local_source.load(
+        &mut stderr,
+        apis,
+        &styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
     dump_structure(&local_files, &errors);
 
     // Print information about what we found in VCS history.
-    let (blessed, errors) =
-        blessed_source.load(&env.repo_root, apis, &styles, &env.vcs)?;
+    let (blessed, errors) = blessed_source.load(
+        &mut stderr,
+        &env.repo_root,
+        apis,
+        &styles,
+        &env.vcs,
+    )?;
     dump_structure(&blessed, &errors);
 
     // Print information about generated files.
-    let (generated, errors) =
-        generated_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
+    let (generated, errors) = generated_source.load(
+        &mut stderr,
+        apis,
+        &styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
     dump_structure(&generated, &errors);
 
     // Print result of resolving the differences.

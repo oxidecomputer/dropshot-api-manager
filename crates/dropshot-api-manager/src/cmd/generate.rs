@@ -14,7 +14,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow, bail};
 use owo_colors::OwoColorize;
-use std::process::ExitCode;
+use std::{io, process::ExitCode};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum GenerateResult {
@@ -39,32 +39,61 @@ pub(crate) fn generate_impl(
     output: &OutputOpts,
 ) -> Result<GenerateResult> {
     let styles = output.styles(supports_color::Stream::Stderr);
+    let mut stderr = std::io::stderr().lock();
+    generate_impl_inner(
+        &mut stderr,
+        apis,
+        env,
+        blessed_source,
+        generated_source,
+        &styles,
+    )
+}
 
-    let (generated, errors) =
-        generated_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
-    display_load_problems(&errors, &styles)?;
+fn generate_impl_inner(
+    writer: &mut dyn io::Write,
+    apis: &ManagedApis,
+    env: &ResolvedEnv,
+    blessed_source: &BlessedSource,
+    generated_source: &GeneratedSource,
+    styles: &Styles,
+) -> Result<GenerateResult> {
+    let (generated, errors) = generated_source.load(
+        writer,
+        apis,
+        styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
+    display_load_problems(writer, &errors, styles)?;
 
-    let (local_files, errors) =
-        env.local_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
-    display_load_problems(&errors, &styles)?;
+    let (local_files, errors) = env.local_source.load(
+        writer,
+        apis,
+        styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
+    display_load_problems(writer, &errors, styles)?;
 
     let (blessed, errors) =
-        blessed_source.load(&env.repo_root, apis, &styles, &env.vcs)?;
-    display_load_problems(&errors, &styles)?;
+        blessed_source.load(writer, &env.repo_root, apis, styles, &env.vcs)?;
+    display_load_problems(writer, &errors, styles)?;
 
     let resolved = Resolved::new(env, apis, &blessed, &generated, &local_files);
-    eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
+    writeln!(writer, "{:>HEADER_WIDTH$}", SEPARATOR)?;
 
     let total = resolved.nexpected_documents();
-    eprintln!(
+    writeln!(
+        writer,
         "{:>HEADER_WIDTH$} {} OpenAPI {}...",
         "Updating".style(styles.success_header),
         total.style(styles.bold),
         plural::documents(total),
-    );
+    )?;
 
     if resolved.has_unfixable_problems() {
-        return match display_resolution(env, apis, &resolved, &styles)? {
+        return match display_resolution(writer, env, apis, &resolved, styles)? {
             CheckResult::Failures => Ok(GenerateResult::Failures),
             unexpected => {
                 Err(anyhow!("unexpectedly got {unexpected:?} from summarize()"))
@@ -91,61 +120,68 @@ pub(crate) fn generate_impl(
 
             let problems: Vec<_> = resolution.problems().collect();
             if problems.is_empty() {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} {}",
                     UNCHANGED.style(styles.unchanged_header),
-                    display_api_spec_version(api, version, &styles, resolution),
-                );
+                    display_api_spec_version(api, version, styles, resolution),
+                )?;
                 num_unchanged += 1;
             } else {
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} {}",
                     STALE.style(styles.warning_header),
-                    display_api_spec_version(api, version, &styles, resolution),
-                );
+                    display_api_spec_version(api, version, styles, resolution),
+                )?;
 
                 fix_problems(
+                    writer,
                     env,
                     problems,
-                    &styles,
+                    styles,
                     &mut num_updated,
                     &mut num_errors,
-                );
+                )?;
             }
         }
 
         if let Some(symlink_problem) = resolved.symlink_problem(ident) {
-            eprintln!(
+            writeln!(
+                writer,
                 "{:>HEADER_WIDTH$} {} \"latest\" symlink",
                 STALE.style(styles.warning_header),
                 ident.style(styles.filename),
-            );
+            )?;
 
             fix_problems(
+                writer,
                 env,
                 std::iter::once(symlink_problem),
-                &styles,
+                styles,
                 &mut num_updated,
                 &mut num_errors,
-            );
+            )?;
         } else if api.is_versioned() {
-            eprintln!(
+            writeln!(
+                writer,
                 "{:>HEADER_WIDTH$} {} \"latest\" symlink",
                 UNCHANGED.style(styles.unchanged_header),
                 ident.style(styles.filename),
-            );
+            )?;
         }
     }
 
     // Fix problems not associated with any supported version, if any.
     let general_problems: Vec<_> = resolved.general_problems().collect();
     fix_problems(
+        writer,
         env,
         general_problems,
-        &styles,
+        styles,
         &mut num_updated,
         &mut num_errors,
-    );
+    )?;
 
     // Done with the first resolution. Release borrows so the source
     // collections can be dropped in parallel later.
@@ -153,31 +189,38 @@ pub(crate) fn generate_impl(
 
     if num_errors > 0 {
         print_final_status(
-            &styles,
+            writer,
+            styles,
             total,
             num_updated,
             num_unchanged,
             num_errors,
-        );
+        )?;
         return Ok(GenerateResult::Failures);
     }
 
     // Finally, check again for any problems. Since we expect this should have
     // fixed everything, be quiet unless we find something amiss.
     let mut nproblems = 0;
-    let (local_files_recheck, errors) =
-        env.local_source.load(apis, &styles, &env.repo_root, &env.vcs)?;
-    eprintln!(
+    let (local_files_recheck, errors) = env.local_source.load(
+        writer,
+        apis,
+        styles,
+        &env.repo_root,
+        &env.vcs,
+    )?;
+    writeln!(
+        writer,
         "{:>HEADER_WIDTH$} all local files",
         "Rechecking".style(styles.success_header),
-    );
-    display_load_problems(&errors, &styles)?;
+    )?;
+    display_load_problems(writer, &errors, styles)?;
     let resolved =
         Resolved::new(env, apis, &blessed, &generated, &local_files_recheck);
     let general_problems: Vec<_> = resolved.general_problems().collect();
     nproblems += general_problems.len();
     if !general_problems.is_empty() {
-        display_resolution_problems(env, general_problems, &styles);
+        display_resolution_problems(writer, env, general_problems, styles)?;
     }
     for api in apis.iter_apis() {
         let ident = api.ident();
@@ -188,26 +231,29 @@ pub(crate) fn generate_impl(
             let problems: Vec<_> = resolution.problems().collect();
             nproblems += problems.len();
             if !problems.is_empty() {
-                eprintln!(
+                writeln!(
+                    writer,
                     "found unexpected problem with API {} version {} \
                      (this is a bug)",
                     ident, version
-                );
-                display_resolution_problems(env, problems, &styles);
+                )?;
+                display_resolution_problems(writer, env, problems, styles)?;
             }
         }
 
         if let Some(symlink_problem) = resolved.symlink_problem(ident) {
             nproblems += 1;
-            eprintln!(
+            writeln!(
+                writer,
                 "found unexpected problem with API {} symlink (this is a bug)",
                 ident
-            );
+            )?;
             display_resolution_problems(
+                writer,
                 env,
                 std::iter::once(symlink_problem),
-                &styles,
-            );
+                styles,
+            )?;
         }
     }
 
@@ -229,30 +275,33 @@ pub(crate) fn generate_impl(
         );
     } else {
         print_final_status(
-            &styles,
+            writer,
+            styles,
             total,
             num_updated,
             num_unchanged,
             num_errors,
-        );
+        )?;
         Ok(GenerateResult::Success)
     }
 }
 
 fn print_final_status(
+    writer: &mut dyn io::Write,
     styles: &Styles,
     ndocuments: usize,
     num_updated: usize,
     num_unchanged: usize,
     num_errors: usize,
-) {
-    eprintln!("{:>HEADER_WIDTH$}", SEPARATOR);
+) -> io::Result<()> {
+    writeln!(writer, "{:>HEADER_WIDTH$}", SEPARATOR)?;
     let status_header = if num_errors == 0 {
         headers::SUCCESS.style(styles.success_header)
     } else {
         headers::FAILURE.style(styles.failure_header)
     };
-    eprintln!(
+    writeln!(
+        writer,
         "{:>HEADER_WIDTH$} {} {}: {} {} made, {} unchanged, {} failed",
         status_header,
         ndocuments.style(styles.bold),
@@ -261,16 +310,19 @@ fn print_final_status(
         plural::changes(num_updated),
         num_unchanged.style(styles.bold),
         num_errors.style(styles.bold),
-    );
+    )?;
+    Ok(())
 }
 
 fn fix_problems<'a, T>(
+    writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     problems: T,
     styles: &Styles,
     num_updated: &mut usize,
     num_errors: &mut usize,
-) where
+) -> io::Result<()>
+where
     T: IntoIterator<Item = &'a Problem<'a>>,
 {
     for p in problems {
@@ -281,22 +333,25 @@ fn fix_problems<'a, T>(
             Ok(steps) => {
                 *num_updated += 1;
                 for s in steps {
-                    eprintln!(
+                    writeln!(
+                        writer,
                         "{:>HEADER_WIDTH$} {}",
                         "Fixed".style(styles.success_header),
                         s,
-                    );
+                    )?;
                 }
             }
             Err(error) => {
                 *num_errors += 1;
-                eprintln!(
+                writeln!(
+                    writer,
                     "{:>HEADER_WIDTH$} fix {:?}: {:#}",
                     "FIX FAILED".style(styles.failure_header),
                     fix.to_string(),
                     error
-                );
+                )?;
             }
         }
     }
+    Ok(())
 }

@@ -192,11 +192,18 @@ impl RepoVcs {
     /// cost of potentially incorrect behavior if the repo truly is
     /// shallow; the downstream git-stub resolution will surface a
     /// clearer error in that case.
-    pub(crate) fn is_shallow_clone(&self, repo_root: &Utf8Path) -> bool {
+    pub(crate) fn is_shallow_clone(
+        &self,
+        writer: &mut dyn std::io::Write,
+        repo_root: &Utf8Path,
+    ) -> bool {
         match self.stub_vcs.is_shallow_clone(repo_root) {
             Ok(is_shallow) => is_shallow,
             Err(err) => {
-                eprintln!(
+                // Best-effort: if the warning itself fails to write, the
+                // underlying behavior (returning `false`) is unchanged.
+                let _ = writeln!(
+                    writer,
                     "warning: failed to check if repository is a \
                      shallow clone: {err:#}"
                 );

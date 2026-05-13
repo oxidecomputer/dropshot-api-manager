@@ -12,9 +12,10 @@ use crate::{
         dispatch::{BlessedSourceArgs, GeneratedSourceArgs},
     },
     environment::{Environment, GeneratedSource},
-    output::OutputOpts,
+    output::{OutputOpts, Styles},
     resolved,
 };
+use anyhow::Context;
 use camino::Utf8PathBuf;
 
 /// Check that a set of APIs is up-to-date.
@@ -46,6 +47,9 @@ pub fn check_apis_with_generated_from_dir(
 
 /// Like [`check_apis_up_to_date`], but also returns the list of problem
 /// summaries for detailed assertions in tests.
+///
+/// The rendered output is written to stderr. To capture the rendered output
+/// into a `String` instead, use [`check_apis_with_render`].
 #[doc(hidden)]
 pub fn check_apis_with_summaries(
     env: &Environment,
@@ -54,12 +58,14 @@ pub fn check_apis_with_summaries(
     let env = resolve_env(env)?;
     let (blessed_source, generated_source, output) =
         default_sources(&env, None)?;
+    let styles = output.styles(supports_color::Stream::Stderr);
     check_impl_with_summaries(
+        &mut std::io::stderr().lock(),
         apis,
         &env,
         &blessed_source,
         &generated_source,
-        &output,
+        &styles,
     )
 }
 
@@ -74,13 +80,42 @@ pub fn check_apis_with_generated_from_dir_and_summaries(
     let env = resolve_env(env)?;
     let (blessed_source, generated_source, output) =
         default_sources(&env, Some(generated_from_dir))?;
+    let styles = output.styles(supports_color::Stream::Stderr);
     check_impl_with_summaries(
+        &mut std::io::stderr().lock(),
         apis,
         &env,
         &blessed_source,
         &generated_source,
-        &output,
+        &styles,
     )
+}
+
+/// Like [`check_apis_with_summaries`], but captures the rendered check output
+/// into a `String` rather than writing it to stderr. Styling is disabled.
+#[doc(hidden)]
+pub fn check_apis_with_render(
+    env: &Environment,
+    apis: &ManagedApis,
+) -> Result<(CheckResult, Vec<resolved::ProblemSummary>, String), anyhow::Error>
+{
+    let env = resolve_env(env)?;
+    let (blessed_source, generated_source, _output) =
+        default_sources(&env, None)?;
+    // Force defaults (no color) so the captured snapshot is terminal-agnostic.
+    let styles = Styles::default();
+    let mut buf: Vec<u8> = Vec::new();
+    let (result, summaries) = check_impl_with_summaries(
+        &mut buf,
+        apis,
+        &env,
+        &blessed_source,
+        &generated_source,
+        &styles,
+    )?;
+    let rendered = String::from_utf8(buf)
+        .context("rendered output should be valid UTF-8")?;
+    Ok((result, summaries, rendered))
 }
 
 fn resolve_env(

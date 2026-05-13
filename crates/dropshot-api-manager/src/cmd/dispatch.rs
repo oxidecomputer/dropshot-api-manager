@@ -13,7 +13,7 @@ use crate::{
 use anyhow::Result;
 use camino::Utf8PathBuf;
 use clap::{Args, Parser, Subcommand};
-use std::process::ExitCode;
+use std::{io::Write as _, process::ExitCode};
 
 /// Manage OpenAPI documents for this repository.
 ///
@@ -41,7 +41,13 @@ impl App {
         match result {
             Ok(exit_code) => exit_code,
             Err(error) => {
-                eprintln!("failure: {:#}", error);
+                // Best-effort: if even the error report fails to write,
+                // we still want to exit with FAILURE.
+                let _ = writeln!(
+                    &mut std::io::stderr().lock(),
+                    "failure: {:#}",
+                    error,
+                );
                 ExitCode::FAILURE
             }
         }
@@ -300,8 +306,16 @@ impl CheckArgs {
         let env = env.resolve(self.local.dir)?;
         let blessed_source = self.blessed.to_blessed_source(&env)?;
         let generated_source = GeneratedSource::from(self.generated);
-        Ok(check_impl(apis, &env, &blessed_source, &generated_source, output)?
-            .to_exit_code())
+        let styles = output.styles(supports_color::Stream::Stderr);
+        Ok(check_impl(
+            &mut std::io::stderr().lock(),
+            apis,
+            &env,
+            &blessed_source,
+            &generated_source,
+            &styles,
+        )?
+        .to_exit_code())
     }
 }
 
