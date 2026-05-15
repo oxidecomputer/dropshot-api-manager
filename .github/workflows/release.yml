@@ -23,10 +23,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install cargo release
-        uses: taiki-e/install-action@de6bbd1333b8f331563d54a051e542c7dfef81c3 # v2
+        uses: taiki-e/install-action@3235f8901fd37ffed0052b276cec25a362fb82e9 # v2
         with:
           tool: cargo-release@0.25.17,just
-      - uses: taiki-e/create-gh-release-action@c5baa0b5dc700cf06439d87935e130220a6882d9 # v1
+      - uses: taiki-e/create-gh-release-action@eba8ea96c86cca8a37f1b56e94b4d13301fba651 # v1
         with:
           prefix: dropshot-api-manager
           changelog: CHANGELOG.md
