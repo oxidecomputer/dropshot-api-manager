@@ -10,7 +10,7 @@
 use super::display::ApiCompatIssueDisplay;
 use crate::output::Styles;
 use drift::ChangeClass;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A compatibility error between two OpenAPI documents.
 ///
@@ -29,7 +29,10 @@ pub struct ApiCompatIssue {
     /// renamed.
     pub(super) generated_base: DocumentBasePath,
     /// Non-trivial changes detected within this base location.
-    pub(super) changes: Vec<SubpathChange>,
+    ///
+    /// A `BTreeSet` rather than a `Vec` so iteration (and therefore display)
+    /// order is deterministic regardless of the order drift emits changes in.
+    pub(super) changes: BTreeSet<SubpathChange>,
     /// Inverted reference tree.
     ///
     /// Empty when the change is directly at an endpoint with no `$ref`
@@ -63,7 +66,12 @@ impl ApiCompatIssue {
 /// One [`ApiCompatIssue`] may carry several `SubpathChange`s when multiple
 /// non-trivial changes were detected within the same component or
 /// endpoint.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The derived `Ord` follows struct field order — `(class, message,
+/// old_subpath, new_subpath)` — and is used by the surrounding
+/// [`BTreeSet`] for deterministic iteration. The ordering itself is
+/// arbitrary; only its totality matters.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct SubpathChange {
     pub(super) class: ChangeClass,
     pub(super) message: String,

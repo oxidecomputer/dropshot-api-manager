@@ -617,6 +617,7 @@ mod tests {
     use camino::Utf8PathBuf;
     use drift::ChangeClass;
     use owo_colors::OwoColorize;
+    use std::collections::BTreeSet;
 
     /// Build a small [`OperationIdMap`] from `(endpoint_base, op_id)` pairs.
     /// Used by synthetic-issue tests that bypass `api_compatible` and so
@@ -861,12 +862,12 @@ mod tests {
         let issue = ApiCompatIssue {
             blessed_base: component("#/components/schemas/SubType"),
             generated_base: component("#/components/schemas/SubType"),
-            changes: vec![SubpathChange {
+            changes: BTreeSet::from([SubpathChange {
                 class: ChangeClass::Incompatible,
                 message: "schema types changed".into(),
                 old_subpath: DocumentPath::parse("properties/value"),
                 new_subpath: DocumentPath::parse("properties/value"),
-            }],
+            }]),
             tree,
             blessed_value: None,
             generated_value: None,
@@ -927,12 +928,12 @@ mod tests {
         let issue = ApiCompatIssue {
             blessed_base: component("#/components/schemas/SubType"),
             generated_base: component("#/components/schemas/SubType"),
-            changes: vec![SubpathChange {
+            changes: BTreeSet::from([SubpathChange {
                 class: ChangeClass::Incompatible,
                 message: "schema types changed".into(),
                 old_subpath: DocumentPath::parse("properties/value"),
                 new_subpath: DocumentPath::parse("properties/value"),
-            }],
+            }]),
             tree,
             blessed_value: None,
             generated_value: None,
@@ -945,12 +946,12 @@ mod tests {
         let issue = ApiCompatIssue {
             blessed_base: component("#/components/schemas/OldName"),
             generated_base: component("#/components/schemas/NewName"),
-            changes: vec![SubpathChange {
+            changes: BTreeSet::from([SubpathChange {
                 class: ChangeClass::Incompatible,
                 message: "schema types changed".into(),
                 old_subpath: DocumentPath::parse("properties/value"),
                 new_subpath: DocumentPath::parse("properties/value"),
-            }],
+            }]),
             tree: PathTree::default(),
             blessed_value: None,
             generated_value: None,
@@ -974,12 +975,12 @@ mod tests {
                 DocumentPath::parse("/paths/~1system~1info/get"),
                 &ops,
             ),
-            changes: vec![SubpathChange {
+            changes: BTreeSet::from([SubpathChange {
                 class: ChangeClass::ForwardIncompatible,
                 message: "The operation get_system_info was added".into(),
                 old_subpath: DocumentPath::root(),
                 new_subpath: DocumentPath::root(),
-            }],
+            }]),
             tree: PathTree::default(),
             blessed_value: None,
             generated_value: None,
@@ -995,12 +996,12 @@ mod tests {
         let issue = ApiCompatIssue {
             blessed_base: component("#/components/schemas/Foo"),
             generated_base: component("#/components/schemas/Foo"),
-            changes: vec![SubpathChange {
+            changes: BTreeSet::from([SubpathChange {
                 class: ChangeClass::Incompatible,
                 message: "field renamed".into(),
                 old_subpath: DocumentPath::parse("properties/old_name"),
                 new_subpath: DocumentPath::parse("properties/new_name"),
-            }],
+            }]),
             tree: PathTree::default(),
             blessed_value: None,
             generated_value: None,
@@ -1015,12 +1016,12 @@ mod tests {
         let issue = ApiCompatIssue {
             blessed_base: component("#/components/schemas/Foo"),
             generated_base: component("#/components/schemas/Foo"),
-            changes: vec![SubpathChange {
+            changes: BTreeSet::from([SubpathChange {
                 class: ChangeClass::Unhandled,
                 message: "array maxItems changed".into(),
                 old_subpath: DocumentPath::parse("items"),
                 new_subpath: DocumentPath::parse("items"),
-            }],
+            }]),
             tree: PathTree::default(),
             blessed_value: None,
             generated_value: None,
@@ -1103,7 +1104,7 @@ mod tests {
         let issue = ApiCompatIssue {
             blessed_base: component("#/components/schemas/AuditLogEntry"),
             generated_base: component("#/components/schemas/AuditLogEntry"),
-            changes: vec![
+            changes: BTreeSet::from([
                 SubpathChange {
                     class: ChangeClass::Incompatible,
                     message: "schema kind changed".into(),
@@ -1116,7 +1117,7 @@ mod tests {
                     old_subpath: DocumentPath::root(),
                     new_subpath: DocumentPath::root(),
                 },
-            ],
+            ]),
             tree,
             blessed_value: None,
             generated_value: None,
