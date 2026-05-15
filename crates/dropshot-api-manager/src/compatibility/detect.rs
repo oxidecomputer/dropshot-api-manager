@@ -91,11 +91,7 @@ impl<'a> CompatDedupeMap<'a> {
         location: CompatIssueLocation<'a>,
         issue: &'a ApiCompatIssue,
     ) {
-        if !self
-            .entries
-            .iter()
-            .any(|(seen, _)| seen.is_same_change_as(issue))
-        {
+        if !self.entries.iter().any(|(seen, _)| seen.is_same_change_as(issue)) {
             self.entries.push((issue, location));
         }
     }

@@ -1316,8 +1316,10 @@ impl<'a> Resolved<'a> {
                         continue;
                     };
                     for issue in compatibility_issues {
-                        dedupe
-                            .insert(CompatIssueLocation { api, version }, issue);
+                        dedupe.insert(
+                            CompatIssueLocation { api, version },
+                            issue,
+                        );
                     }
                 }
             }
