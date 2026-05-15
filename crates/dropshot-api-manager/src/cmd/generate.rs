@@ -11,7 +11,7 @@ use crate::{
         headers::{self, *},
         plural,
     },
-    resolved::{Fix, NonVersionProblem, Resolved, VersionProblem},
+    resolved::{Fix, Resolved},
 };
 use anyhow::{Result, anyhow, bail};
 use owo_colors::OwoColorize;
@@ -119,8 +119,7 @@ fn generate_impl_inner(
                  checked above"
             );
 
-            let problems: Vec<_> = resolution.problems().collect();
-            if problems.is_empty() {
+            if !resolution.has_problems() {
                 writeln!(
                     writer,
                     "{:>HEADER_WIDTH$} {}",
@@ -139,7 +138,7 @@ fn generate_impl_inner(
                 apply_fixes(
                     writer,
                     env,
-                    problems.into_iter().map(expect_version_fix),
+                    resolution.problems().map(|p| expect_fix(p.fix())),
                     styles,
                     &mut num_updated,
                     &mut num_errors,
@@ -158,7 +157,7 @@ fn generate_impl_inner(
             apply_fixes(
                 writer,
                 env,
-                std::iter::once(expect_non_version_fix(symlink_problem)),
+                std::iter::once(expect_fix(symlink_problem.fix())),
                 styles,
                 &mut num_updated,
                 &mut num_errors,
@@ -177,7 +176,7 @@ fn generate_impl_inner(
     apply_fixes(
         writer,
         env,
-        resolved.non_version_problems().map(expect_non_version_fix),
+        resolved.orphaned_and_unparseable().map(|p| expect_fix(p.fix())),
         styles,
         &mut num_updated,
         &mut num_errors,
@@ -217,11 +216,11 @@ fn generate_impl_inner(
     display_load_problems(writer, &errors, styles)?;
     let resolved =
         Resolved::new(env, apis, &blessed, &generated, &local_files_recheck);
-    let non_version_problems: Vec<_> =
-        resolved.non_version_problems().collect();
-    nproblems += non_version_problems.len();
-    if !non_version_problems.is_empty() {
-        display_non_version_problems(writer, non_version_problems, styles)?;
+    let orphaned_and_unparseable: Vec<_> =
+        resolved.orphaned_and_unparseable().collect();
+    nproblems += orphaned_and_unparseable.len();
+    if !orphaned_and_unparseable.is_empty() {
+        display_non_version_problems(writer, orphaned_and_unparseable, styles)?;
     }
     for api in apis.iter_apis() {
         let ident = api.ident();
@@ -314,12 +313,12 @@ fn print_final_status(
     Ok(())
 }
 
-fn expect_version_fix<'a>(p: &'a VersionProblem<'a>) -> Fix<'a> {
-    p.fix().expect("attempting to fix unfixable problem")
-}
-
-fn expect_non_version_fix<'a>(p: &'a NonVersionProblem<'a>) -> Fix<'a> {
-    p.fix().expect("attempting to fix unfixable problem")
+/// Unwrap a `fix()` result at an `apply_fixes` call site.
+///
+/// Precondition: [`Resolved::has_unfixable_problems`] returned false, so
+/// every reachable problem must produce a fix.
+fn expect_fix<'a>(fix: Option<Fix<'a>>) -> Fix<'a> {
+    fix.expect("problem is fixable per has_unfixable_problems guard")
 }
 
 fn apply_fixes<'a>(

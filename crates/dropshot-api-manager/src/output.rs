@@ -362,9 +362,9 @@ pub fn display_resolution(
     }
 
     // Print problems not associated with any supported version, if any.
-    let non_version_problems: Vec<_> =
-        resolved.non_version_problems().collect();
-    num_non_version_problems += if !non_version_problems.is_empty() {
+    let orphaned_and_unparseable: Vec<_> =
+        resolved.orphaned_and_unparseable().collect();
+    num_non_version_problems += if !orphaned_and_unparseable.is_empty() {
         writeln!(
             writer,
             "\n{:>HEADER_WIDTH$} problems not associated with a specific \
@@ -375,9 +375,9 @@ pub fn display_resolution(
         let (fixable, unfixable): (
             Vec<&NonVersionProblem>,
             Vec<&NonVersionProblem>,
-        ) = non_version_problems.iter().partition(|p| p.is_fixable());
+        ) = orphaned_and_unparseable.iter().partition(|p| p.is_fixable());
         num_failed += unfixable.len();
-        display_non_version_problems(writer, non_version_problems, styles)?;
+        display_non_version_problems(writer, orphaned_and_unparseable, styles)?;
         fixable.len()
     } else {
         0
@@ -517,7 +517,7 @@ where
     T: IntoIterator<Item = &'a VersionProblem<'a>>,
 {
     for p in problems.into_iter() {
-        write_problem_header(writer, &p, p.is_fixable(), styles)?;
+        write_problem_header(writer, p, p.is_fixable(), styles)?;
 
         // Body indent used by the nested BlessedVersionBroken issue list.
         // Mirrors the continuation indent inside the problem header so
@@ -674,7 +674,7 @@ where
     T: IntoIterator<Item = &'a NonVersionProblem<'a>>,
 {
     for p in problems.into_iter() {
-        write_problem_header(writer, &p, p.is_fixable(), styles)?;
+        write_problem_header(writer, p, p.is_fixable(), styles)?;
         if let Some(fix) = p.fix() {
             write_fix_summary(writer, &fix, styles)?;
         }

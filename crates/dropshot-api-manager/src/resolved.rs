@@ -1101,7 +1101,12 @@ fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
 /// local spec files for a given API
 pub struct Resolved<'a> {
     notes: Vec<Note>,
-    non_version_problems:
+    /// Non-version problems that aren't attached to a supported (api, version)
+    /// pair: local files for unsupported versions and unparseable local
+    /// files. The "latest" symlink problems are *also* non-version problems,
+    /// but they live on [`ApiResolved::symlink`] and are reached via
+    /// [`Resolved::symlink_problem`].
+    orphaned_and_unparseable:
         Vec<(ApiIdent, Option<semver::Version>, NonVersionProblem<'a>)>,
     api_results: BTreeMap<ApiIdent, ApiResolved<'a>>,
     nexpected_documents: usize,
@@ -1149,7 +1154,7 @@ impl<'a> Resolved<'a> {
         // Get the other easy case out of the way: if there are any local spec
         // files for APIs or API versions that aren't supported any more, that's
         // a (fixable) problem.
-        let mut non_version_problems: Vec<(
+        let mut orphaned_and_unparseable: Vec<(
             ApiIdent,
             Option<semver::Version>,
             NonVersionProblem<'_>,
@@ -1242,7 +1247,7 @@ impl<'a> Resolved<'a> {
             for unparseable in api_files.unparseable_files() {
                 // Only report if no fix will overwrite this path.
                 if !paths_written.contains(&unparseable.path) {
-                    non_version_problems.push((
+                    orphaned_and_unparseable.push((
                         ident.clone(),
                         None,
                         NonVersionProblem::UnparseableLocalFile {
@@ -1255,7 +1260,7 @@ impl<'a> Resolved<'a> {
 
         Resolved {
             notes,
-            non_version_problems,
+            orphaned_and_unparseable,
             api_results,
             nexpected_documents,
         }
@@ -1269,10 +1274,17 @@ impl<'a> Resolved<'a> {
         self.notes.iter()
     }
 
-    pub fn non_version_problems(
+    /// Iterate over non-version problems that aren't attached to a specific
+    /// supported (api, version) pair: local files for unsupported versions
+    /// and unparseable local files.
+    ///
+    /// Does *not* include "latest" symlink problems, which are also
+    /// [`NonVersionProblem`]s but are reached via
+    /// [`Resolved::symlink_problem`].
+    pub fn orphaned_and_unparseable(
         &self,
     ) -> impl Iterator<Item = &NonVersionProblem<'a>> + '_ {
-        self.non_version_problems.iter().map(|(_, _, problem)| problem)
+        self.orphaned_and_unparseable.iter().map(|(_, _, problem)| problem)
     }
 
     pub fn resolution_for_api_version(
@@ -1283,6 +1295,11 @@ impl<'a> Resolved<'a> {
         self.api_results.get(ident).and_then(|v| v.by_version.get(version))
     }
 
+    /// Returns the "latest" symlink problem for an API, if any.
+    ///
+    /// Symlink problems are [`NonVersionProblem`]s but live separately from
+    /// [`Resolved::orphaned_and_unparseable`] because they're scoped to an
+    /// API rather than a (file, version) pair.
     pub fn symlink_problem(
         &self,
         ident: &ApiIdent,
@@ -1291,19 +1308,19 @@ impl<'a> Resolved<'a> {
     }
 
     pub fn has_unfixable_problems(&self) -> bool {
-        self.non_version_problems().any(|p| !p.is_fixable())
+        self.orphaned_and_unparseable().any(|p| !p.is_fixable())
             || self.api_results.values().any(|a| a.has_unfixable_problems())
     }
 
     /// Returns an owned, ordered list of all problems as summaries.
     ///
-    /// Order: non-version problems first, then per-API (sorted by ident),
-    /// per-version (sorted by semver), then symlink problems.
+    /// Order: orphaned/unparseable problems first, then per-API (sorted by
+    /// ident), per-version (sorted by semver), then symlink problems.
     pub fn problem_summaries(&self) -> Vec<ProblemSummary> {
         let mut summaries = Vec::new();
 
-        // Non-version problems.
-        for (ident, version, problem) in &self.non_version_problems {
+        // Orphaned and unparseable problems.
+        for (ident, version, problem) in &self.orphaned_and_unparseable {
             summaries.push(ProblemSummary {
                 api_ident: ident.clone(),
                 version: version.clone(),
