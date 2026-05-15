@@ -1,0 +1,9 @@
+[31;1m     Failure[0m nexus (versioned v2025112000.0.0 (blessed)): Oxide Region API
+[31;1m       error[0m: OpenAPI document is incompatible with the blessed upstream
+
+       [31;1mincompatible[0m: schema kind changed
+                 [2mat[0m: [1mAuditLogEntry[0m[1m.[0m[1mauth_method[0m
+             [33mchange[0m: object properties changed
+                 [2mat[0m: [1mAuditLogEntry[0m
+            [2mused by[0m: [32;1mGET[0m [36m/v1/system/audit-log[0m ([35maudit_log_list[0m)
+       [2m              [0m[2m└─ [0m[1mAuditLogEntryResultsPage[0m.items[]

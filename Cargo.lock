@@ -534,6 +534,7 @@ dependencies = [
  "drift",
  "dropshot",
  "dropshot-api-manager-types",
+ "expectorate",
  "fs-err",
  "git-stub",
  "git-stub-vcs",

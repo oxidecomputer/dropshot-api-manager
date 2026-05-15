@@ -1,0 +1,2 @@
+[33;1mforward-incompatible[0m: The operation get_system_info was added
+                  [2mat[0m: [32;1mGET[0m [36m/system/info[0m ([35mget_system_info[0m)

@@ -1,0 +1,6 @@
+incompatible: schema kind changed (see foo v1.0.0)
+          at: SubType.value
+      change: object properties changed
+          at: SubType
+     used by: GET /bar1 (get_bar1)
+              └─ Wrapper.value

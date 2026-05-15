@@ -1,0 +1,2 @@
+forward-incompatible: The operation get_system_info was added
+                  at: GET /system/info (get_system_info)

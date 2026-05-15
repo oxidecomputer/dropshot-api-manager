@@ -3,11 +3,13 @@
 use crate::{
     FAILURE_EXIT_CODE,
     apis::ManagedApis,
+    compatibility::CompatIssueLocation,
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
-        CheckResult, OutputOpts, Styles, display_api_spec_version,
-        display_load_problems, display_non_version_problems,
-        display_resolution, display_version_problems,
+        CheckResult, CompatDisplayContext, OutputOpts, Styles,
+        display_api_spec_version, display_load_problems,
+        display_non_version_problems, display_resolution,
+        display_version_problems,
         headers::{self, *},
         plural,
     },
@@ -216,6 +218,8 @@ fn generate_impl_inner(
     display_load_problems(writer, &errors, styles)?;
     let resolved =
         Resolved::new(env, apis, &blessed, &generated, &local_files_recheck);
+    let dedupe = resolved.build_compat_dedupe_map();
+
     let orphaned_and_unparseable: Vec<_> =
         resolved.orphaned_and_unparseable().collect();
     nproblems += orphaned_and_unparseable.len();
@@ -237,7 +241,13 @@ fn generate_impl_inner(
                      (this is a bug)",
                     ident, version
                 )?;
-                display_version_problems(writer, env, problems, styles)?;
+                let compat_ctx = CompatDisplayContext {
+                    dedupe: &dedupe,
+                    current: CompatIssueLocation { api: ident, version },
+                };
+                display_version_problems(
+                    writer, env, problems, styles, compat_ctx,
+                )?;
             }
         }
 
@@ -259,6 +269,7 @@ fn generate_impl_inner(
     // Release borrows held by `resolved`, then drop all source
     // collections in parallel. Each contains many parsed OpenAPI
     // documents whose sequential drops are costly.
+    drop(dedupe);
     drop(resolved);
     std::thread::scope(|s| {
         s.spawn(|| drop(blessed));

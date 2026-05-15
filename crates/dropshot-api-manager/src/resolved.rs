@@ -4,7 +4,9 @@
 
 use crate::{
     apis::{ManagedApi, ManagedApis},
-    compatibility::{ApiCompatIssue, api_compatible},
+    compatibility::{
+        ApiCompatIssue, CompatDedupeMap, CompatIssueLocation, api_compatible,
+    },
     environment::ResolvedEnv,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
@@ -1293,6 +1295,34 @@ impl<'a> Resolved<'a> {
         version: &semver::Version,
     ) -> Option<&Resolution<'_>> {
         self.api_results.get(ident).and_then(|v| v.by_version.get(version))
+    }
+
+    /// Build a [`CompatDedupeMap`] over every `BlessedVersionBroken` problem
+    /// across every API and version, in iteration order (sorted by API ident,
+    /// then by semver).
+    ///
+    /// The first occurrence of each unique compatibility issue will be rendered
+    /// in full (with a diff of the JSON). Subsequent occurrences will be
+    /// rendered as back-references to the first occurrence.
+    pub fn build_compat_dedupe_map(&self) -> CompatDedupeMap<'_> {
+        let mut dedupe = CompatDedupeMap::default();
+        for (api, api_resolved) in &self.api_results {
+            for (version, resolution) in &api_resolved.by_version {
+                for problem in resolution.problems() {
+                    let VersionProblem::BlessedVersionBroken {
+                        compatibility_issues,
+                    } = problem
+                    else {
+                        continue;
+                    };
+                    for issue in compatibility_issues {
+                        dedupe
+                            .insert(CompatIssueLocation { api, version }, issue);
+                    }
+                }
+            }
+        }
+        dedupe
     }
 
     /// Returns the "latest" symlink problem for an API, if any.

@@ -1,0 +1,8 @@
+incompatible: schema types changed
+          at: SubType.value
+     used by: GET /a (list_a)
+              ├─ Wrapper.via_a
+              │  ├─ Inner.x
+              │  └─ Inner.y
+              └─ Wrapper.via_b
+                 └─ Inner.z

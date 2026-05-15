@@ -1,0 +1,2 @@
+change: array maxItems changed
+    at: Foo[]
