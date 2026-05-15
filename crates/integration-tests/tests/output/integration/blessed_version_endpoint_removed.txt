@@ -6,95 +6,100 @@
     Checking 3 OpenAPI documents...
        Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
      Failure versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
-           error: OpenAPI document generated from the current code is not
-                  compatible with the blessed document (from upstream)
-                  - at .paths."/health/detailed".get: backward-incompatible
-                    change: The parameter 'verbose' was removed
-                    --- a/blessed
-                    +++ b/generated
-                    @@ -1,22 +1,11 @@
-                     {
-                       "get": {
-                    -    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
-                         "operationId": "detailed_health_check",
-                    -    "parameters": [
-                    -      {
-                    -        "in": "query",
-                    -        "name": "verbose",
-                    -        "required": true,
-                    -        "schema": {
-                    -          "type": "boolean"
-                    -        }
-                    -      }
-                    -    ],
-                         "responses": {
-                           "200": {
-                             "content": {
-                               "application/json": {
-                                 "schema": {
-                                   "$ref": "#/components/schemas/DetailedHealthStatus"
-                                 }
-                               }
+       error: OpenAPI document generated from the current code is not compatible
+              with the blessed document (from upstream)
+
+       backward-incompatible: The parameter 'verbose' was removed
+                          at: GET /health/detailed (detailed_health_check) (.parameters.0)
+       --- a/blessed
+       +++ b/generated
+       @@ -1,22 +1,11 @@
+        {
+          "get": {
+       -    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
+            "operationId": "detailed_health_check",
+       -    "parameters": [
+       -      {
+       -        "in": "query",
+       -        "name": "verbose",
+       -        "required": true,
+       -        "schema": {
+       -          "type": "boolean"
+       -        }
+       -      }
+       -    ],
+            "responses": {
+              "200": {
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/DetailedHealthStatus"
+                    }
+                  }
+
      Failure versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
-           error: OpenAPI document generated from the current code is not
-                  compatible with the blessed document (from upstream)
-                  - at .paths."/health/detailed".get: backward-incompatible
-                    change: The parameter 'verbose' was removed
-                    --- a/blessed
-                    +++ b/generated
-                    @@ -1,22 +1,11 @@
-                     {
-                       "get": {
-                    -    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
-                         "operationId": "detailed_health_check",
-                    -    "parameters": [
-                    -      {
-                    -        "in": "query",
-                    -        "name": "verbose",
-                    -        "required": true,
-                    -        "schema": {
-                    -          "type": "boolean"
-                    -        }
-                    -      }
-                    -    ],
-                         "responses": {
-                           "200": {
-                             "content": {
-                               "application/json": {
-                                 "schema": {
-                                   "$ref": "#/components/schemas/DetailedHealthStatus"
-                                 }
-                               }
-                  - at .paths."/system/info".get: backward-incompatible change:
-                    The operation get_system_info was removed
-                    --- a/blessed
-                    +++ b/generated
-                    @@ -1,25 +0,0 @@
-                    -{
-                    -  "get": {
-                    -    "description": "This breaks backward compatibility by adding a new endpoint to v3.0.0.",
-                    -    "operationId": "get_system_info",
-                    -    "responses": {
-                    -      "200": {
-                    -        "content": {
-                    -          "application/json": {
-                    -            "schema": {
-                    -              "$ref": "#/components/schemas/SystemInfo"
-                    -            }
-                    -          }
-                    -        },
-                    -        "description": "successful operation"
-                    -      },
-                    -      "4XX": {
-                    -        "$ref": "#/components/responses/Error"
-                    -      },
-                    -      "5XX": {
-                    -        "$ref": "#/components/responses/Error"
-                    -      }
-                    -    },
-                    -    "summary": "Get system info (v3+): new endpoint added to existing version."
-                    -  }
-                    -}
+       error: OpenAPI document generated from the current code is not compatible
+              with the blessed document (from upstream)
+
+       backward-incompatible: The parameter 'verbose' was removed
+                          at: GET /health/detailed (detailed_health_check) (.parameters.0)
+       --- a/blessed
+       +++ b/generated
+       @@ -1,22 +1,11 @@
+        {
+          "get": {
+       -    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
+            "operationId": "detailed_health_check",
+       -    "parameters": [
+       -      {
+       -        "in": "query",
+       -        "name": "verbose",
+       -        "required": true,
+       -        "schema": {
+       -          "type": "boolean"
+       -        }
+       -      }
+       -    ],
+            "responses": {
+              "200": {
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/DetailedHealthStatus"
+                    }
+                  }
+
+       backward-incompatible: The operation get_system_info was removed
+                          at: GET /system/info (get_system_info)
+       --- a/blessed
+       +++ b/generated
+       @@ -1,25 +0,0 @@
+       -{
+       -  "get": {
+       -    "description": "This breaks backward compatibility by adding a new endpoint to v3.0.0.",
+       -    "operationId": "get_system_info",
+       -    "responses": {
+       -      "200": {
+       -        "content": {
+       -          "application/json": {
+       -            "schema": {
+       -              "$ref": "#/components/schemas/SystemInfo"
+       -            }
+       -          }
+       -        },
+       -        "description": "successful operation"
+       -      },
+       -      "4XX": {
+       -        "$ref": "#/components/responses/Error"
+       -      },
+       -      "5XX": {
+       -        "$ref": "#/components/responses/Error"
+       -      }
+       -    },
+       -    "summary": "Get system info (v3+): new endpoint added to existing version."
+       -  }
+       -}
+
        Fresh versioned-health "latest" symlink
      -------
      Failure 3 documents checked: 2 fresh, 0 stale, 2 failed, 0 other problems

@@ -1,0 +1,5 @@
+incompatible: schema types changed
+          at: Wrapper.a
+incompatible: schema types changed
+          at: Wrapper.b
+     used by: GET /hello/{name} (hello)

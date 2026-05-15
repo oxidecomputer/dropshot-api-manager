@@ -1,0 +1,2 @@
+[31;1mbackward-incompatible[0m: A new, required parameter 'token' was added
+                   [2mat[0m: [32;1mGET[0m [36m/users/{id}[0m ([35mget_user[0m) (.parameters.1)
