@@ -56,14 +56,14 @@ Every Rust source file must start with:
 - **Newtypes** for domain types (e.g., `ApiIdent`, `VcsRevision`, `GitCommitHash`, `ApiSpecFileName`)
 - **Builder patterns** for complex construction (e.g., `ManagedApi` with `with_extra_validation`, `with_git_stub_storage`)
 - **Type states** encoded in generics when state transitions matter
-- **Lifetimes** used extensively to avoid cloning (e.g., `Problem<'a>`, `Resolution<'a>`, `Fix<'a>`)
+- **Lifetimes** used extensively to avoid cloning (e.g., `VersionProblem<'a>`, `Resolution<'a>`, `Fix<'a>`)
 - **Restricted visibility**: Use `pub(crate)` and `pub(super)` liberally
 - **Non-exhaustive**: Consider forward compatibility for public error types
 
 ### Error handling
 
 - Use `thiserror` for error types with `#[derive(Error)]`.
-- Group errors by category with specific enums (e.g., `Problem`, `Note`).
+- Group errors by category with specific enums (e.g., `VersionProblem`, `NonVersionProblem`, `Note`).
 - Provide rich error context using `anyhow::Context`.
 - Two-tier model:
   - **Problems**: User-visible issues that may be fixable or unfixable.
@@ -179,17 +179,27 @@ pub enum ResolutionKind {
     NewLocally,    // Versioned, only in current branch.
 }
 
-pub enum Problem<'a> {
-    LocalSpecFileOrphaned { ... },
+// Per-(api, version) problems: anything tied to a specific supported
+// version. The bulk of the variants live here.
+pub enum VersionProblem<'a> {
     BlessedVersionMissingLocal { ... },
     BlessedVersionBroken { ... },
     LockstepStale { ... },
     LocalVersionMissingLocal { ... },
     // ... more variants
 }
+
+// Problems not tied to a specific version: orphaned files, unparseable
+// files, and the "latest" symlink for versioned APIs.
+pub enum NonVersionProblem<'a> {
+    LocalSpecFileOrphaned { ... },
+    UnparseableLocalFile { ... },
+    LatestLinkMissing { ... },
+    LatestLinkStale { ... },
+}
 ```
 
-Problems are either **fixable** (tool can auto-correct) or **unfixable** (require manual intervention).
+Both problem enums are either **fixable** (tool can auto-correct) or **unfixable** (require manual intervention). Splitting per-version problems out lets rendering code that needs per-(api, version) context (e.g., compatibility-issue dedup) require it at the type level.
 
 ### Key design principles
 
@@ -213,7 +223,7 @@ crates/
 │   │   ├── apis.rs                # ManagedApiConfig, ManagedApi, ManagedApis
 │   │   ├── cmd/                   # CLI commands (dispatch, check, generate, list, debug)
 │   │   ├── environment.rs         # Environment configuration and resolution
-│   │   ├── resolved.rs            # Resolution logic, Problem enum, Fix enum
+│   │   ├── resolved.rs            # Resolution logic, VersionProblem / NonVersionProblem / Fix enums
 │   │   ├── compatibility.rs       # Wire compatibility checking via drift
 │   │   ├── validation.rs          # OpenAPI document validation
 │   │   ├── vcs/                   # VCS abstraction (RepoVcs: Git/Jujutsu dispatch)

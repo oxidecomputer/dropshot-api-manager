@@ -73,19 +73,21 @@ pub enum Note {
 /// and local spec files for a particular API
 pub struct Resolution<'a> {
     kind: ResolutionKind,
-    problems: Vec<Problem<'a>>,
+    problems: Vec<VersionProblem<'a>>,
 }
 
 impl<'a> Resolution<'a> {
-    pub fn new_lockstep(problems: Vec<Problem<'a>>) -> Resolution<'a> {
+    pub fn new_lockstep(problems: Vec<VersionProblem<'a>>) -> Resolution<'a> {
         Resolution { kind: ResolutionKind::Lockstep, problems }
     }
 
-    pub fn new_blessed(problems: Vec<Problem<'a>>) -> Resolution<'a> {
+    pub fn new_blessed(problems: Vec<VersionProblem<'a>>) -> Resolution<'a> {
         Resolution { kind: ResolutionKind::Blessed, problems }
     }
 
-    pub fn new_new_locally(problems: Vec<Problem<'a>>) -> Resolution<'a> {
+    pub fn new_new_locally(
+        problems: Vec<VersionProblem<'a>>,
+    ) -> Resolution<'a> {
         Resolution { kind: ResolutionKind::NewLocally, problems }
     }
 
@@ -94,7 +96,7 @@ impl<'a> Resolution<'a> {
     }
 
     /// Add a problem to this resolution.
-    pub fn add_problem(&mut self, problem: Problem<'a>) {
+    pub fn add_problem(&mut self, problem: VersionProblem<'a>) {
         self.problems.push(problem);
     }
 
@@ -102,7 +104,9 @@ impl<'a> Resolution<'a> {
         self.problems().any(|p| !p.is_fixable())
     }
 
-    pub fn problems(&self) -> impl Iterator<Item = &'_ Problem<'a>> + '_ {
+    pub fn problems(
+        &self,
+    ) -> impl Iterator<Item = &'_ VersionProblem<'a>> + '_ {
         self.problems.iter()
     }
 
@@ -132,10 +136,12 @@ impl Display for ResolutionKind {
     }
 }
 
-/// Identifies the kind of a `Problem` without carrying borrowed data.
+/// Identifies the kind of a `VersionProblem` or `NonVersionProblem` without
+/// carrying borrowed data.
 ///
-/// Each variant corresponds 1:1 to a `Problem` variant. The exhaustive
-/// match in `Problem::kind` ensures that adding a new `Problem` variant
+/// Each variant corresponds 1:1 to a variant of one of the two problem
+/// enums. Exhaustive matches in `VersionProblem::kind` and
+/// `NonVersionProblem::kind` ensure that adding a new problem variant
 /// without updating this enum causes a compile error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[expect(missing_docs)]
@@ -165,7 +171,8 @@ pub enum ProblemKind {
     GitStubFirstCommitUnknown,
 }
 
-/// Owned summary of a `Problem` for test assertions.
+/// Owned summary of a `VersionProblem` or `NonVersionProblem` for test
+/// assertions.
 ///
 /// Contains just enough information to identify a problem: which API it
 /// belongs to, which version (if any), and its [`ProblemKind`]. Because all
@@ -203,11 +210,15 @@ impl ProblemSummary {
     }
 }
 
-/// Describes a problem resolving the blessed spec(s), generated spec(s), and
-/// local spec files for a particular API.
+/// Describes a problem with the blessed spec(s), generated spec(s), and local
+/// spec files for an API that is *not* tied to a specific supported version.
+///
+/// Per-(api, version) problems live in [`VersionProblem`] instead. Splitting
+/// the two means callers can prove at compile time that, e.g., the symlink
+/// problem slot can never hold a `BlessedVersionBroken`, and rendering code
+/// that needs version-specific context can require it unconditionally.
 #[derive(Debug, Error)]
-pub enum Problem<'a> {
-    // These problems are not associated with any *supported* version of an API.
+pub enum NonVersionProblem<'a> {
     #[error(
         "A local OpenAPI document was found that does not correspond to a \
          supported version of this API: {spec_file_name}.  This is unusual, \
@@ -227,8 +238,33 @@ pub enum Problem<'a> {
     )]
     UnparseableLocalFile { unparseable_file: UnparseableFile },
 
-    // All other problems are associated with specific supported versions of an
-    // API.
+    #[error("\"Latest\" symlink for versioned API {api_ident:?} is missing")]
+    LatestLinkMissing {
+        api_ident: ApiIdent,
+        link: &'a VersionedApiSpecFileName,
+    },
+
+    #[error(
+        "\"Latest\" symlink for versioned API {api_ident:?} is stale: points \
+         to {}, but should be {}",
+         found.basename(),
+         link.basename(),
+    )]
+    LatestLinkStale {
+        api_ident: ApiIdent,
+        found: &'a VersionedApiSpecFileName,
+        link: &'a VersionedApiSpecFileName,
+    },
+}
+
+/// Describes a problem with a specific supported (api, version) pair.
+///
+/// Companion to [`NonVersionProblem`], which holds problems that aren't tied to a
+/// specific version. The split lets rendering code that needs per-(api,
+/// version) context (e.g., for compatibility-issue dedup) require that
+/// context at the type level.
+#[derive(Debug, Error)]
+pub enum VersionProblem<'a> {
     #[error(
         "This version is blessed, and it's a supported version, but it's \
          missing a local OpenAPI document. This can happen with dependent \
@@ -357,24 +393,6 @@ pub enum Problem<'a> {
         check_stale: CheckStale,
     },
 
-    #[error("\"Latest\" symlink for versioned API {api_ident:?} is missing")]
-    LatestLinkMissing {
-        api_ident: ApiIdent,
-        link: &'a VersionedApiSpecFileName,
-    },
-
-    #[error(
-        "\"Latest\" symlink for versioned API {api_ident:?} is stale: points \
-         to {}, but should be {}",
-         found.basename(),
-         link.basename(),
-    )]
-    LatestLinkStale {
-        api_ident: ApiIdent,
-        found: &'a VersionedApiSpecFileName,
-        link: &'a VersionedApiSpecFileName,
-    },
-
     #[error(
         "Blessed non-latest version is stored as a full JSON file. This can \
          be converted to a Git stub. This tool can perform the conversion for \
@@ -433,68 +451,113 @@ pub enum Problem<'a> {
     },
 }
 
-impl<'a> Problem<'a> {
+impl<'a> NonVersionProblem<'a> {
     /// Returns the discriminant of this problem as a [`ProblemKind`].
     ///
-    /// The match is exhaustive (no wildcard), so adding a new `Problem`
+    /// The match is exhaustive (no wildcard), so adding a new `NonVersionProblem`
     /// variant without updating this method causes a compile error.
     pub fn kind(&self) -> ProblemKind {
         match self {
-            Problem::LocalSpecFileOrphaned { .. } => {
+            NonVersionProblem::LocalSpecFileOrphaned { .. } => {
                 ProblemKind::LocalSpecFileOrphaned
             }
-            Problem::UnparseableLocalFile { .. } => {
+            NonVersionProblem::UnparseableLocalFile { .. } => {
                 ProblemKind::UnparseableLocalFile
             }
-            Problem::BlessedVersionMissingLocal { .. } => {
+            NonVersionProblem::LatestLinkMissing { .. } => {
+                ProblemKind::LatestLinkMissing
+            }
+            NonVersionProblem::LatestLinkStale { .. } => {
+                ProblemKind::LatestLinkStale
+            }
+        }
+    }
+
+    pub fn is_fixable(&self) -> bool {
+        self.fix().is_some()
+    }
+
+    pub fn fix(&'a self) -> Option<Fix<'a>> {
+        match self {
+            NonVersionProblem::LocalSpecFileOrphaned { spec_file_name } => {
+                Some(Fix::DeleteFiles {
+                    files: DisplayableVec(vec![spec_file_name.clone().into()]),
+                })
+            }
+            NonVersionProblem::UnparseableLocalFile { unparseable_file } => {
+                Some(Fix::DeleteUnparseableFile {
+                    path: unparseable_file.path.clone(),
+                })
+            }
+            NonVersionProblem::LatestLinkStale { api_ident, link, .. }
+            | NonVersionProblem::LatestLinkMissing { api_ident, link } => {
+                Some(Fix::UpdateSymlink { api_ident, link })
+            }
+        }
+    }
+}
+
+impl<'a> VersionProblem<'a> {
+    /// Returns the discriminant of this problem as a [`ProblemKind`].
+    ///
+    /// The match is exhaustive (no wildcard), so adding a new
+    /// `VersionProblem` variant without updating this method causes a compile
+    /// error.
+    pub fn kind(&self) -> ProblemKind {
+        match self {
+            VersionProblem::BlessedVersionMissingLocal { .. } => {
                 ProblemKind::BlessedVersionMissingLocal
             }
-            Problem::BlessedVersionExtraLocalSpec { .. } => {
+            VersionProblem::BlessedVersionExtraLocalSpec { .. } => {
                 ProblemKind::BlessedVersionExtraLocalSpec
             }
-            Problem::BlessedVersionCompareError { .. } => {
+            VersionProblem::BlessedVersionCompareError { .. } => {
                 ProblemKind::BlessedVersionCompareError
             }
-            Problem::BlessedVersionBroken { .. } => {
+            VersionProblem::BlessedVersionBroken { .. } => {
                 ProblemKind::BlessedVersionBroken
             }
-            Problem::BlessedLatestVersionBytewiseMismatch { .. } => {
+            VersionProblem::BlessedLatestVersionBytewiseMismatch { .. } => {
                 ProblemKind::BlessedLatestVersionBytewiseMismatch
             }
-            Problem::LockstepMissingLocal { .. } => {
+            VersionProblem::LockstepMissingLocal { .. } => {
                 ProblemKind::LockstepMissingLocal
             }
-            Problem::LockstepStale { .. } => ProblemKind::LockstepStale,
-            Problem::LocalVersionMissingLocal { .. } => {
+            VersionProblem::LockstepStale { .. } => ProblemKind::LockstepStale,
+            VersionProblem::LocalVersionMissingLocal { .. } => {
                 ProblemKind::LocalVersionMissingLocal
             }
-            Problem::LocalVersionExtra { .. } => ProblemKind::LocalVersionExtra,
-            Problem::LocalVersionStale { .. } => ProblemKind::LocalVersionStale,
-            Problem::GeneratedSourceMissing { .. } => {
+            VersionProblem::LocalVersionExtra { .. } => {
+                ProblemKind::LocalVersionExtra
+            }
+            VersionProblem::LocalVersionStale { .. } => {
+                ProblemKind::LocalVersionStale
+            }
+            VersionProblem::GeneratedSourceMissing { .. } => {
                 ProblemKind::GeneratedSourceMissing
             }
-            Problem::GeneratedValidationError { .. } => {
+            VersionProblem::GeneratedValidationError { .. } => {
                 ProblemKind::GeneratedValidationError
             }
-            Problem::ExtraFileStale { .. } => ProblemKind::ExtraFileStale,
-            Problem::LatestLinkMissing { .. } => ProblemKind::LatestLinkMissing,
-            Problem::LatestLinkStale { .. } => ProblemKind::LatestLinkStale,
-            Problem::BlessedVersionShouldBeGitStub { .. } => {
+            VersionProblem::ExtraFileStale { .. } => {
+                ProblemKind::ExtraFileStale
+            }
+            VersionProblem::BlessedVersionShouldBeGitStub { .. } => {
                 ProblemKind::BlessedVersionShouldBeGitStub
             }
-            Problem::GitStubShouldBeJson { .. } => {
+            VersionProblem::GitStubShouldBeJson { .. } => {
                 ProblemKind::GitStubShouldBeJson
             }
-            Problem::BlessedVersionCorruptedLocal { .. } => {
+            VersionProblem::BlessedVersionCorruptedLocal { .. } => {
                 ProblemKind::BlessedVersionCorruptedLocal
             }
-            Problem::DuplicateLocalFile { .. } => {
+            VersionProblem::DuplicateLocalFile { .. } => {
                 ProblemKind::DuplicateLocalFile
             }
-            Problem::GitStubCommitStale { .. } => {
+            VersionProblem::GitStubCommitStale { .. } => {
                 ProblemKind::GitStubCommitStale
             }
-            Problem::GitStubFirstCommitUnknown { .. } => {
+            VersionProblem::GitStubFirstCommitUnknown { .. } => {
                 ProblemKind::GitStubFirstCommitUnknown
             }
         }
@@ -506,36 +569,32 @@ impl<'a> Problem<'a> {
 
     pub fn fix(&'a self) -> Option<Fix<'a>> {
         match self {
-            Problem::LocalSpecFileOrphaned { spec_file_name } => {
+            VersionProblem::BlessedVersionMissingLocal {
+                blessed,
+                git_stub,
+            } => Some(Fix::RestoreFromBlessed {
+                blessed,
+                git_stub: git_stub.as_ref(),
+            }),
+            VersionProblem::BlessedVersionExtraLocalSpec { spec_file_name } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![spec_file_name.clone().into()]),
                 })
             }
-            Problem::BlessedVersionMissingLocal { blessed, git_stub } => {
-                Some(Fix::RestoreFromBlessed {
-                    blessed,
-                    git_stub: git_stub.as_ref(),
-                })
-            }
-            Problem::BlessedVersionExtraLocalSpec { spec_file_name } => {
-                Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![spec_file_name.clone().into()]),
-                })
-            }
-            Problem::BlessedVersionCompareError { .. } => None,
-            Problem::BlessedVersionBroken { .. } => None,
-            Problem::BlessedLatestVersionBytewiseMismatch { .. } => None,
-            Problem::LockstepMissingLocal { generated }
-            | Problem::LockstepStale { generated, .. } => {
+            VersionProblem::BlessedVersionCompareError { .. } => None,
+            VersionProblem::BlessedVersionBroken { .. } => None,
+            VersionProblem::BlessedLatestVersionBytewiseMismatch { .. } => None,
+            VersionProblem::LockstepMissingLocal { generated }
+            | VersionProblem::LockstepStale { generated, .. } => {
                 Some(Fix::UpdateLockstepFile { generated })
             }
-            Problem::LocalVersionMissingLocal { generated } => {
+            VersionProblem::LocalVersionMissingLocal { generated } => {
                 Some(Fix::UpdateVersionedFiles {
                     old: DisplayableVec(Vec::new()),
                     generated,
                 })
             }
-            Problem::LocalVersionExtra { spec_file_names } => {
+            VersionProblem::LocalVersionExtra { spec_file_names } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(
                         spec_file_names
@@ -547,7 +606,7 @@ impl<'a> Problem<'a> {
                     ),
                 })
             }
-            Problem::LocalVersionStale { spec_files, generated } => {
+            VersionProblem::LocalVersionStale { spec_files, generated } => {
                 Some(Fix::UpdateVersionedFiles {
                     old: DisplayableVec(
                         spec_files.iter().map(|s| s.spec_file_name()).collect(),
@@ -555,22 +614,19 @@ impl<'a> Problem<'a> {
                     generated,
                 })
             }
-            Problem::GeneratedSourceMissing { .. } => None,
-            Problem::GeneratedValidationError { .. } => None,
-            Problem::ExtraFileStale { path, check_stale, .. } => {
+            VersionProblem::GeneratedSourceMissing { .. } => None,
+            VersionProblem::GeneratedValidationError { .. } => None,
+            VersionProblem::ExtraFileStale { path, check_stale, .. } => {
                 Some(Fix::UpdateExtraFile { path, check_stale })
             }
-            Problem::LatestLinkStale { api_ident, link, .. }
-            | Problem::LatestLinkMissing { api_ident, link } => {
-                Some(Fix::UpdateSymlink { api_ident, link })
-            }
-            Problem::BlessedVersionShouldBeGitStub { local_file, git_stub } => {
-                Some(Fix::ConvertToGitStub { local_file, git_stub })
-            }
-            Problem::GitStubShouldBeJson { local_file, blessed } => {
+            VersionProblem::BlessedVersionShouldBeGitStub {
+                local_file,
+                git_stub,
+            } => Some(Fix::ConvertToGitStub { local_file, git_stub }),
+            VersionProblem::GitStubShouldBeJson { local_file, blessed } => {
                 Some(Fix::ConvertToJson { local_file, blessed })
             }
-            Problem::BlessedVersionCorruptedLocal {
+            VersionProblem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
                 git_stub,
@@ -579,22 +635,17 @@ impl<'a> Problem<'a> {
                 blessed,
                 git_stub: git_stub.as_ref(),
             }),
-            Problem::DuplicateLocalFile { local_file } => {
+            VersionProblem::DuplicateLocalFile { local_file } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![
                         local_file.spec_file_name().clone(),
                     ]),
                 })
             }
-            Problem::GitStubCommitStale { local_file, git_stub } => {
+            VersionProblem::GitStubCommitStale { local_file, git_stub } => {
                 Some(Fix::UpdateGitStub { local_file, git_stub })
             }
-            Problem::GitStubFirstCommitUnknown { .. } => None,
-            Problem::UnparseableLocalFile { unparseable_file } => {
-                Some(Fix::DeleteUnparseableFile {
-                    path: unparseable_file.path.clone(),
-                })
-            }
+            VersionProblem::GitStubFirstCommitUnknown { .. } => None,
         }
     }
 }
@@ -1051,7 +1102,8 @@ fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
 /// local spec files for a given API
 pub struct Resolved<'a> {
     notes: Vec<Note>,
-    non_version_problems: Vec<(ApiIdent, Option<semver::Version>, Problem<'a>)>,
+    non_version_problems:
+        Vec<(ApiIdent, Option<semver::Version>, NonVersionProblem<'a>)>,
     api_results: BTreeMap<ApiIdent, ApiResolved<'a>>,
     nexpected_documents: usize,
 }
@@ -1101,7 +1153,7 @@ impl<'a> Resolved<'a> {
         let mut non_version_problems: Vec<(
             ApiIdent,
             Option<semver::Version>,
-            Problem<'_>,
+            NonVersionProblem<'_>,
         )> = resolve_orphaned_local_specs(&supported_versions_by_api, local)
             .map(|spec_file_name| {
                 let ident = spec_file_name.ident().clone();
@@ -1109,7 +1161,7 @@ impl<'a> Resolved<'a> {
                 (
                     ident,
                     version,
-                    Problem::LocalSpecFileOrphaned {
+                    NonVersionProblem::LocalSpecFileOrphaned {
                         spec_file_name: spec_file_name.clone(),
                     },
                 )
@@ -1143,7 +1195,7 @@ impl<'a> Resolved<'a> {
                                 Resolution {
                                     kind,
                                     problems: vec![
-                                        Problem::GeneratedSourceMissing {
+                                        VersionProblem::GeneratedSourceMissing {
                                             api_ident: ident.clone(),
                                         },
                                     ],
@@ -1194,7 +1246,7 @@ impl<'a> Resolved<'a> {
                     non_version_problems.push((
                         ident.clone(),
                         None,
-                        Problem::UnparseableLocalFile {
+                        NonVersionProblem::UnparseableLocalFile {
                             unparseable_file: unparseable.clone(),
                         },
                     ));
@@ -1218,7 +1270,9 @@ impl<'a> Resolved<'a> {
         self.notes.iter()
     }
 
-    pub fn general_problems(&self) -> impl Iterator<Item = &Problem<'a>> + '_ {
+    pub fn non_version_problems(
+        &self,
+    ) -> impl Iterator<Item = &NonVersionProblem<'a>> + '_ {
         self.non_version_problems.iter().map(|(_, _, problem)| problem)
     }
 
@@ -1230,24 +1284,26 @@ impl<'a> Resolved<'a> {
         self.api_results.get(ident).and_then(|v| v.by_version.get(version))
     }
 
-    pub fn symlink_problem(&self, ident: &ApiIdent) -> Option<&Problem<'_>> {
+    pub fn symlink_problem(
+        &self,
+        ident: &ApiIdent,
+    ) -> Option<&NonVersionProblem<'_>> {
         self.api_results.get(ident).and_then(|v| v.symlink.as_ref())
     }
 
     pub fn has_unfixable_problems(&self) -> bool {
-        self.general_problems().any(|p| !p.is_fixable())
+        self.non_version_problems().any(|p| !p.is_fixable())
             || self.api_results.values().any(|a| a.has_unfixable_problems())
     }
 
     /// Returns an owned, ordered list of all problems as summaries.
     ///
-    /// Order: general (non-version-specific) problems first, then per-API
-    /// (sorted by ident), per-version (sorted by semver), then symlink
-    /// problems.
+    /// Order: non-version problems first, then per-API (sorted by ident),
+    /// per-version (sorted by semver), then symlink problems.
     pub fn problem_summaries(&self) -> Vec<ProblemSummary> {
         let mut summaries = Vec::new();
 
-        // General problems.
+        // Non-version problems.
         for (ident, version, problem) in &self.non_version_problems {
             summaries.push(ProblemSummary {
                 api_ident: ident.clone(),
@@ -1282,7 +1338,7 @@ impl<'a> Resolved<'a> {
 
 struct ApiResolved<'a> {
     by_version: BTreeMap<semver::Version, Resolution<'a>>,
-    symlink: Option<Problem<'a>>,
+    symlink: Option<NonVersionProblem<'a>>,
 }
 
 impl ApiResolved<'_> {
@@ -1424,9 +1480,11 @@ fn resolve_api<'a>(
                         version,
                         Resolution {
                             kind,
-                            problems: vec![Problem::GeneratedSourceMissing {
-                                api_ident: api.ident().clone(),
-                            }],
+                            problems: vec![
+                                VersionProblem::GeneratedSourceMissing {
+                                    api_ident: api.ident().clone(),
+                                },
+                            ],
                         },
                     );
                 };
@@ -1461,7 +1519,7 @@ fn resolve_api<'a>(
         if let Some((Some(spec_file_name), error)) = latest_first_commit_error
             && let Some(resolution) = by_version.get_mut(latest_version)
         {
-            resolution.add_problem(Problem::GitStubFirstCommitUnknown {
+            resolution.add_problem(VersionProblem::GitStubFirstCommitUnknown {
                 spec_file_name,
                 source: error,
             });
@@ -1559,7 +1617,7 @@ fn resolve_api<'a>(
                                         generated_version
                                     );
                                 });
-                            Some(Problem::LatestLinkStale {
+                            Some(NonVersionProblem::LatestLinkStale {
                                 api_ident: api.ident().clone(),
                                 link: blessed.versioned_spec_file_name(),
                                 found: latest_local,
@@ -1568,7 +1626,7 @@ fn resolve_api<'a>(
                         ResolutionKind::NewLocally => {
                             // latest_generated is not blessed, so update
                             // the symlink.
-                            Some(Problem::LatestLinkStale {
+                            Some(NonVersionProblem::LatestLinkStale {
                                 api_ident: api.ident().clone(),
                                 link: latest_generated,
                                 found: latest_local,
@@ -1603,7 +1661,7 @@ fn resolve_api<'a>(
                                     generated_version
                                 );
                             });
-                        Some(Problem::LatestLinkMissing {
+                        Some(NonVersionProblem::LatestLinkMissing {
                             api_ident: api.ident().clone(),
                             link: blessed.versioned_spec_file_name(),
                         })
@@ -1611,7 +1669,7 @@ fn resolve_api<'a>(
                     ResolutionKind::NewLocally => {
                         // latest_generated is not blessed, so update
                         // the symlink to the generated version.
-                        Some(Problem::LatestLinkMissing {
+                        Some(NonVersionProblem::LatestLinkMissing {
                             api_ident: api.ident().clone(),
                             link: latest_generated,
                         })
@@ -1647,9 +1705,11 @@ fn resolve_api_lockstep<'a>(
         // didn't include this API's document).
         return BTreeMap::from([(
             version.clone(),
-            Resolution::new_lockstep(vec![Problem::GeneratedSourceMissing {
-                api_ident: api.ident().clone(),
-            }]),
+            Resolution::new_lockstep(vec![
+                VersionProblem::GeneratedSourceMissing {
+                    api_ident: api.ident().clone(),
+                },
+            ]),
         )]);
     };
 
@@ -1691,9 +1751,11 @@ fn resolve_api_lockstep<'a>(
     match local {
         Some(local_file) if local_file.contents() == generated.contents() => (),
         Some(found) => {
-            problems.push(Problem::LockstepStale { found, generated })
+            problems.push(VersionProblem::LockstepStale { found, generated })
         }
-        None => problems.push(Problem::LockstepMissingLocal { generated }),
+        None => {
+            problems.push(VersionProblem::LockstepMissingLocal { generated })
+        }
     };
 
     BTreeMap::from([(version.clone(), Resolution::new_lockstep(problems))])
@@ -1773,13 +1835,13 @@ fn resolve_api_version_blessed<'a>(
     match api_compatible(blessed.value(), generated.value()) {
         Ok(issues) => {
             if !issues.is_empty() {
-                problems.push(Problem::BlessedVersionBroken {
+                problems.push(VersionProblem::BlessedVersionBroken {
                     compatibility_issues: issues,
                 });
             }
         }
         Err(error) => {
-            problems.push(Problem::BlessedVersionCompareError { error })
+            problems.push(VersionProblem::BlessedVersionCompareError { error })
         }
     };
 
@@ -1793,7 +1855,7 @@ fn resolve_api_version_blessed<'a>(
         && problems.is_empty()
         && generated.contents() != blessed.contents()
     {
-        problems.push(Problem::BlessedLatestVersionBytewiseMismatch {
+        problems.push(VersionProblem::BlessedLatestVersionBytewiseMismatch {
             blessed,
             generated,
         });
@@ -1852,7 +1914,7 @@ fn resolve_api_version_blessed<'a>(
     // expensive because it may need to resolve a git revision to a commit
     // hash.
     let compute_storage_format =
-        |problems: &mut Vec<Problem<'a>>| -> VersionStorageFormat {
+        |problems: &mut Vec<VersionProblem<'a>>| -> VersionStorageFormat {
             match git_stub {
                 Some(r) => {
                     match r.to_git_stub(&env.repo_root, merge_base, &env.vcs) {
@@ -1861,12 +1923,14 @@ fn resolve_api_version_blessed<'a>(
                             current,
                         ),
                         Err(error) => {
-                            problems.push(Problem::GitStubFirstCommitUnknown {
-                                spec_file_name: blessed
-                                    .versioned_spec_file_name()
-                                    .clone(),
-                                source: error,
-                            });
+                            problems.push(
+                                VersionProblem::GitStubFirstCommitUnknown {
+                                    spec_file_name: blessed
+                                        .versioned_spec_file_name()
+                                        .clone(),
+                                    source: error,
+                                },
+                            );
                             VersionStorageFormat::Error
                         }
                     }
@@ -1880,13 +1944,13 @@ fn resolve_api_version_blessed<'a>(
         if use_git_stub_storage && !is_latest {
             match compute_storage_format(&mut problems) {
                 VersionStorageFormat::GitStub(g) => {
-                    problems.push(Problem::BlessedVersionMissingLocal {
+                    problems.push(VersionProblem::BlessedVersionMissingLocal {
                         blessed,
                         git_stub: Some(g),
                     });
                 }
                 VersionStorageFormat::Json => {
-                    problems.push(Problem::BlessedVersionMissingLocal {
+                    problems.push(VersionProblem::BlessedVersionMissingLocal {
                         blessed,
                         git_stub: None,
                     });
@@ -1899,7 +1963,7 @@ fn resolve_api_version_blessed<'a>(
                 }
             }
         } else {
-            problems.push(Problem::BlessedVersionMissingLocal {
+            problems.push(VersionProblem::BlessedVersionMissingLocal {
                 blessed,
                 git_stub: None,
             });
@@ -1911,7 +1975,7 @@ fn resolve_api_version_blessed<'a>(
 
         // Report corrupted local files that need regeneration from blessed.
         for local_file in &corrupted {
-            problems.push(Problem::BlessedVersionCorruptedLocal {
+            problems.push(VersionProblem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
                 git_stub: None,
@@ -1927,14 +1991,18 @@ fn resolve_api_version_blessed<'a>(
             // case) for deletion.
             for local_file in matching {
                 if local_file.spec_file_name().is_git_stub() {
-                    problems.push(Problem::DuplicateLocalFile { local_file });
+                    problems.push(VersionProblem::DuplicateLocalFile {
+                        local_file,
+                    });
                 }
             }
         } else {
             let local_file = matching[0];
             if local_file.spec_file_name().is_git_stub() {
-                problems
-                    .push(Problem::GitStubShouldBeJson { local_file, blessed });
+                problems.push(VersionProblem::GitStubShouldBeJson {
+                    local_file,
+                    blessed,
+                });
             }
         }
     } else {
@@ -1951,7 +2019,7 @@ fn resolve_api_version_blessed<'a>(
                     None
                 }
             };
-            problems.push(Problem::BlessedVersionCorruptedLocal {
+            problems.push(VersionProblem::BlessedVersionCorruptedLocal {
                 local_file,
                 blessed,
                 git_stub,
@@ -1964,13 +2032,13 @@ fn resolve_api_version_blessed<'a>(
         let check_git_stub_staleness =
             |local_file: &'a LocalApiSpecFile,
              expected_git_stub: &GitStub,
-             problems: &mut Vec<Problem<'a>>| {
+             problems: &mut Vec<VersionProblem<'a>>| {
                 // Non-gitstub files (JSON) don't have a commit to check.
                 let Some(local_commit) = local_file.git_stub_commit() else {
                     return;
                 };
                 if *local_commit != expected_git_stub.commit() {
-                    problems.push(Problem::GitStubCommitStale {
+                    problems.push(VersionProblem::GitStubCommitStale {
                         local_file,
                         git_stub: expected_git_stub.clone(),
                     });
@@ -1993,8 +2061,9 @@ fn resolve_api_version_blessed<'a>(
                     // have Git stub: this file is redundant.
                     (VersionStorageFormat::GitStub(_), false)
                     | (VersionStorageFormat::Json, true) => {
-                        problems
-                            .push(Problem::DuplicateLocalFile { local_file });
+                        problems.push(VersionProblem::DuplicateLocalFile {
+                            local_file,
+                        });
                     }
                     // Format matches and is a Git stub: check for staleness.
                     (
@@ -2018,14 +2087,16 @@ fn resolve_api_version_blessed<'a>(
             match (&storage_format, local_file.spec_file_name().is_git_stub()) {
                 (VersionStorageFormat::GitStub(git_stub), false) => {
                     // Should be Git stub but is JSON: convert to Git stub.
-                    problems.push(Problem::BlessedVersionShouldBeGitStub {
-                        local_file,
-                        git_stub: git_stub.clone(),
-                    });
+                    problems.push(
+                        VersionProblem::BlessedVersionShouldBeGitStub {
+                            local_file,
+                            git_stub: git_stub.clone(),
+                        },
+                    );
                 }
                 (VersionStorageFormat::Json, true) => {
                     // Should be JSON but is Git stub: convert to JSON.
-                    problems.push(Problem::GitStubShouldBeJson {
+                    problems.push(VersionProblem::GitStubShouldBeJson {
                         local_file,
                         blessed,
                     });
@@ -2051,7 +2122,7 @@ fn resolve_api_version_blessed<'a>(
 
     // Report non-matching local files as extra.
     problems.extend(non_matching.into_iter().map(|s| {
-        Problem::BlessedVersionExtraLocalSpec {
+        VersionProblem::BlessedVersionExtraLocalSpec {
             spec_file_name: s
                 .spec_file_name()
                 .as_versioned()
@@ -2084,10 +2155,11 @@ fn resolve_api_version_local<'a>(
         // There was no matching spec.
         if non_matching.is_empty() {
             // There were no non-matching specs, either.
-            problems.push(Problem::LocalVersionMissingLocal { generated });
+            problems
+                .push(VersionProblem::LocalVersionMissingLocal { generated });
         } else {
             // There were non-matching specs.  This is your basic "stale" case.
-            problems.push(Problem::LocalVersionStale {
+            problems.push(VersionProblem::LocalVersionStale {
                 spec_files: non_matching,
                 generated,
             });
@@ -2106,7 +2178,7 @@ fn resolve_api_version_local<'a>(
                 })
                 .collect(),
         );
-        problems.push(Problem::LocalVersionExtra { spec_file_names });
+        problems.push(VersionProblem::LocalVersionExtra { spec_file_names });
     }
 
     Resolution::new_new_locally(problems)
@@ -2118,7 +2190,7 @@ fn validate_generated(
     validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
     generated: &GeneratedApiSpecFile,
-    problems: &mut Vec<Problem<'_>>,
+    problems: &mut Vec<VersionProblem<'_>>,
 ) {
     match validate(
         env,
@@ -2129,7 +2201,7 @@ fn validate_generated(
         generated,
     ) {
         Err(source) => {
-            problems.push(Problem::GeneratedValidationError {
+            problems.push(VersionProblem::GeneratedValidationError {
                 api_ident: api.ident().clone(),
                 version: version.version.clone(),
                 source,
@@ -2140,7 +2212,7 @@ fn validate_generated(
                 match status {
                     CheckStatus::Fresh => (),
                     CheckStatus::Stale(check_stale) => {
-                        problems.push(Problem::ExtraFileStale {
+                        problems.push(VersionProblem::ExtraFileStale {
                             api_ident: api.ident().clone(),
                             path,
                             check_stale,
