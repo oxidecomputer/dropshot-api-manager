@@ -5,7 +5,8 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     environment::{ErrorAccumulator, ResolvedEnv},
     resolved::{
-        NonVersionProblem, Resolution, ResolutionKind, Resolved, VersionProblem,
+        Fix, NonVersionProblem, Resolution, ResolutionKind, Resolved,
+        VersionProblem,
     },
     validation::CheckStale,
 };
@@ -516,26 +517,12 @@ where
     T: IntoIterator<Item = &'a VersionProblem<'a>>,
 {
     for p in problems.into_iter() {
-        let subheader_width = HEADER_WIDTH + 4;
-        let first_indent = format!(
-            "{:>subheader_width$}: ",
-            if p.is_fixable() {
-                "problem".style(styles.warning_header)
-            } else {
-                "error".style(styles.failure_header)
-            }
-        );
-        let more_indent = " ".repeat(subheader_width + 2);
-        writeln!(
-            writer,
-            "{}",
-            textwrap::fill(
-                &InlineErrorChain::new(&p).to_string(),
-                textwrap::Options::with_termwidth()
-                    .initial_indent(&first_indent)
-                    .subsequent_indent(&more_indent)
-            )
-        )?;
+        write_problem_header(writer, &p, p.is_fixable(), styles)?;
+
+        // Body indent used by the nested BlessedVersionBroken issue list.
+        // Mirrors the continuation indent inside the problem header so
+        // wrapped issue lines line up under the header text.
+        let more_indent = " ".repeat(HEADER_WIDTH + 4 + 2);
 
         // For BlessedVersionBroken, print each item separately, along with a
         // diff between blessed and generated versions.
@@ -612,24 +599,7 @@ where
             continue;
         };
 
-        let first_indent = format!(
-            "{:>subheader_width$}: ",
-            "fix".style(styles.warning_header)
-        );
-        let fix_str = fix.to_string();
-        let steps = fix_str.trim_end().split("\n");
-        for s in steps {
-            writeln!(
-                writer,
-                "{}",
-                textwrap::fill(
-                    &format!("will {}", s),
-                    textwrap::Options::with_termwidth()
-                        .initial_indent(&first_indent)
-                        .subsequent_indent(&more_indent)
-                )
-            )?;
-        }
+        write_fix_summary(writer, &fix, styles)?;
 
         // When possible, print a useful diff of changes.
         let do_diff = match p {
@@ -691,9 +661,10 @@ where
     Ok(())
 }
 
-/// Print a formatted list of [`NonVersionProblem`]s (orphaned files,
-/// unparseable files, and "latest" symlink issues) to `writer`. None of
-/// these variants have associated diffs, so this is just header + fix.
+/// Print a formatted list of [`NonVersionProblem`]s to `writer`.
+///
+/// None of these variants have associated diffs, so this is just a header +
+/// fix.
 pub fn display_non_version_problems<'a, T>(
     writer: &mut dyn io::Write,
     problems: T,
@@ -703,48 +674,68 @@ where
     T: IntoIterator<Item = &'a NonVersionProblem<'a>>,
 {
     for p in problems.into_iter() {
-        let subheader_width = HEADER_WIDTH + 4;
-        let first_indent = format!(
-            "{:>subheader_width$}: ",
-            if p.is_fixable() {
-                "problem".style(styles.warning_header)
-            } else {
-                "error".style(styles.failure_header)
-            }
-        );
-        let more_indent = " ".repeat(subheader_width + 2);
+        write_problem_header(writer, &p, p.is_fixable(), styles)?;
+        if let Some(fix) = p.fix() {
+            write_fix_summary(writer, &fix, styles)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write the `problem:` / `error:` header line for a single problem, wrapping
+/// the error chain to the terminal width.
+fn write_problem_header(
+    writer: &mut dyn io::Write,
+    error: &dyn std::error::Error,
+    is_fixable: bool,
+    styles: &Styles,
+) -> io::Result<()> {
+    let subheader_width = HEADER_WIDTH + 4;
+    let first_indent = format!(
+        "{:>subheader_width$}: ",
+        if is_fixable {
+            "problem".style(styles.warning_header)
+        } else {
+            "error".style(styles.failure_header)
+        }
+    );
+    let more_indent = " ".repeat(subheader_width + 2);
+    writeln!(
+        writer,
+        "{}",
+        textwrap::fill(
+            &InlineErrorChain::new(error).to_string(),
+            textwrap::Options::with_termwidth()
+                .initial_indent(&first_indent)
+                .subsequent_indent(&more_indent)
+        )
+    )
+}
+
+/// Write the `fix:` line(s) for a single fix, splitting multi-step fixes into
+/// separate `will ...` lines that share the column structure of
+/// [`write_problem_header`].
+fn write_fix_summary(
+    writer: &mut dyn io::Write,
+    fix: &Fix<'_>,
+    styles: &Styles,
+) -> io::Result<()> {
+    let subheader_width = HEADER_WIDTH + 4;
+    let first_indent =
+        format!("{:>subheader_width$}: ", "fix".style(styles.warning_header));
+    let more_indent = " ".repeat(subheader_width + 2);
+    let fix_str = fix.to_string();
+    for s in fix_str.trim_end().split("\n") {
         writeln!(
             writer,
             "{}",
             textwrap::fill(
-                &InlineErrorChain::new(&p).to_string(),
+                &format!("will {}", s),
                 textwrap::Options::with_termwidth()
                     .initial_indent(&first_indent)
                     .subsequent_indent(&more_indent)
             )
         )?;
-
-        let Some(fix) = p.fix() else {
-            continue;
-        };
-
-        let first_indent = format!(
-            "{:>subheader_width$}: ",
-            "fix".style(styles.warning_header)
-        );
-        let fix_str = fix.to_string();
-        for s in fix_str.trim_end().split("\n") {
-            writeln!(
-                writer,
-                "{}",
-                textwrap::fill(
-                    &format!("will {}", s),
-                    textwrap::Options::with_termwidth()
-                        .initial_indent(&first_indent)
-                        .subsequent_indent(&more_indent)
-                )
-            )?;
-        }
     }
     Ok(())
 }

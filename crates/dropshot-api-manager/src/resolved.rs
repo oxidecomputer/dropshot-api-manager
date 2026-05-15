@@ -210,13 +210,14 @@ impl ProblemSummary {
     }
 }
 
-/// Describes a problem with the blessed spec(s), generated spec(s), and local
-/// spec files for an API that is *not* tied to a specific supported version.
+/// Describes a problem resolving the blessed spec(s), generated spec(s), and
+/// local spec files for an API that is *not* tied to a specific supported
+/// version.
 ///
 /// Per-(api, version) problems live in [`VersionProblem`] instead. Splitting
-/// the two means callers can prove at compile time that, e.g., the symlink
-/// problem slot can never hold a `BlessedVersionBroken`, and rendering code
-/// that needs version-specific context can require it unconditionally.
+/// the two means that we can establish at compile time that, e.g., symlinks can
+/// never have `BlessedVersionBroken`, and rendering code that needs
+/// version-specific context can require it unconditionally.
 #[derive(Debug, Error)]
 pub enum NonVersionProblem<'a> {
     #[error(
@@ -259,10 +260,8 @@ pub enum NonVersionProblem<'a> {
 
 /// Describes a problem with a specific supported (api, version) pair.
 ///
-/// Companion to [`NonVersionProblem`], which holds problems that aren't tied to a
-/// specific version. The split lets rendering code that needs per-(api,
-/// version) context (e.g., for compatibility-issue dedup) require that
-/// context at the type level.
+/// Companion to [`NonVersionProblem`], which holds problems that aren't tied to
+/// a specific version.
 #[derive(Debug, Error)]
 pub enum VersionProblem<'a> {
     #[error(
