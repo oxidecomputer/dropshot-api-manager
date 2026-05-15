@@ -393,7 +393,7 @@ pub fn display_resolution(
             "\n{}\n",
             textwrap::fill(
                 &n.to_string(),
-                textwrap::Options::with_termwidth()
+                textwrap::Options::new(term_width())
                     .initial_indent(&initial_indent)
                     .subsequent_indent(&more_indent)
             )
@@ -539,7 +539,7 @@ where
                     "{}",
                     textwrap::fill(
                         &issue.to_string(),
-                        textwrap::Options::with_termwidth()
+                        textwrap::Options::new(term_width())
                             .initial_indent(&nested_first_indent)
                             .subsequent_indent(&nested_more_indent)
                     )
@@ -705,7 +705,7 @@ fn write_problem_header(
         "{}",
         textwrap::fill(
             &InlineErrorChain::new(error).to_string(),
-            textwrap::Options::with_termwidth()
+            textwrap::Options::new(term_width())
                 .initial_indent(&first_indent)
                 .subsequent_indent(&more_indent)
         )
@@ -731,7 +731,7 @@ fn write_fix_summary(
             "{}",
             textwrap::fill(
                 &format!("will {}", s),
-                textwrap::Options::with_termwidth()
+                textwrap::Options::new(term_width())
                     .initial_indent(&first_indent)
                     .subsequent_indent(&more_indent)
             )
@@ -759,6 +759,28 @@ impl fmt::Display for InlineErrorChain<'_> {
             cause = source.source();
         }
         Ok(())
+    }
+}
+
+/// Returns the wrap width to use for terminal output.
+///
+/// Honors the `OPENAPI_MGR_TERM_WIDTH` environment variable as an override.
+/// Otherwise falls back to [`textwrap::termwidth`], which queries the terminal
+/// connected to stdout, or returns 80 when stdout isn't a tty.
+///
+/// The override exists for snapshot determinism. Under `cargo nextest run` by
+/// default, stdout is captured, so `termwidth` returns 80 and snapshots are
+/// deterministic. Under `cargo nextest run --no-capture` (or `cargo test`),
+/// however, stdout may be the developer's tty, and width is wherever the window
+/// happens to be sized. Setting `OPENAPI_MGR_TERM_WIDTH=80` explicitly, as we
+/// do in our tests, ensures that snapshots are deterministic in this scenario
+/// as well.
+pub(crate) fn term_width() -> usize {
+    match std::env::var("OPENAPI_MGR_TERM_WIDTH") {
+        Ok(s) => s.parse().unwrap_or_else(|err| {
+            panic!("OPENAPI_MGR_TERM_WIDTH={s:?} is not a valid width: {err}")
+        }),
+        Err(_) => textwrap::termwidth(),
     }
 }
 
