@@ -4,7 +4,10 @@ use crate::{
     FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::{ManagedApi, ManagedApis},
     environment::{ErrorAccumulator, ResolvedEnv},
-    resolved::{Problem, Resolution, ResolutionKind, Resolved},
+    resolved::{
+        Fix, NonVersionProblem, Resolution, ResolutionKind, Resolved,
+        VersionProblem,
+    },
     validation::CheckStale,
 };
 use anyhow::bail;
@@ -294,7 +297,7 @@ pub fn display_resolution(
     let mut num_fresh = 0;
     let mut num_stale = 0;
     let mut num_failed = 0;
-    let mut num_general_problems = 0;
+    let mut num_non_version_problems = 0;
 
     // Print problems associated with a supported API version
     // (i.e., one of the expected OpenAPI documents).
@@ -321,16 +324,15 @@ pub fn display_resolution(
 
         if let Some(symlink_problem) = resolved.symlink_problem(ident) {
             if symlink_problem.is_fixable() {
-                num_general_problems += 1;
+                num_non_version_problems += 1;
                 writeln!(
                     writer,
                     "{:>HEADER_WIDTH$} {} \"latest\" symlink",
                     STALE.style(styles.warning_header),
                     ident.style(styles.filename),
                 )?;
-                display_resolution_problems(
+                display_non_version_problems(
                     writer,
-                    env,
                     std::iter::once(symlink_problem),
                     styles,
                 )?;
@@ -342,9 +344,8 @@ pub fn display_resolution(
                     FAILURE.style(styles.failure_header),
                     ident.style(styles.filename),
                 )?;
-                display_resolution_problems(
+                display_non_version_problems(
                     writer,
-                    env,
                     std::iter::once(symlink_problem),
                     styles,
                 )?;
@@ -361,8 +362,9 @@ pub fn display_resolution(
     }
 
     // Print problems not associated with any supported version, if any.
-    let general_problems: Vec<_> = resolved.general_problems().collect();
-    num_general_problems += if !general_problems.is_empty() {
+    let orphaned_and_unparseable: Vec<_> =
+        resolved.orphaned_and_unparseable().collect();
+    num_non_version_problems += if !orphaned_and_unparseable.is_empty() {
         writeln!(
             writer,
             "\n{:>HEADER_WIDTH$} problems not associated with a specific \
@@ -370,10 +372,12 @@ pub fn display_resolution(
             "Other".style(styles.warning_header),
         )?;
 
-        let (fixable, unfixable): (Vec<&Problem>, Vec<&Problem>) =
-            general_problems.iter().partition(|p| p.is_fixable());
+        let (fixable, unfixable): (
+            Vec<&NonVersionProblem>,
+            Vec<&NonVersionProblem>,
+        ) = orphaned_and_unparseable.iter().partition(|p| p.is_fixable());
         num_failed += unfixable.len();
-        display_resolution_problems(writer, env, general_problems, styles)?;
+        display_non_version_problems(writer, orphaned_and_unparseable, styles)?;
         fixable.len()
     } else {
         0
@@ -399,7 +403,7 @@ pub fn display_resolution(
     // Print a summary line.
     let status_header = if num_failed > 0 {
         FAILURE.style(styles.failure_header)
-    } else if num_stale > 0 || num_general_problems > 0 {
+    } else if num_stale > 0 || num_non_version_problems > 0 {
         STALE.style(styles.warning_header)
     } else {
         SUCCESS.style(styles.success_header)
@@ -416,8 +420,8 @@ pub fn display_resolution(
         num_fresh.style(styles.bold),
         num_stale.style(styles.bold),
         num_failed.style(styles.bold),
-        num_general_problems.style(styles.bold),
-        plural::problems(num_general_problems),
+        num_non_version_problems.style(styles.bold),
+        plural::problems(num_non_version_problems),
     )?;
     if num_failed > 0 {
         writeln!(
@@ -427,7 +431,7 @@ pub fn display_resolution(
             format!("{} generate", env.command).style(styles.bold)
         )?;
         Ok(CheckResult::Failures)
-    } else if num_stale > 0 || num_general_problems > 0 {
+    } else if num_stale > 0 || num_non_version_problems > 0 {
         writeln!(
             writer,
             "{:>HEADER_WIDTH$} (run {} to update)",
@@ -496,46 +500,35 @@ fn summarize_one(
             display_api_spec_version(api, version, styles, resolution),
         )?;
 
-        display_resolution_problems(writer, env, problems, styles)?;
+        display_version_problems(writer, env, problems, styles)?;
     }
     Ok(())
 }
 
-/// Print a formatted list of Problems to `writer`.
-pub fn display_resolution_problems<'a, T>(
+/// Print a formatted list of per-(api, version) [`VersionProblem`]s to
+/// `writer`, including any compatibility-issue diffs and fix descriptions.
+pub fn display_version_problems<'a, T>(
     writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     problems: T,
     styles: &Styles,
 ) -> io::Result<()>
 where
-    T: IntoIterator<Item = &'a Problem<'a>>,
+    T: IntoIterator<Item = &'a VersionProblem<'a>>,
 {
     for p in problems.into_iter() {
-        let subheader_width = HEADER_WIDTH + 4;
-        let first_indent = format!(
-            "{:>subheader_width$}: ",
-            if p.is_fixable() {
-                "problem".style(styles.warning_header)
-            } else {
-                "error".style(styles.failure_header)
-            }
-        );
-        let more_indent = " ".repeat(subheader_width + 2);
-        writeln!(
-            writer,
-            "{}",
-            textwrap::fill(
-                &InlineErrorChain::new(&p).to_string(),
-                textwrap::Options::with_termwidth()
-                    .initial_indent(&first_indent)
-                    .subsequent_indent(&more_indent)
-            )
-        )?;
+        write_problem_header(writer, p, p.is_fixable(), styles)?;
+
+        // Body indent used by the nested BlessedVersionBroken issue list.
+        // Mirrors the continuation indent inside the problem header so
+        // wrapped issue lines line up under the header text.
+        let more_indent = " ".repeat(HEADER_WIDTH + 4 + 2);
 
         // For BlessedVersionBroken, print each item separately, along with a
         // diff between blessed and generated versions.
-        if let Problem::BlessedVersionBroken { compatibility_issues } = &p {
+        if let VersionProblem::BlessedVersionBroken { compatibility_issues } =
+            &p
+        {
             for issue in compatibility_issues {
                 // Print each compatibility issue on a new line, prefixed with
                 // "- ".
@@ -578,7 +571,7 @@ where
 
         // For BlessedLatestVersionBytewiseMismatch, show a diff between blessed
         // and generated versions even though there's no fix.
-        if let Problem::BlessedLatestVersionBytewiseMismatch {
+        if let VersionProblem::BlessedLatestVersionBytewiseMismatch {
             blessed,
             generated,
         } = p
@@ -606,28 +599,11 @@ where
             continue;
         };
 
-        let first_indent = format!(
-            "{:>subheader_width$}: ",
-            "fix".style(styles.warning_header)
-        );
-        let fix_str = fix.to_string();
-        let steps = fix_str.trim_end().split("\n");
-        for s in steps {
-            writeln!(
-                writer,
-                "{}",
-                textwrap::fill(
-                    &format!("will {}", s),
-                    textwrap::Options::with_termwidth()
-                        .initial_indent(&first_indent)
-                        .subsequent_indent(&more_indent)
-                )
-            )?;
-        }
+        write_fix_summary(writer, &fix, styles)?;
 
         // When possible, print a useful diff of changes.
         let do_diff = match p {
-            Problem::LockstepStale { found, generated } => {
+            VersionProblem::LockstepStale { found, generated } => {
                 let diff = TextDiff::from_lines(
                     found.contents(),
                     generated.contents(),
@@ -639,7 +615,7 @@ where
                     .join(generated.spec_file_name().path());
                 Some((diff, path1, path2))
             }
-            Problem::ExtraFileStale {
+            VersionProblem::ExtraFileStale {
                 check_stale:
                     CheckStale::Modified { full_path, actual, expected },
                 ..
@@ -647,7 +623,7 @@ where
                 let diff = TextDiff::from_lines(actual, expected);
                 Some((diff, full_path.clone(), full_path.clone()))
             }
-            Problem::LocalVersionStale { spec_files, generated }
+            VersionProblem::LocalVersionStale { spec_files, generated }
                 if spec_files.len() == 1 =>
             {
                 let diff = TextDiff::from_lines(
@@ -681,6 +657,85 @@ where
             )?;
             writeln!(writer)?;
         }
+    }
+    Ok(())
+}
+
+/// Print a formatted list of [`NonVersionProblem`]s to `writer`.
+///
+/// None of these variants have associated diffs, so this is just a header +
+/// fix.
+pub fn display_non_version_problems<'a, T>(
+    writer: &mut dyn io::Write,
+    problems: T,
+    styles: &Styles,
+) -> io::Result<()>
+where
+    T: IntoIterator<Item = &'a NonVersionProblem<'a>>,
+{
+    for p in problems.into_iter() {
+        write_problem_header(writer, p, p.is_fixable(), styles)?;
+        if let Some(fix) = p.fix() {
+            write_fix_summary(writer, &fix, styles)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write the `problem:` / `error:` header line for a single problem, wrapping
+/// the error chain to the terminal width.
+fn write_problem_header(
+    writer: &mut dyn io::Write,
+    error: &dyn std::error::Error,
+    is_fixable: bool,
+    styles: &Styles,
+) -> io::Result<()> {
+    let subheader_width = HEADER_WIDTH + 4;
+    let first_indent = format!(
+        "{:>subheader_width$}: ",
+        if is_fixable {
+            "problem".style(styles.warning_header)
+        } else {
+            "error".style(styles.failure_header)
+        }
+    );
+    let more_indent = " ".repeat(subheader_width + 2);
+    writeln!(
+        writer,
+        "{}",
+        textwrap::fill(
+            &InlineErrorChain::new(error).to_string(),
+            textwrap::Options::with_termwidth()
+                .initial_indent(&first_indent)
+                .subsequent_indent(&more_indent)
+        )
+    )
+}
+
+/// Write the `fix:` line(s) for a single fix, splitting multi-step fixes into
+/// separate `will ...` lines that share the column structure of
+/// [`write_problem_header`].
+fn write_fix_summary(
+    writer: &mut dyn io::Write,
+    fix: &Fix<'_>,
+    styles: &Styles,
+) -> io::Result<()> {
+    let subheader_width = HEADER_WIDTH + 4;
+    let first_indent =
+        format!("{:>subheader_width$}: ", "fix".style(styles.warning_header));
+    let more_indent = " ".repeat(subheader_width + 2);
+    let fix_str = fix.to_string();
+    for s in fix_str.trim_end().split("\n") {
+        writeln!(
+            writer,
+            "{}",
+            textwrap::fill(
+                &format!("will {}", s),
+                textwrap::Options::with_termwidth()
+                    .initial_indent(&first_indent)
+                    .subsequent_indent(&more_indent)
+            )
+        )?;
     }
     Ok(())
 }

@@ -59,7 +59,7 @@ pub(crate) fn debug_impl(
     for note in resolved.notes() {
         println!("NOTE: {}", note);
     }
-    for problem in resolved.general_problems() {
+    for problem in resolved.orphaned_and_unparseable() {
         println!("PROBLEM: {}", problem);
     }
 

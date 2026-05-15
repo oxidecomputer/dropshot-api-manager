@@ -6,11 +6,12 @@ use crate::{
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
         CheckResult, OutputOpts, Styles, display_api_spec_version,
-        display_load_problems, display_resolution, display_resolution_problems,
+        display_load_problems, display_non_version_problems,
+        display_resolution, display_version_problems,
         headers::{self, *},
         plural,
     },
-    resolved::{Problem, Resolved},
+    resolved::{Fix, Resolved},
 };
 use anyhow::{Result, anyhow, bail};
 use owo_colors::OwoColorize;
@@ -118,8 +119,7 @@ fn generate_impl_inner(
                  checked above"
             );
 
-            let problems: Vec<_> = resolution.problems().collect();
-            if problems.is_empty() {
+            if !resolution.has_problems() {
                 writeln!(
                     writer,
                     "{:>HEADER_WIDTH$} {}",
@@ -135,10 +135,10 @@ fn generate_impl_inner(
                     display_api_spec_version(api, version, styles, resolution),
                 )?;
 
-                fix_problems(
+                apply_fixes(
                     writer,
                     env,
-                    problems,
+                    resolution.problems().map(|p| expect_fix(p.fix())),
                     styles,
                     &mut num_updated,
                     &mut num_errors,
@@ -154,10 +154,10 @@ fn generate_impl_inner(
                 ident.style(styles.filename),
             )?;
 
-            fix_problems(
+            apply_fixes(
                 writer,
                 env,
-                std::iter::once(symlink_problem),
+                std::iter::once(expect_fix(symlink_problem.fix())),
                 styles,
                 &mut num_updated,
                 &mut num_errors,
@@ -173,11 +173,10 @@ fn generate_impl_inner(
     }
 
     // Fix problems not associated with any supported version, if any.
-    let general_problems: Vec<_> = resolved.general_problems().collect();
-    fix_problems(
+    apply_fixes(
         writer,
         env,
-        general_problems,
+        resolved.orphaned_and_unparseable().map(|p| expect_fix(p.fix())),
         styles,
         &mut num_updated,
         &mut num_errors,
@@ -217,10 +216,11 @@ fn generate_impl_inner(
     display_load_problems(writer, &errors, styles)?;
     let resolved =
         Resolved::new(env, apis, &blessed, &generated, &local_files_recheck);
-    let general_problems: Vec<_> = resolved.general_problems().collect();
-    nproblems += general_problems.len();
-    if !general_problems.is_empty() {
-        display_resolution_problems(writer, env, general_problems, styles)?;
+    let orphaned_and_unparseable: Vec<_> =
+        resolved.orphaned_and_unparseable().collect();
+    nproblems += orphaned_and_unparseable.len();
+    if !orphaned_and_unparseable.is_empty() {
+        display_non_version_problems(writer, orphaned_and_unparseable, styles)?;
     }
     for api in apis.iter_apis() {
         let ident = api.ident();
@@ -237,7 +237,7 @@ fn generate_impl_inner(
                      (this is a bug)",
                     ident, version
                 )?;
-                display_resolution_problems(writer, env, problems, styles)?;
+                display_version_problems(writer, env, problems, styles)?;
             }
         }
 
@@ -248,9 +248,8 @@ fn generate_impl_inner(
                 "found unexpected problem with API {} symlink (this is a bug)",
                 ident
             )?;
-            display_resolution_problems(
+            display_non_version_problems(
                 writer,
-                env,
                 std::iter::once(symlink_problem),
                 styles,
             )?;
@@ -314,21 +313,23 @@ fn print_final_status(
     Ok(())
 }
 
-fn fix_problems<'a, T>(
+/// Unwrap a `fix()` result at an `apply_fixes` call site.
+///
+/// Precondition: [`Resolved::has_unfixable_problems`] returned false, so
+/// every reachable problem must produce a fix.
+fn expect_fix<'a>(fix: Option<Fix<'a>>) -> Fix<'a> {
+    fix.expect("problem is fixable per has_unfixable_problems guard")
+}
+
+fn apply_fixes<'a>(
     writer: &mut dyn io::Write,
     env: &ResolvedEnv,
-    problems: T,
+    fixes: impl IntoIterator<Item = Fix<'a>>,
     styles: &Styles,
     num_updated: &mut usize,
     num_errors: &mut usize,
-) -> io::Result<()>
-where
-    T: IntoIterator<Item = &'a Problem<'a>>,
-{
-    for p in problems {
-        // We should have already bailed out if there were any unfixable
-        // problems.
-        let fix = p.fix().expect("attempting to fix unfixable problem");
+) -> io::Result<()> {
+    for fix in fixes {
         match fix.execute(env) {
             Ok(steps) => {
                 *num_updated += 1;
