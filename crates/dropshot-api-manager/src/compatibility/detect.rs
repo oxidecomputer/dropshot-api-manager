@@ -1,134 +1,208 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Determine if one OpenAPI document is a subset of another
+//! Detect non-trivial differences between two OpenAPI documents.
+//!
+//! The data types passed in and out (`ApiCompatIssue`, `PathTree`, …) live in
+//! [`super::types`]; this module just bridges drift's output into them.
 
-use drift::{Change, ChangeClass, ChangeInfo};
-use std::{collections::BTreeMap, fmt};
-
-/// A compatibility error between two OpenAPI documents, indexed by the blessed
-/// and generated paths.
-#[derive(Debug)]
-pub struct ApiCompatIssue {
-    // Blessed and generated pointers in JSON Pointer format (e.g.
-    // "#/paths/~1thing3/get")
-    blessed_pointer: String,
-    generated_pointer: String,
-    data: CompatIssueData,
-}
+use super::types::{
+    ApiCompatIssue, CompatIssueLocation, DocumentBasePath, DocumentPath,
+    OperationIdMap, PathTree, PathTreeKey, SubpathChange,
+    unescape_pointer_component,
+};
+use drift::{Change, ChangeClass, ChangeInfo, ChangePath};
 
 impl ApiCompatIssue {
-    fn best_pointer(&self) -> ApiCompatPointer<'_> {
-        ApiCompatPointer::best_pointer(
-            &self.blessed_pointer,
-            &self.generated_pointer,
-        )
-    }
-
-    pub(crate) fn blessed_json(&self) -> String {
-        to_json_pretty(self.data.blessed_value.as_ref())
-    }
-
-    pub(crate) fn generated_json(&self) -> String {
-        to_json_pretty(self.data.generated_value.as_ref())
-    }
-}
-
-impl fmt::Display for ApiCompatIssue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.best_pointer() {
-            ApiCompatPointer::Same(p)
-            | ApiCompatPointer::Blessed(p)
-            | ApiCompatPointer::Generated(p) => {
-                write!(f, "at {}:", json_pointer_to_jq(p))?;
-            }
-            ApiCompatPointer::Rename { blessed_pointer, generated_pointer } => {
-                write!(
-                    f,
-                    "at {} -> {}:",
-                    json_pointer_to_jq(blessed_pointer),
-                    json_pointer_to_jq(generated_pointer),
-                )?;
-            }
-        }
-
-        if self.data.changes.len() == 1 {
-            let ChangeInfo {
-                message,
-                old_subpath: _,
-                new_subpath: _,
-                class,
-                details: _,
-            } = &self.data.changes[0];
-            write!(f, " {}change: {}", change_class_str(class), message)?;
-        } else {
-            writeln!(f)?;
-            for error in &self.data.changes {
-                let ChangeInfo {
-                    message,
-                    old_subpath: _,
-                    new_subpath: _,
-                    class,
-                    details: _,
-                } = error;
-                writeln!(
-                    f,
-                    "- {}change: {}",
-                    change_class_str(class),
-                    message
-                )?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct CompatIssueData {
-    blessed_value: Option<serde_json::Value>,
-    generated_value: Option<serde_json::Value>,
-    changes: Vec<ChangeInfo>,
-}
-
-impl CompatIssueData {
     fn new(
         blessed_spec: &serde_json::Value,
-        blessed_pointer: &str,
         generated_spec: &serde_json::Value,
-        generated_pointer: &str,
+        paths: Vec<ChangePath>,
+        change_infos: Vec<ChangeInfo>,
+        blessed_op_ids: &OperationIdMap<'_>,
+        generated_op_ids: &OperationIdMap<'_>,
     ) -> Self {
-        let (blessed_value, generated_value) =
-            match ApiCompatPointer::best_pointer(
-                blessed_pointer,
-                generated_pointer,
-            ) {
-                ApiCompatPointer::Same(pointer) => (
-                    get_json_value(pointer, blessed_spec),
-                    get_json_value(pointer, generated_spec),
-                ),
-                ApiCompatPointer::Blessed(pointer) => {
-                    // If the blessed version is the best, then it means that
-                    // the generated version isn't relevant to this
-                    // determination (typically because the generated version
-                    // removed a path or schema that the blessed version has).
-                    // In that case, store only the blessed value.
-                    (get_json_value(pointer, blessed_spec), None)
-                }
-                ApiCompatPointer::Generated(pointer) => {
-                    // Same logic as above, but for the generated version.
-                    (None, get_json_value(pointer, generated_spec))
-                }
-                ApiCompatPointer::Rename {
-                    blessed_pointer,
-                    generated_pointer,
-                } => (
-                    get_json_value(blessed_pointer, blessed_spec),
-                    get_json_value(generated_pointer, generated_spec),
-                ),
-            };
+        // Every path within a single `Change` shares the same base, so we
+        // can take the first one. Drift guarantees `paths` is non-empty.
+        let first = paths.first().expect("non-empty paths from drift");
+        let (blessed_base_ptr, _) = first.old.base_and_subpath();
+        let (generated_base_ptr, _) = first.new.base_and_subpath();
 
-        Self { blessed_value, generated_value, changes: Vec::new() }
+        let blessed_base = DocumentBasePath::classify(
+            DocumentPath::parse(blessed_base_ptr),
+            blessed_op_ids,
+        );
+        let generated_base = DocumentBasePath::classify(
+            DocumentPath::parse(generated_base_ptr),
+            generated_op_ids,
+        );
+
+        // For an added/removed endpoint, drift points the missing side at
+        // the `.paths` container — fetching its JSON value there would
+        // drag in *every* unrelated endpoint and produce a giant
+        // uninformative diff. Skip the fetch on the `PathsRoot` side so
+        // the diff renders as plain additions (or deletions) of the one
+        // endpoint that actually changed.
+        let blessed_value = (!blessed_base.is_paths_root())
+            .then(|| get_json_value(blessed_base_ptr, blessed_spec))
+            .flatten();
+        let generated_value = (!generated_base.is_paths_root())
+            .then(|| get_json_value(generated_base_ptr, generated_spec))
+            .flatten();
+
+        let changes =
+            change_infos.into_iter().map(SubpathChange::from_info).collect();
+
+        // Tree refs are blessed-side (see `PathTree::build`), so endpoint
+        // leaves resolve their op id in the blessed map.
+        let tree = PathTree::build(&paths, blessed_op_ids);
+
+        Self {
+            blessed_base,
+            generated_base,
+            changes,
+            tree,
+            blessed_value,
+            generated_value,
+        }
     }
+}
+
+/// Tracks which compatibility issue was first reported by which API/version, so
+/// that subsequent renderings can elide the JSON diff and just show a
+/// back-reference to the original.
+#[derive(Debug, Default)]
+pub(crate) struct CompatDedupeMap<'a> {
+    // The list of first occurrences of each unique issue.
+    //
+    // We store the items as a `Vec` and do linear scans for lookups. This is
+    // because `serde_json::Value` doesn't implement `Hash` (since it can
+    // represent floats), and the number of distinct compatibility issues across
+    // a check run is expected to be reasonably small.
+    entries: Vec<(&'a ApiCompatIssue, CompatIssueLocation<'a>)>,
+}
+
+impl<'a> CompatDedupeMap<'a> {
+    /// Record an `(issue, location)` pair. The first call for a given issue
+    /// records its location as the canonical first occurrence; later calls
+    /// with an equivalent issue are no-ops, so subsequent [`Self::lookup`]s
+    /// of that issue from a different location report as duplicates.
+    pub(crate) fn insert(
+        &mut self,
+        location: CompatIssueLocation<'a>,
+        issue: &'a ApiCompatIssue,
+    ) {
+        if !self.entries.iter().any(|(seen, _)| seen.is_same_change_as(issue)) {
+            self.entries.push((issue, location));
+        }
+    }
+
+    /// Look up an issue against this dedupe map.
+    ///
+    /// Returns [`DedupeStatus::Duplicate`] only when the issue has been seen
+    /// previously *and* the supplied `current` location is not the one that
+    /// first reported it. The first-occurrence location renders normally.
+    pub(crate) fn lookup(
+        &self,
+        issue: &ApiCompatIssue,
+        current: CompatIssueLocation<'_>,
+    ) -> DedupeStatus<'_> {
+        match self
+            .entries
+            .iter()
+            .find(|(seen, _)| seen.is_same_change_as(issue))
+        {
+            Some(&(_, loc)) if loc != current => {
+                DedupeStatus::Duplicate { first_occurrence: loc }
+            }
+            _ => DedupeStatus::FirstOccurrence,
+        }
+    }
+}
+
+/// Result of consulting a [`CompatDedupeMap`] for a particular issue at a
+/// particular API/version.
+#[derive(Debug)]
+pub(crate) enum DedupeStatus<'a> {
+    /// This is the first place the issue is being reported.
+    FirstOccurrence,
+    /// The same issue was already reported elsewhere. Render an abbreviated
+    /// form that references the first occurrence.
+    Duplicate { first_occurrence: CompatIssueLocation<'a> },
+}
+
+impl SubpathChange {
+    fn from_info(info: ChangeInfo) -> Self {
+        Self {
+            class: info.class,
+            message: info.message,
+            old_subpath: DocumentPath::parse(&info.old_subpath),
+            new_subpath: DocumentPath::parse(&info.new_subpath),
+        }
+    }
+}
+
+impl PathTree {
+    fn build(paths: &[ChangePath], op_ids: &OperationIdMap<'_>) -> Self {
+        // For each `ChangePath`, `old.iter()` iterates over the reference stack
+        // starting at the leaf (the directly-affected schema), through any
+        // `$ref` chains, and terminating at the originating endpoint. For
+        // example, a change at `SubType` might really be:
+        //
+        //     [0] #/components/schemas/SubType                 <- leaf
+        //     [1] #/components/schemas/Wrapper/.../$ref        <- ref source
+        //     [2] #/paths/~1hello/get/.../$ref                 <- endpoint
+        //
+        // The first entry [0] is the changed schema itself. This is identical
+        // across every path in this `Change` and already shown in the issue
+        // header above the path tree, so we skip over that. We do need to show
+        // the remaining entries, though.
+        //
+        // We read the old (blessed) side rather than the new (generated) side
+        // because in case of renames, both sides have the same chain shape, but
+        // only the blessed names match the `blessed_base` in the header.
+        let mut tree = PathTree::default();
+        for path in paths {
+            let ref_chain = path
+                .old
+                .iter()
+                .skip(1)
+                .map(|entry| PathTreeKey::parse(entry, op_ids));
+            tree.insert(ref_chain);
+        }
+        tree
+    }
+}
+
+/// Walk `doc.paths.<route>.<method>` and collect each operation's
+/// `operationId` into a map keyed by its `paths/<route>/<method>` base.
+///
+/// Endpoints without an `operationId` (or with a non-string value) are simply
+/// omitted. We consider that to be okay because the operation ID isn't
+/// load-bearing internally and is just used for user-friendly output.
+fn extract_operation_ids(doc: &serde_json::Value) -> OperationIdMap<'_> {
+    let mut out = OperationIdMap::new();
+    let Some(paths) = doc.pointer("/paths").and_then(|v| v.as_object()) else {
+        return out;
+    };
+    for (route, item) in paths {
+        let Some(item) = item.as_object() else { continue };
+        for (method, op) in item {
+            let Some(op) = op.as_object() else { continue };
+            let Some(op_id) = op.get("operationId").and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+            let base = DocumentPath {
+                segments: vec![
+                    "paths".to_string(),
+                    route.clone(),
+                    method.clone(),
+                ],
+            };
+            out.insert(base, op_id);
+        }
+    }
+    out
 }
 
 fn get_json_value(
@@ -154,78 +228,6 @@ fn surround_with_map(
     let mut map = serde_json::Map::new();
     map.insert(unescape_pointer_component(last_component), value.clone());
     serde_json::Value::Object(map)
-}
-
-fn to_json_pretty(value: Option<&serde_json::Value>) -> String {
-    match value {
-        Some(value) => serde_json::to_string_pretty(value)
-            .expect("serializing serde_json::Value should always succeed"),
-        None => String::new(),
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum ApiCompatPointer<'a> {
-    Same(&'a str),
-    Blessed(&'a str),
-    Generated(&'a str),
-    Rename { blessed_pointer: &'a str, generated_pointer: &'a str },
-}
-
-impl<'a> ApiCompatPointer<'a> {
-    fn best_pointer(
-        blessed_pointer: &'a str,
-        generated_pointer: &'a str,
-    ) -> Self {
-        if blessed_pointer == generated_pointer {
-            return ApiCompatPointer::Same(blessed_pointer);
-        }
-
-        // If one of the pointers (transformed into a prefix-free string by
-        // adding a trailing `/`) is a parent of the other, return the child.
-        if let Some(suffix) = blessed_pointer.strip_prefix(generated_pointer)
-            && suffix.starts_with('/')
-        {
-            return ApiCompatPointer::Blessed(blessed_pointer);
-        }
-        if let Some(suffix) = generated_pointer.strip_prefix(blessed_pointer)
-            && suffix.starts_with('/')
-        {
-            return ApiCompatPointer::Generated(generated_pointer);
-        }
-
-        // Neither pointer is a parent of the other, so we need to treat this as
-        // a rename.
-        ApiCompatPointer::Rename { blessed_pointer, generated_pointer }
-    }
-}
-
-fn json_pointer_to_jq(pointer: &str) -> String {
-    let mut out = String::new();
-    // Strip the leading `#` and/or `/`.
-    let pointer = pointer.trim_matches('#').trim_matches('/');
-
-    // For each component (split by slash):
-    for component in pointer.split('/') {
-        // Produce a leading `.`.
-        out.push('.');
-
-        // If there are any escapes (~s), then unescape and quote the string.
-        if component.contains('~') {
-            let component = unescape_pointer_component(component);
-            out.push('"');
-            out.push_str(&component);
-            out.push('"');
-        } else {
-            out.push_str(component);
-        }
-    }
-
-    out
-}
-
-fn unescape_pointer_component(component: &str) -> String {
-    component.replace("~1", "/").replace("~0", "~")
 }
 
 /// Escape a string for use as a JSON Pointer component (RFC 6901).
@@ -340,199 +342,59 @@ pub fn api_compatible(
     // not a wire-format change.
     normalize_old_websocket_responses(&mut blessed, generated);
 
+    // Build the per-spec op-id maps once. Each issue consults them through
+    // `DocumentBasePath::classify` to populate the `operation_id` field on
+    // its endpoint variants.
+    let blessed_op_ids = extract_operation_ids(&blessed);
+    let generated_op_ids = extract_operation_ids(generated);
+
     let changes = drift::compare(&blessed, generated)?;
-
-    // drift 0.2.0 groups multiple paths and multiple inner changes under a
-    // single `Change`. Flatten back to (path, info) pairs and aggregate by
-    // (blessed_pointer, generated_pointer) to preserve the existing
-    // grouping and rendering.
-    let aggregated = changes
-        .into_iter()
-        .flat_map(|Change { paths, changes: change_infos }| {
-            // Filter trivial here so an entry whose only inner changes are
-            // trivial doesn't create empty groups.
-            let non_trivial: Vec<ChangeInfo> = change_infos
-                .into_iter()
-                .filter(|info| match info.class {
-                    ChangeClass::BackwardIncompatible
-                    | ChangeClass::ForwardIncompatible
-                    | ChangeClass::Incompatible
-                    | ChangeClass::Unhandled => true,
-                    ChangeClass::Trivial => false,
-                })
-                .collect();
-            paths
-                .into_iter()
-                .flat_map(move |path| {
-                    let blessed_pointer =
-                        path.old.iter().next().unwrap_or("").to_owned();
-                    let generated_pointer =
-                        path.new.iter().next().unwrap_or("").to_owned();
-                    non_trivial.clone().into_iter().map(move |info| {
-                        (
-                            blessed_pointer.clone(),
-                            generated_pointer.clone(),
-                            info,
-                        )
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .fold(
-            BTreeMap::<(String, String), CompatIssueData>::new(),
-            |mut acc, (blessed_pointer, generated_pointer, info)| {
-                acc.entry((blessed_pointer.clone(), generated_pointer.clone()))
-                    .or_insert_with(|| {
-                        CompatIssueData::new(
-                            &blessed,
-                            &blessed_pointer,
-                            generated,
-                            &generated_pointer,
-                        )
-                    })
-                    .changes
-                    .push(info);
-                acc
-            },
-        );
-    Ok(aggregated
-        .into_iter()
-        .map(|((blessed_pointer, generated_pointer), data)| ApiCompatIssue {
-            blessed_pointer,
-            generated_pointer,
-            data,
-        })
-        .collect())
-}
-
-pub fn change_class_str(class: &ChangeClass) -> &'static str {
-    match class {
-        // Add spaces to the end of everything so "unhandled" can return an
-        // empty string.
-        ChangeClass::BackwardIncompatible => "backward-incompatible ",
-        ChangeClass::ForwardIncompatible => "forward-incompatible ",
-        ChangeClass::Incompatible => "incompatible ",
-        // For unhandled changes, just say "change" in the error message (so
-        // nothing here).
-        ChangeClass::Unhandled => "",
-        ChangeClass::Trivial => "trivial ",
+    let mut issues = Vec::new();
+    for Change { paths, changes: change_infos } in changes {
+        // Filter out trivial changes; if nothing non-trivial remains, skip
+        // the issue entirely.
+        let non_trivial: Vec<_> = change_infos
+            .into_iter()
+            .filter(|c| match c.class {
+                ChangeClass::BackwardIncompatible
+                | ChangeClass::ForwardIncompatible
+                | ChangeClass::Incompatible
+                | ChangeClass::Unhandled => true,
+                ChangeClass::Trivial => false,
+            })
+            .collect();
+        if non_trivial.is_empty() {
+            continue;
+        }
+        issues.push(ApiCompatIssue::new(
+            &blessed,
+            generated,
+            paths,
+            non_trivial,
+            &blessed_op_ids,
+            &generated_op_ids,
+        ));
     }
+    // Sort by base location so iteration order is independent of whatever
+    // traversal order drift returns. (We expect drift to return changes in a
+    // stable order, but things like hash ordering can potentially cause
+    // variations.)
+    //
+    // We don't compare blessed_value and generated_value here, because (a) they
+    // are derived from the base, and (b) serde_json::Value doesn't implement
+    // Ord.
+    issues.sort_by(|a, b| {
+        (&a.blessed_base, &a.generated_base)
+            .cmp(&(&b.blessed_base, &b.generated_base))
+    });
+    Ok(issues)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_best_pointer() {
-        let cases = vec![
-            // Same pointers.
-            (
-                "#/paths/~1users/get",
-                "#/paths/~1users/get",
-                ApiCompatPointer::Same("#/paths/~1users/get"),
-            ),
-            // Blessed pointer is child of generated pointer.
-            (
-                "#/paths/~1users/get/responses",
-                "#/paths/~1users/get",
-                ApiCompatPointer::Blessed("#/paths/~1users/get/responses"),
-            ),
-            (
-                "#/paths/~1users/get/responses/200",
-                "#/paths/~1users/get",
-                ApiCompatPointer::Blessed("#/paths/~1users/get/responses/200"),
-            ),
-            // Generated pointer is child of blessed pointer.
-            (
-                "#/paths/~1users/get",
-                "#/paths/~1users/get/responses",
-                ApiCompatPointer::Generated("#/paths/~1users/get/responses"),
-            ),
-            (
-                "#/paths/~1users/get",
-                "#/paths/~1users/get/responses/200/content",
-                ApiCompatPointer::Generated(
-                    "#/paths/~1users/get/responses/200/content",
-                ),
-            ),
-            // Neither is parent of the other (rename case).
-            (
-                "#/paths/~1users/get",
-                "#/paths/~1accounts/get",
-                ApiCompatPointer::Rename {
-                    blessed_pointer: "#/paths/~1users/get",
-                    generated_pointer: "#/paths/~1accounts/get",
-                },
-            ),
-            (
-                "#/paths/~1users/post/requestBody",
-                "#/paths/~1users/put/requestBody",
-                ApiCompatPointer::Rename {
-                    blessed_pointer: "#/paths/~1users/post/requestBody",
-                    generated_pointer: "#/paths/~1users/put/requestBody",
-                },
-            ),
-            // Edge case: similar paths but not parent-child.
-            (
-                "#/paths/~1user",
-                "#/paths/~1users",
-                ApiCompatPointer::Rename {
-                    blessed_pointer: "#/paths/~1user",
-                    generated_pointer: "#/paths/~1users",
-                },
-            ),
-        ];
-
-        for (blessed_pointer, generated_pointer, expected) in cases {
-            eprintln!("testing {blessed_pointer} -> {generated_pointer}");
-            let actual = ApiCompatPointer::best_pointer(
-                blessed_pointer,
-                generated_pointer,
-            );
-            assert_eq!(actual, expected);
-        }
-    }
-
-    #[test]
-    fn test_json_pointer_to_jq() {
-        let cases = vec![
-            // Basic path with no escapes.
-            ("#/paths/users", ".paths.users"),
-            // Path with tilde escape.
-            ("#/paths/~0users", r#".paths."~users""#),
-            // Path with slash escape.
-            ("#/paths/~1users", r#".paths."/users""#),
-            // Path with both escapes.
-            ("#/paths/~0users~1get", r#".paths."~users/get""#),
-            // Complex path with multiple segments.
-            (
-                "#/paths/~1users/get/responses/200",
-                r#".paths."/users".get.responses.200"#,
-            ),
-            // Path without leading #.
-            ("/paths/users", ".paths.users"),
-            // Empty path.
-            ("", "."),
-            // Just #.
-            ("#", "."),
-            // Path with multiple slashes to escape.
-            ("#/paths/~1api~1v1~1users", r#".paths."/api/v1/users""#),
-            // Path with mixed escapes.
-            (
-                "#/components/schemas/User~0Name~1Field",
-                r#".components.schemas."User~Name/Field""#,
-            ),
-        ];
-
-        for (input, expected) in cases {
-            assert_eq!(
-                json_pointer_to_jq(input),
-                expected,
-                "for input: {input}",
-            );
-        }
-    }
+    use dropshot_api_manager_types::ApiIdent;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_normalize_old_websocket_responses() {
@@ -912,5 +774,219 @@ mod tests {
             !issues.is_empty(),
             "websocket-to-HTTP change should be detected as incompatible",
         );
+    }
+
+    /// Shorthand for a component-shaped [`DocumentBasePath`] from a JSON
+    /// Pointer string.
+    fn component_base(p: &str) -> DocumentBasePath {
+        DocumentBasePath::Component(DocumentPath::parse(p))
+    }
+
+    /// Build an `ApiCompatIssue` directly. The `tree` is left empty since the
+    /// dedupe key intentionally ignores it — different APIs reach the same
+    /// component via different `$ref` chains and we want them to dedupe.
+    fn synthetic_issue(
+        base: &str,
+        message: &str,
+        blessed_value: serde_json::Value,
+        generated_value: serde_json::Value,
+    ) -> ApiCompatIssue {
+        ApiCompatIssue {
+            blessed_base: component_base(base),
+            generated_base: component_base(base),
+            changes: BTreeSet::from([SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: message.into(),
+                old_subpath: DocumentPath::parse("properties/value"),
+                new_subpath: DocumentPath::parse("properties/value"),
+            }]),
+            tree: PathTree::default(),
+            blessed_value: Some(blessed_value),
+            generated_value: Some(generated_value),
+        }
+    }
+
+    /// Owns the data a [`CompatIssueLocation`] borrows from, so a test can
+    /// hold it alive while passing the location around.
+    struct OwnedLoc {
+        api: ApiIdent,
+        version: semver::Version,
+    }
+
+    impl OwnedLoc {
+        fn new(api: &str, version: &str) -> Self {
+            Self {
+                api: ApiIdent::from(api.to_string()),
+                version: version.parse().unwrap(),
+            }
+        }
+
+        fn as_loc(&self) -> CompatIssueLocation<'_> {
+            CompatIssueLocation { api: &self.api, version: &self.version }
+        }
+    }
+
+    /// An identical issue reported by two APIs is "first occurrence" for the
+    /// first API and "duplicate" (pointing at the first) for the second.
+    #[test]
+    fn test_dedupe_basic() {
+        let issue_a = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+        let issue_b = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedupe = CompatDedupeMap::default();
+        dedupe.insert(foo.as_loc(), &issue_a);
+        dedupe.insert(bar.as_loc(), &issue_b);
+
+        assert!(matches!(
+            dedupe.lookup(&issue_a, foo.as_loc()),
+            DedupeStatus::FirstOccurrence,
+        ));
+        match dedupe.lookup(&issue_b, bar.as_loc()) {
+            DedupeStatus::Duplicate { first_occurrence } => {
+                assert_eq!(first_occurrence.api, foo.as_loc().api);
+                assert_eq!(first_occurrence.version, foo.as_loc().version);
+            }
+            DedupeStatus::FirstOccurrence => {
+                panic!("expected duplicate, got first occurrence");
+            }
+        }
+    }
+
+    /// Two issues with the same name and message but different underlying
+    /// values are not duplicates: an `Error` schema in one API may be a
+    /// completely different type from `Error` in another.
+    #[test]
+    fn test_dedupe_distinguishes_by_value() {
+        let issue_a = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+        // Same name, same change message, different concrete schema.
+        let issue_b = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "object"}}),
+            serde_json::json!({"Error": {"type": "array"}}),
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedupe = CompatDedupeMap::default();
+        dedupe.insert(foo.as_loc(), &issue_a);
+        dedupe.insert(bar.as_loc(), &issue_b);
+
+        assert!(matches!(
+            dedupe.lookup(&issue_a, foo.as_loc()),
+            DedupeStatus::FirstOccurrence,
+        ));
+        assert!(matches!(
+            dedupe.lookup(&issue_b, bar.as_loc()),
+            DedupeStatus::FirstOccurrence,
+        ));
+    }
+
+    /// The same issue reported under multiple versions of the same API
+    /// dedupes the second version, not the first.
+    #[test]
+    fn test_dedupe_across_versions_of_same_api() {
+        let issue = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+
+        let v1 = OwnedLoc::new("foo", "1.0.0");
+        let v2 = OwnedLoc::new("foo", "2.0.0");
+        let mut dedupe = CompatDedupeMap::default();
+        dedupe.insert(v1.as_loc(), &issue);
+        dedupe.insert(v2.as_loc(), &issue);
+
+        assert!(matches!(
+            dedupe.lookup(&issue, v1.as_loc()),
+            DedupeStatus::FirstOccurrence,
+        ));
+        match dedupe.lookup(&issue, v2.as_loc()) {
+            DedupeStatus::Duplicate { first_occurrence } => {
+                assert_eq!(first_occurrence.version, v1.as_loc().version);
+            }
+            DedupeStatus::FirstOccurrence => {
+                panic!("expected duplicate at v2");
+            }
+        }
+    }
+
+    /// Two issues at the same base with the same change set but reported in
+    /// different orders should dedupe. The `changes` field is a `BTreeSet`,
+    /// so the comparison is order-independent regardless of what order
+    /// drift happened to emit the inner changes in.
+    #[test]
+    fn test_dedupe_change_order_independent() {
+        fn make_change(message: &str, subpath: &str) -> SubpathChange {
+            SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: message.into(),
+                old_subpath: DocumentPath::parse(subpath),
+                new_subpath: DocumentPath::parse(subpath),
+            }
+        }
+
+        fn issue_with_changes(
+            changes: impl IntoIterator<Item = SubpathChange>,
+        ) -> ApiCompatIssue {
+            ApiCompatIssue {
+                blessed_base: component_base("#/components/schemas/User"),
+                generated_base: component_base("#/components/schemas/User"),
+                changes: changes.into_iter().collect(),
+                tree: PathTree::default(),
+                blessed_value: Some(serde_json::json!({"User": {}})),
+                generated_value: Some(serde_json::json!({"User": {}})),
+            }
+        }
+
+        let a_changes = [
+            make_change("a changed", "properties/a"),
+            make_change("b changed", "properties/b"),
+        ];
+        let b_changes = [
+            make_change("b changed", "properties/b"),
+            make_change("a changed", "properties/a"),
+        ];
+
+        let issue_a = issue_with_changes(a_changes);
+        let issue_b = issue_with_changes(b_changes);
+
+        assert!(
+            issue_a.is_same_change_as(&issue_b),
+            "issues with same change set in different order should dedupe",
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedupe = CompatDedupeMap::default();
+        dedupe.insert(foo.as_loc(), &issue_a);
+        dedupe.insert(bar.as_loc(), &issue_b);
+        match dedupe.lookup(&issue_b, bar.as_loc()) {
+            DedupeStatus::Duplicate { first_occurrence } => {
+                assert_eq!(first_occurrence.api, foo.as_loc().api);
+            }
+            DedupeStatus::FirstOccurrence => {
+                panic!("expected order-reversed issue to dedupe");
+            }
+        }
     }
 }

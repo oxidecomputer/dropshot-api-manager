@@ -1,0 +1,2 @@
+backward-incompatible: A new, required parameter 'token' was added
+                   at: GET /users/{id} (get_user) (.parameters.1)

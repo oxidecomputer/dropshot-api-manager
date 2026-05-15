@@ -1,0 +1,2 @@
+incompatible: schema types changed
+          at: OldName.value -> NewName.value

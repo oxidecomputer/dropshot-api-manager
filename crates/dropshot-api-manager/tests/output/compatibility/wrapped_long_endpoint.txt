@@ -1,0 +1,6 @@
+incompatible: schema types changed
+          at: MulticastGroupIdentity.id
+     used by: POST
+              /v1/instances/{instance}/network-interfaces/{network_interface}/multicast
+              (instance_network_multicast_attach)
+              └─ MulticastGroupMember.identity
