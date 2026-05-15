@@ -1,0 +1,5 @@
+[31;1mincompatible[0m: schema types changed
+          [2mat[0m: [1mWrapper[0m[1m.[0m[1ma[0m
+[31;1mincompatible[0m: schema types changed
+          [2mat[0m: [1mWrapper[0m[1m.[0m[1mb[0m
+     [2mused by[0m: [32;1mGET[0m [36m/hello/{name}[0m ([35mhello[0m)

@@ -1,0 +1,2 @@
+incompatible: field renamed
+          at: Foo.old_name -> Foo.new_name
