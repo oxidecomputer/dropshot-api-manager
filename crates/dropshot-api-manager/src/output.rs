@@ -3,6 +3,7 @@
 use crate::{
     FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::{ManagedApi, ManagedApis},
+    compatibility::ApiCompatIssue,
     environment::{ErrorAccumulator, ResolvedEnv},
     resolved::{
         Fix, NonVersionProblem, Resolution, ResolutionKind, Resolved,
@@ -55,13 +56,16 @@ impl OutputOpts {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Styles {
     pub(crate) bold: Style,
+    pub(crate) dimmed: Style,
     pub(crate) header: Style,
     pub(crate) success_header: Style,
     pub(crate) failure: Style,
     pub(crate) failure_header: Style,
+    pub(crate) warning: Style,
     pub(crate) warning_header: Style,
     pub(crate) unchanged_header: Style,
     pub(crate) filename: Style,
+    pub(crate) operation_id: Style,
     pub(crate) diff_before: Style,
     pub(crate) diff_after: Style,
 }
@@ -69,13 +73,16 @@ pub(crate) struct Styles {
 impl Styles {
     pub(crate) fn colorize(&mut self) {
         self.bold = Style::new().bold();
+        self.dimmed = Style::new().dimmed();
         self.header = Style::new().purple();
         self.success_header = Style::new().green().bold();
         self.failure = Style::new().red();
         self.failure_header = Style::new().red().bold();
-        self.unchanged_header = Style::new().blue().bold();
+        self.warning = Style::new().yellow();
         self.warning_header = Style::new().yellow().bold();
+        self.unchanged_header = Style::new().blue().bold();
         self.filename = Style::new().cyan();
+        self.operation_id = Style::new().purple();
         self.diff_before = Style::new().red();
         self.diff_after = Style::new().green();
     }
@@ -519,53 +526,33 @@ where
     for p in problems.into_iter() {
         write_problem_header(writer, p, p.is_fixable(), styles)?;
 
-        // Body indent used by the nested BlessedVersionBroken issue list.
-        // Mirrors the continuation indent inside the problem header so
-        // wrapped issue lines line up under the header text.
-        let more_indent = " ".repeat(HEADER_WIDTH + 4 + 2);
+        // Indent for compat-issue bodies. The issue's longest label sits
+        // at this column so its leftmost edge lines up with where `error`
+        // begins (HEADER_WIDTH minus the 5 chars of "error"), preserving
+        // the verb column the eye is already tracking down from the
+        // cargo headers.
+        let issue_indent = " ".repeat(HEADER_WIDTH - "error".len());
 
         // For BlessedVersionBroken, print each item separately, along with a
         // diff between blessed and generated versions.
+        //
+        // Each issue is surrounded by blank lines: the leading blank in
+        // `display_compat_issue` separates it from the problem header (or
+        // the previous issue's diff), and a single trailing blank here
+        // separates the last issue from the next problem.
         if let VersionProblem::BlessedVersionBroken { compatibility_issues } =
             &p
         {
             for issue in compatibility_issues {
-                // Print each compatibility issue on a new line, prefixed with
-                // "- ".
-                let nested_first_indent = format!("{}- ", more_indent);
-                let nested_more_indent = format!("{}  ", more_indent);
-                writeln!(
-                    writer,
-                    "{}",
-                    textwrap::fill(
-                        &issue.to_string(),
-                        textwrap::Options::new(term_width())
-                            .initial_indent(&nested_first_indent)
-                            .subsequent_indent(&nested_more_indent)
-                    )
-                )?;
-
-                // Now print a textual diff between the blessed and generated
-                // versions.
-                let blessed_json = issue.blessed_json();
-                let generated_json = issue.generated_json();
-
-                let diff = TextDiff::from_lines(&blessed_json, &generated_json);
-                write_diff(
-                    &diff,
-                    "blessed".as_ref(),
-                    "generated".as_ref(),
+                display_compat_issue(
+                    &mut *writer,
+                    issue,
+                    &issue_indent,
                     styles,
-                    // context_radius: use a large radius to ensure that most of
-                    // the schema is printed out.
-                    8,
-                    /* missing_newline_hint */ false,
-                    // Add an indent to align diff with the status message.
-                    &mut indent_write::io::IndentWriter::new(
-                        &nested_more_indent,
-                        &mut *writer,
-                    ),
                 )?;
+            }
+            if !compatibility_issues.is_empty() {
+                writeln!(writer)?;
             }
         }
 
@@ -684,22 +671,27 @@ where
 
 /// Write the `problem:` / `error:` header line for a single problem, wrapping
 /// the error chain to the terminal width.
+///
+/// The keyword is the second-tier verb: it continues the cargo-style verb
+/// column from the surrounding `Fresh` / `Failure` headers. It's right-aligned
+/// to the same width so the colons stack vertically as the eye scans down.
 fn write_problem_header(
     writer: &mut dyn io::Write,
     error: &dyn std::error::Error,
     is_fixable: bool,
     styles: &Styles,
 ) -> io::Result<()> {
-    let subheader_width = HEADER_WIDTH + 4;
     let first_indent = format!(
-        "{:>subheader_width$}: ",
+        "{:>HEADER_WIDTH$}: ",
         if is_fixable {
             "problem".style(styles.warning_header)
         } else {
             "error".style(styles.failure_header)
         }
     );
-    let more_indent = " ".repeat(subheader_width + 2);
+    // Continuation indent for wrapped error text. Aligns with the
+    // post-keyword content (HEADER_WIDTH + ": ".len()).
+    let more_indent = " ".repeat(HEADER_WIDTH + 2);
     writeln!(
         writer,
         "{}",
@@ -720,10 +712,9 @@ fn write_fix_summary(
     fix: &Fix<'_>,
     styles: &Styles,
 ) -> io::Result<()> {
-    let subheader_width = HEADER_WIDTH + 4;
     let first_indent =
-        format!("{:>subheader_width$}: ", "fix".style(styles.warning_header));
-    let more_indent = " ".repeat(subheader_width + 2);
+        format!("{:>HEADER_WIDTH$}: ", "fix".style(styles.warning_header));
+    let more_indent = " ".repeat(HEADER_WIDTH + 2);
     let fix_str = fix.to_string();
     for s in fix_str.trim_end().split("\n") {
         writeln!(
@@ -740,6 +731,53 @@ fn write_fix_summary(
     Ok(())
 }
 
+/// Render one compatibility issue under a problem to `writer`.
+///
+/// `body_indent` is the column the issue body starts at (each rendered
+/// line gets this prefix). The labels right-align within an issue's own
+/// colon column, so a single `body_indent` is sufficient — no separate
+/// initial/continuation indents are needed.
+fn display_compat_issue(
+    writer: &mut dyn io::Write,
+    issue: &ApiCompatIssue,
+    body_indent: &str,
+    styles: &Styles,
+) -> io::Result<()> {
+    // A blank line separates this issue from the previous problem header
+    // (or, in the full form, from the previous issue's JSON diff which
+    // already ends in a newline).
+    writeln!(writer)?;
+
+    // Indent every line of the rendered block. `IndentWriter` prefixes the
+    // first line as well, so we don't need a separate initial-indent string.
+    let mut buf = String::new();
+    write!(
+        IndentWriter::new(body_indent, &mut buf),
+        "{}",
+        issue.display(styles)
+    )
+    .expect("writing to a String never fails");
+    writeln!(writer, "{buf}")?;
+
+    // Print the textual diff between the blessed and generated values for
+    // this base.
+    let blessed_json = issue.blessed_json();
+    let generated_json = issue.generated_json();
+
+    let diff = TextDiff::from_lines(&blessed_json, &generated_json);
+    write_diff(
+        &diff,
+        "blessed".as_ref(),
+        "generated".as_ref(),
+        styles,
+        // context_radius: use a large radius to ensure that most of the
+        // schema is printed out.
+        8,
+        /* missing_newline_hint */ false,
+        // Align diff with the issue body.
+        &mut indent_write::io::IndentWriter::new(body_indent, writer),
+    )
+}
 /// Adapter for [`Error`]s that provides a [`std::fmt::Display`] implementation
 /// that print the full chain of error sources, separated by `: `.
 pub struct InlineErrorChain<'a>(&'a dyn std::error::Error);
