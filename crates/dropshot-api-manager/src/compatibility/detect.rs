@@ -1196,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "issue inserted before lookup")]
+    #[should_panic(expected = "every issue passed to status_for was inserted")]
     fn test_status_for_panics_on_uninserted() {
         let issue = synthetic_issue(
             "#/components/schemas/Error",
