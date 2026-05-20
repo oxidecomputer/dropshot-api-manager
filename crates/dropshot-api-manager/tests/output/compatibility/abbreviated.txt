@@ -1,4 +1,4 @@
-incompatible: schema types changed (see foo v1.0.0)
+incompatible: schema types changed (see #3)
           at: SubType.value
      used by: GET /bar1 (get_bar1)
               └─ Wrapper.value

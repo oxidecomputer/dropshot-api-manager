@@ -4,7 +4,8 @@ use crate::{
     FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::{ManagedApi, ManagedApis},
     compatibility::{
-        ApiCompatIssue, CompatDedupeMap, CompatIssueLocation, DedupeStatus,
+        ApiCompatIssue, CompatIssueLocation, CompatRenderStatus,
+        FinalizedCompatDedupMap,
     },
     environment::{ErrorAccumulator, ResolvedEnv},
     resolved::{
@@ -308,9 +309,7 @@ pub fn display_resolution(
     let mut num_failed = 0;
     let mut num_non_version_problems = 0;
 
-    // Built up front so per-API rendering can elide changes that were
-    // already shown in full for another API or version.
-    let dedupe = resolved.build_compat_dedupe_map();
+    let dedup = resolved.build_compat_dedup_map();
 
     // Print problems associated with a supported API version
     // (i.e., one of the expected OpenAPI documents).
@@ -329,7 +328,7 @@ pub fn display_resolution(
                 num_fresh += 1;
             }
             summarize_one(
-                writer, env, api, version, resolution, styles, &dedupe,
+                writer, env, api, version, resolution, styles, &dedup,
             )?;
         }
 
@@ -491,7 +490,7 @@ fn summarize_one(
     version: &semver::Version,
     resolution: &Resolution<'_>,
     styles: &Styles,
-    dedupe: &CompatDedupeMap,
+    dedup: &FinalizedCompatDedupMap<'_>,
 ) -> io::Result<()> {
     let problems: Vec<_> = resolution.problems().collect();
     if problems.is_empty() {
@@ -517,7 +516,7 @@ fn summarize_one(
         )?;
 
         let compat_ctx = CompatDisplayContext {
-            dedupe,
+            dedup,
             current: CompatIssueLocation { api: api.ident(), version },
         };
         display_version_problems(writer, env, problems, styles, compat_ctx)?;
@@ -525,11 +524,8 @@ fn summarize_one(
     Ok(())
 }
 
-/// Bundles a [`CompatDedupeMap`] with the API/version location currently
-/// being rendered, so [`display_version_problems`] can identify duplicate
-/// compatibility issues and abbreviate them.
 pub(crate) struct CompatDisplayContext<'a> {
-    pub(crate) dedupe: &'a CompatDedupeMap<'a>,
+    pub(crate) dedup: &'a FinalizedCompatDedupMap<'a>,
     pub(crate) current: CompatIssueLocation<'a>,
 }
 
@@ -538,7 +534,7 @@ pub(crate) struct CompatDisplayContext<'a> {
 ///
 /// `compat_ctx` enables [`VersionProblem::BlessedVersionBroken`] rendering to
 /// abbreviate compatibility issues that have already been shown elsewhere.
-pub fn display_version_problems<'a, T>(
+pub(crate) fn display_version_problems<'a, T>(
     writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     problems: T,
@@ -558,32 +554,24 @@ where
         // cargo headers.
         let issue_indent = " ".repeat(HEADER_WIDTH - "error".len());
 
-        // For BlessedVersionBroken, print each item separately, along with a
-        // diff between blessed and generated versions. If a compat dedupe
-        // context is provided, an issue that was already reported for a
-        // different API/version is rendered in abbreviated form.
-        //
-        // Each issue is surrounded by blank lines: the leading blank in
-        // `display_compat_issue` separates it from the problem header (or
-        // the previous issue's diff), and a single trailing blank here
-        // separates the last issue from the next problem.
-        if let VersionProblem::BlessedVersionBroken { compatibility_issues } =
-            &p
-        {
-            for issue in compatibility_issues {
-                let dedupe_status =
-                    compat_ctx.dedupe.lookup(issue, compat_ctx.current);
-                display_compat_issue(
-                    &mut *writer,
-                    issue,
-                    &issue_indent,
-                    styles,
-                    &dedupe_status,
-                )?;
-            }
-            if !compatibility_issues.is_empty() {
-                writeln!(writer)?;
-            }
+        // Each issue gets a leading blank (emitted by `display_compat_issue`,
+        // separating it from the problem header or the previous diff) and a
+        // single trailing blank here (separating the last issue from the next
+        // problem). An issue already reported elsewhere is rendered in
+        // abbreviated form, pointing at the canonical occurrence.
+        let issues = p.compatibility_issues();
+        for issue in issues {
+            let status = compat_ctx.dedup.status_for(issue, compat_ctx.current);
+            display_compat_issue(
+                &mut *writer,
+                issue,
+                &issue_indent,
+                styles,
+                status,
+            )?;
+        }
+        if !issues.is_empty() {
+            writeln!(writer)?;
         }
 
         // For BlessedLatestVersionBytewiseMismatch, show a diff between blessed
@@ -767,42 +755,31 @@ fn write_fix_summary(
 /// line gets this prefix). The labels right-align within an issue's own
 /// colon column, so a single `body_indent` is sufficient — no separate
 /// initial/continuation indents are needed.
-///
-/// `dedupe_status` controls the rendering form: [`FirstOccurrence`] renders
-/// the issue in full, while [`Duplicate`] renders an abbreviated form that
-/// drops the JSON diff and just emits the labeled block with a `(see ...)`
-/// back-reference to the first occurrence.
-///
-/// [`FirstOccurrence`]: DedupeStatus::FirstOccurrence
-/// [`Duplicate`]: DedupeStatus::Duplicate
 fn display_compat_issue(
     writer: &mut dyn io::Write,
     issue: &ApiCompatIssue,
     body_indent: &str,
     styles: &Styles,
-    dedupe_status: &DedupeStatus<'_>,
+    status: CompatRenderStatus,
 ) -> io::Result<()> {
     // A blank line separates this issue from the previous problem header
     // (or, in the full form, from the previous issue's JSON diff which
     // already ends in a newline).
     writeln!(writer)?;
 
-    let display = match dedupe_status {
-        DedupeStatus::FirstOccurrence => issue.display(styles),
-        DedupeStatus::Duplicate { first_occurrence } => {
-            issue.display_abbreviated(styles, *first_occurrence)
-        }
-    };
-
     // Indent every line of the rendered block. `IndentWriter` prefixes the
     // first line as well, so we don't need a separate initial-indent string.
     let mut buf = String::new();
-    write!(IndentWriter::new(body_indent, &mut buf), "{display}")
-        .expect("writing to a String never fails");
+    write!(
+        IndentWriter::new(body_indent, &mut buf),
+        "{}",
+        issue.display(styles, status),
+    )
+    .expect("writing to a String never fails");
     writeln!(writer, "{buf}")?;
 
-    match dedupe_status {
-        DedupeStatus::FirstOccurrence => {
+    match status {
+        CompatRenderStatus::FirstOccurrence { .. } => {
             // Full form: print the textual diff between the blessed and
             // generated values for this base.
             let blessed_json = issue.blessed_json();
@@ -822,7 +799,7 @@ fn display_compat_issue(
                 &mut indent_write::io::IndentWriter::new(body_indent, writer),
             )
         }
-        DedupeStatus::Duplicate { .. } => {
+        CompatRenderStatus::Duplicate { .. } => {
             // Abbreviated form: no JSON diff, since it was already shown
             // at the first occurrence.
             Ok(())

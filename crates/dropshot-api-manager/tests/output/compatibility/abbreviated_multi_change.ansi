@@ -1,4 +1,4 @@
-[31;1mincompatible[0m: schema kind changed [33m(see foo v1.0.0)[0m
+[31;1mincompatible[0m: schema kind changed [33m(see #7)[0m
           [2mat[0m: [1mSubType[0m[1m.[0m[1mvalue[0m
       [33mchange[0m: object properties changed
           [2mat[0m: [1mSubType[0m

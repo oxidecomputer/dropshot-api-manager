@@ -7,7 +7,7 @@
 //! user sees on `cargo openapi check`.
 
 use super::types::{
-    ApiCompatIssue, CompatIssueLocation, DocumentBasePath, DocumentPath,
+    ApiCompatIssue, CompatRenderStatus, DocumentBasePath, DocumentPath,
     PathTree, PathTreeKey, SubpathChange,
 };
 use crate::output::Styles;
@@ -20,20 +20,19 @@ use std::{
 
 /// `Display` adapter for [`ApiCompatIssue`] that applies styling.
 ///
-/// Returned by [`ApiCompatIssue::display`] and
-/// [`ApiCompatIssue::display_abbreviated`].
+/// Returned by [`ApiCompatIssue::display`].
 ///
 /// Each issue is rendered as a single block, with the per-change severity /
 /// `at:` at the top, then all the `used by:` at the bottom. Multiple changes
 /// within the same issue are all used by the same set of endpoints (by the
 /// structure of how OpenAPI works), so we combine those changes.
 ///
-/// Separately, `output.rs` emits a single JSON diff per issue which is treated
-/// as part of the block.
+/// Separately, if `status` is `FirstOccurrence`, `output.rs` emits a single
+/// JSON diff per issue.
 pub(crate) struct ApiCompatIssueDisplay<'a> {
     pub(super) issue: &'a ApiCompatIssue,
     pub(super) styles: &'a Styles,
-    pub(super) prev: Option<CompatIssueLocation<'a>>,
+    pub(super) status: CompatRenderStatus,
 }
 
 impl fmt::Display for ApiCompatIssueDisplay<'_> {
@@ -45,22 +44,42 @@ impl fmt::Display for ApiCompatIssueDisplay<'_> {
         // rendered block always ends mid-line regardless of whether a
         // `used by:` section follows. The caller supplies the trailing
         // newline (typically via `eprintln!` or `format!("{}\n", ...)`).
-        //
-        // The `(see <prev>)` back-reference for cross-API duplicates goes
-        // on the first severity line only.
-        let mut prev_marker = self.prev;
+        let mut marker = ChangeAnchor::from_status(self.status);
         for (i, change) in self.issue.changes.iter().enumerate() {
             if i > 0 {
                 writeln!(f)?;
             }
-            self.write_change_header(f, change, label_width, prev_marker)?;
-            prev_marker = None;
+            self.write_change_header(f, change, label_width, marker)?;
+            marker = None;
         }
         if !groups.is_empty() {
             writeln!(f)?;
             self.write_used_by_section(f, &groups, label_width)?;
         }
         Ok(())
+    }
+}
+
+/// Marker rendered after the change message.
+#[derive(Clone, Copy, Debug)]
+enum ChangeAnchor {
+    Define(usize),
+    Reference(usize),
+}
+
+impl ChangeAnchor {
+    /// Derive the marker (if any) for this issue's first severity line from
+    /// its [`CompatRenderStatus`].
+    fn from_status(status: CompatRenderStatus) -> Option<Self> {
+        match status {
+            CompatRenderStatus::FirstOccurrence { anchor: Some(n) } => {
+                Some(Self::Define(n))
+            }
+            CompatRenderStatus::FirstOccurrence { anchor: None } => None,
+            CompatRenderStatus::Duplicate { anchor } => {
+                Some(Self::Reference(anchor))
+            }
+        }
     }
 }
 
@@ -90,16 +109,13 @@ impl ApiCompatIssueDisplay<'_> {
         f: &mut fmt::Formatter<'_>,
         change: &SubpathChange,
         label_width: usize,
-        prev_marker: Option<CompatIssueLocation<'_>>,
+        anchor: Option<ChangeAnchor>,
     ) -> fmt::Result {
         let styles = self.styles;
 
-        // Severity line: `<severity>: <message>`, with an optional
-        // `(see <prev>)` suffix when this is the first severity line of
-        // an abbreviated duplicate. The `(see ...)` doubles as the
-        // version anchor — for the first-occurrence rendering, the
-        // surrounding cargo Failure header already names the version, so
-        // we don't repeat it here.
+        // Severity line, with an optional `[#N]` / `(see #N)` anchor suffix.
+        // The number is shared so a terminal search for `#N` jumps between
+        // sites in scrollback.
         let severity = class_label(change.class);
         write_label(
             f,
@@ -108,12 +124,12 @@ impl ApiCompatIssueDisplay<'_> {
             label_width,
         )?;
         f.write_str(&change.message)?;
-        if let Some(prev) = prev_marker {
-            write!(
-                f,
-                " {}",
-                format_args!("(see {prev})").style(styles.warning),
-            )?;
+        if let Some(anchor) = anchor {
+            let text = match anchor {
+                ChangeAnchor::Define(n) => format!("[#{n}]"),
+                ChangeAnchor::Reference(n) => format!("(see #{n})"),
+            };
+            write!(f, " {}", text.style(styles.warning))?;
         }
         writeln!(f)?;
 
@@ -133,8 +149,8 @@ impl ApiCompatIssueDisplay<'_> {
         // This map is used to elide shared subtrees with `(*)` back-references,
         // similar to `cargo tree`.
         //
-        // Note that the same `base` with a different `subpath` is not deduped
-        // at that level, though it's likely to be deduped at the level above.
+        // Note that the same `base` with a different `subpath` doesn't dedup
+        // at that level, though it likely will at the level above.
         let mut seen = HashSet::new();
         for (i, group) in groups.iter().enumerate() {
             if i > 0 {
@@ -626,15 +642,14 @@ fn component_name(base: &DocumentPath) -> &str {
 mod tests {
     use super::{
         super::types::{
-            ApiCompatIssue, CompatIssueLocation, DocumentBasePath,
-            DocumentPath, OperationIdMap, PathTree, PathTreeKey, SubpathChange,
+            ApiCompatIssue, CompatRenderStatus, DocumentBasePath, DocumentPath,
+            OperationIdMap, PathTree, PathTreeKey, SubpathChange,
         },
         *,
     };
     use crate::output::Styles;
     use camino::Utf8PathBuf;
     use drift::ChangeClass;
-    use dropshot_api_manager_types::ApiIdent;
     use owo_colors::OwoColorize;
     use std::collections::BTreeSet;
 
@@ -670,7 +685,13 @@ mod tests {
         }
         let mut out = issues
             .iter()
-            .map(|i| i.display(styles).to_string())
+            .map(|i| {
+                i.display(
+                    styles,
+                    CompatRenderStatus::FirstOccurrence { anchor: None },
+                )
+                .to_string()
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
         out.push('\n');
@@ -704,13 +725,14 @@ mod tests {
     fn assert_issue_snapshots(name: &str, issue: &ApiCompatIssue) {
         let mut colorized = Styles::default();
         colorized.colorize();
+        let status = CompatRenderStatus::FirstOccurrence { anchor: None };
         expectorate::assert_contents(
             output_path(&format!("{name}.txt")),
-            &format!("{}\n", issue.display(&Styles::default())),
+            &format!("{}\n", issue.display(&Styles::default(), status)),
         );
         expectorate::assert_contents(
             output_path(&format!("{name}.ansi")),
-            &format!("{}\n", issue.display(&colorized)),
+            &format!("{}\n", issue.display(&colorized, status)),
         );
     }
 
@@ -723,26 +745,6 @@ mod tests {
             }
         }
         Render(path).to_string()
-    }
-
-    /// Owns the data a [`CompatIssueLocation`] borrows from, so a test can
-    /// hold it alive while passing the location around.
-    struct OwnedLoc {
-        api: ApiIdent,
-        version: semver::Version,
-    }
-
-    impl OwnedLoc {
-        fn new(api: &str, version: &str) -> Self {
-            Self {
-                api: ApiIdent::from(api.to_string()),
-                version: version.parse().unwrap(),
-            }
-        }
-
-        fn as_loc(&self) -> CompatIssueLocation<'_> {
-            CompatIssueLocation { api: &self.api, version: &self.version }
-        }
     }
 
     #[test]
@@ -1103,13 +1105,10 @@ mod tests {
         );
     }
 
-    /// Abbreviated rendering of an issue with multiple [`SubpathChange`]s
-    /// — the `(see foo v1.0.0)` back-reference must appear *only* on the
-    /// first severity line. The grouping logic stacks both severities at
-    /// the top of one block, sharing the `exposed:` tree below; the
-    /// pointer to the first occurrence is a property of the issue, not of
-    /// any one change within it, so repeating it on every line would just
-    /// be noise.
+    /// Abbreviated rendering of an issue with multiple [`SubpathChange`]s.
+    ///
+    /// The `(see #N)` back-reference must appear *only* on the first severity
+    /// line.
     #[test]
     fn test_render_abbreviated_multi_change() {
         let ops = op_ids(&[("#/paths/~1bar1/get", "get_bar1")]);
@@ -1152,28 +1151,24 @@ mod tests {
             generated_value: None,
         };
 
-        let prev = OwnedLoc::new("foo", "1.0.0");
         let mut colorized = Styles::default();
         colorized.colorize();
+        // 7 (rather than 1) to make it visually clear the marker is whatever
+        // anchor the caller passes, and is not tied to insert order.
+        let status = CompatRenderStatus::Duplicate { anchor: 7 };
         expectorate::assert_contents(
             output_path("abbreviated_multi_change.txt"),
-            &format!(
-                "{}\n",
-                issue.display_abbreviated(&Styles::default(), prev.as_loc()),
-            ),
+            &format!("{}\n", issue.display(&Styles::default(), status)),
         );
         expectorate::assert_contents(
             output_path("abbreviated_multi_change.ansi"),
-            &format!(
-                "{}\n",
-                issue.display_abbreviated(&colorized, prev.as_loc()),
-            ),
+            &format!("{}\n", issue.display(&colorized, status)),
         );
     }
 
     /// Snapshot the abbreviated rendering used for duplicate issues. The
     /// header and the per-API tree should both appear; the back-reference
-    /// `(see foo v1.0.0)` should be on the header line.
+    /// `(see #N)` should be on the header line.
     #[test]
     fn test_render_abbreviated() {
         let ops = op_ids(&[
@@ -1212,22 +1207,16 @@ mod tests {
             generated_value: None,
         };
 
-        let prev = OwnedLoc::new("foo", "1.0.0");
         let mut colorized = Styles::default();
         colorized.colorize();
+        let status = CompatRenderStatus::Duplicate { anchor: 3 };
         expectorate::assert_contents(
             output_path("abbreviated.txt"),
-            &format!(
-                "{}\n",
-                issue.display_abbreviated(&Styles::default(), prev.as_loc()),
-            ),
+            &format!("{}\n", issue.display(&Styles::default(), status)),
         );
         expectorate::assert_contents(
             output_path("abbreviated.ansi"),
-            &format!(
-                "{}\n",
-                issue.display_abbreviated(&colorized, prev.as_loc()),
-            ),
+            &format!("{}\n", issue.display(&colorized, status)),
         );
     }
 
@@ -1317,7 +1306,10 @@ mod tests {
                     &mut indented,
                 ),
                 "{}",
-                issue.display(styles),
+                issue.display(
+                    styles,
+                    CompatRenderStatus::FirstOccurrence { anchor: None },
+                ),
             )
             .unwrap();
             out.push_str(&indented);
