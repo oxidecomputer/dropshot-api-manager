@@ -113,10 +113,21 @@ pub struct TestEnvironment {
     vcs_mode: VcsMode,
 }
 
+/// Set the wrap width used by `output.rs::term_width` to ensure that snapshots
+/// are deterministic.
+fn set_test_term_width() {
+    // SAFETY:
+    // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
+    unsafe {
+        std::env::set_var("OPENAPI_MGR_TERM_WIDTH", "80");
+    }
+}
+
 impl TestEnvironment {
     /// Create a new test environment with temporary directories, backed by a
     /// Git repository.
     pub fn new_git() -> Result<Self> {
+        set_test_term_width();
         let temp_dir =
             Utf8TempDir::with_prefix("dropshot-api-manager-integration-")
                 .context("failed to create temporary directory")?;
@@ -177,6 +188,7 @@ impl TestEnvironment {
     /// The non-colocated nature of the Jujutsu repository means that operations
     /// are forced to go through jj.
     pub fn new_jj() -> Result<Self> {
+        set_test_term_width();
         let temp_dir = Utf8TempDir::with_prefix("dropshot-api-manager-jj-")
             .context("failed to create temporary directory")?;
 

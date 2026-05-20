@@ -9,7 +9,7 @@
        error: OpenAPI document generated from the current code is not compatible
               with the blessed document (from upstream)
 
-       backward-incompatible: The parameter 'verbose' was removed
+       backward-incompatible: The parameter 'verbose' was removed [#1]
                           at: GET /health/detailed (detailed_health_check) (.parameters.0)
        --- a/blessed
        +++ b/generated
@@ -41,7 +41,7 @@
        error: OpenAPI document generated from the current code is not compatible
               with the blessed document (from upstream)
 
-       backward-incompatible: The parameter 'verbose' was removed (see versioned-health v2.0.0)
+       backward-incompatible: The parameter 'verbose' was removed (see #1)
                           at: GET /health/detailed (detailed_health_check) (.parameters.0)
 
        backward-incompatible: The operation get_system_info was removed

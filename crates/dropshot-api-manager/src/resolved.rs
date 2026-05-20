@@ -5,7 +5,8 @@
 use crate::{
     apis::{ManagedApi, ManagedApis},
     compatibility::{
-        ApiCompatIssue, CompatDedupeMap, CompatIssueLocation, api_compatible,
+        ApiCompatIssue, CompatDedupMap, CompatIssueLocation,
+        FinalizedCompatDedupMap, api_compatible,
     },
     environment::ResolvedEnv,
     iter_only::iter_only,
@@ -566,6 +567,33 @@ impl<'a> VersionProblem<'a> {
 
     pub fn is_fixable(&self) -> bool {
         self.fix().is_some()
+    }
+
+    pub(crate) fn compatibility_issues(&self) -> &[ApiCompatIssue] {
+        // Exhaustive match to ensure new variants cause a compile error.
+        match self {
+            VersionProblem::BlessedVersionBroken { compatibility_issues } => {
+                compatibility_issues
+            }
+            VersionProblem::BlessedVersionMissingLocal { .. }
+            | VersionProblem::BlessedVersionExtraLocalSpec { .. }
+            | VersionProblem::BlessedVersionCompareError { .. }
+            | VersionProblem::BlessedLatestVersionBytewiseMismatch { .. }
+            | VersionProblem::LockstepMissingLocal { .. }
+            | VersionProblem::LockstepStale { .. }
+            | VersionProblem::LocalVersionMissingLocal { .. }
+            | VersionProblem::LocalVersionExtra { .. }
+            | VersionProblem::LocalVersionStale { .. }
+            | VersionProblem::GeneratedSourceMissing { .. }
+            | VersionProblem::GeneratedValidationError { .. }
+            | VersionProblem::ExtraFileStale { .. }
+            | VersionProblem::BlessedVersionShouldBeGitStub { .. }
+            | VersionProblem::GitStubShouldBeJson { .. }
+            | VersionProblem::BlessedVersionCorruptedLocal { .. }
+            | VersionProblem::DuplicateLocalFile { .. }
+            | VersionProblem::GitStubCommitStale { .. }
+            | VersionProblem::GitStubFirstCommitUnknown { .. } => &[],
+        }
     }
 
     pub fn fix(&'a self) -> Option<Fix<'a>> {
@@ -1297,34 +1325,25 @@ impl<'a> Resolved<'a> {
         self.api_results.get(ident).and_then(|v| v.by_version.get(version))
     }
 
-    /// Build a [`CompatDedupeMap`] over every `BlessedVersionBroken` problem
-    /// across every API and version, in iteration order (sorted by API ident,
-    /// then by semver).
+    /// Records every compatibility issue across every API and version in a
+    /// dedup map, then finalizes it for lookups.
     ///
-    /// The first occurrence of each unique compatibility issue will be rendered
-    /// in full (with a diff of the JSON). Subsequent occurrences will be
-    /// rendered as back-references to the first occurrence.
-    pub fn build_compat_dedupe_map(&self) -> CompatDedupeMap<'_> {
-        let mut dedupe = CompatDedupeMap::default();
+    /// Iteration is sorted by API ident, then by semver, so the first
+    /// occurrence of an issue (which the renderer shows in full) is
+    /// deterministic. Subsequent occurrences are abbreviated.
+    pub(crate) fn build_compat_dedup_map(&self) -> FinalizedCompatDedupMap<'_> {
+        let mut dedup = CompatDedupMap::default();
         for (api, api_resolved) in &self.api_results {
             for (version, resolution) in &api_resolved.by_version {
+                let location = CompatIssueLocation { api, version };
                 for problem in resolution.problems() {
-                    let VersionProblem::BlessedVersionBroken {
-                        compatibility_issues,
-                    } = problem
-                    else {
-                        continue;
-                    };
-                    for issue in compatibility_issues {
-                        dedupe.insert(
-                            CompatIssueLocation { api, version },
-                            issue,
-                        );
+                    for issue in problem.compatibility_issues() {
+                        dedup.insert(location, issue);
                     }
                 }
             }
         }
-        dedupe
+        dedup.finalize()
     }
 
     /// Returns the "latest" symlink problem for an API, if any.

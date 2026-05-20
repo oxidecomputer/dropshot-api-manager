@@ -1,4 +1,4 @@
-incompatible: schema kind changed (see foo v1.0.0)
+incompatible: schema kind changed (see #7)
           at: SubType.value
       change: object properties changed
           at: SubType
