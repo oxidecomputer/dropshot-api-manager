@@ -5,6 +5,7 @@
 mod detect;
 mod display;
 mod types;
+mod wrap;
 
 pub(crate) use detect::{
     CompatDedupMap, FinalizedCompatDedupMap, api_compatible,

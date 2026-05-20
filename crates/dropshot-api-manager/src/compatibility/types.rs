@@ -55,12 +55,15 @@ impl ApiCompatIssue {
     }
 
     /// Returns a `Display` adapter that renders this issue per `status`.
+    ///
+    /// The returned adapter does not perform any wrapping by default. Call
+    /// [`ApiCompatIssueDisplay::with_wrap_width`] to wrap long lines.
     pub(crate) fn display<'a>(
         &'a self,
         styles: &'a Styles,
         status: CompatRenderStatus,
     ) -> ApiCompatIssueDisplay<'a> {
-        ApiCompatIssueDisplay { issue: self, styles, status }
+        ApiCompatIssueDisplay { issue: self, styles, status, wrap_width: None }
     }
 
     /// Returns true if `self` and `other` represent the same underlying

@@ -767,13 +767,18 @@ fn display_compat_issue(
     // already ends in a newline).
     writeln!(writer)?;
 
+    // Wrap at terminal width minus the body indent. (`display_width` matches
+    // what `wrap.rs` uses for its own indent.)
+    let wrap_width =
+        term_width().saturating_sub(textwrap::core::display_width(body_indent));
+
     // Indent every line of the rendered block. `IndentWriter` prefixes the
     // first line as well, so we don't need a separate initial-indent string.
     let mut buf = String::new();
     write!(
         IndentWriter::new(body_indent, &mut buf),
         "{}",
-        issue.display(styles, status),
+        issue.display(styles, status).with_wrap_width(wrap_width),
     )
     .expect("writing to a String never fails");
     writeln!(writer, "{buf}")?;

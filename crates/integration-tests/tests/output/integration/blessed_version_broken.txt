@@ -10,7 +10,8 @@
               with the blessed document (from upstream)
 
        backward-incompatible: A new, required parameter 'verbose' was added [#1]
-                          at: GET /health/detailed (detailed_health_check) (.parameters.0)
+                          at: GET /health/detailed (detailed_health_check)
+                              (.parameters.0)
        --- a/blessed
        +++ b/generated
        @@ -1,11 +1,22 @@
@@ -41,8 +42,10 @@
        error: OpenAPI document generated from the current code is not compatible
               with the blessed document (from upstream)
 
-       backward-incompatible: A new, required parameter 'verbose' was added (see #1)
-                          at: GET /health/detailed (detailed_health_check) (.parameters.0)
+       backward-incompatible: A new, required parameter 'verbose' was added (see
+                              #1)
+                          at: GET /health/detailed (detailed_health_check)
+                              (.parameters.0)
 
        forward-incompatible: The operation get_system_info was added
                          at: GET /system/info (get_system_info)

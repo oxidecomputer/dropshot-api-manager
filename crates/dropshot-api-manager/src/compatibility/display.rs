@@ -6,9 +6,12 @@
 //! module turns one of those issues into the labeled, tree-drawn output the
 //! user sees on `cargo openapi check`.
 
-use super::types::{
-    ApiCompatIssue, CompatRenderStatus, DocumentBasePath, DocumentPath,
-    PathTree, PathTreeKey, SubpathChange,
+use super::{
+    types::{
+        ApiCompatIssue, CompatRenderStatus, DocumentBasePath, DocumentPath,
+        PathTree, PathTreeKey, SubpathChange,
+    },
+    wrap::{Indent, Line, write_wrapped},
 };
 use crate::output::Styles;
 use drift::ChangeClass;
@@ -33,12 +36,28 @@ pub(crate) struct ApiCompatIssueDisplay<'a> {
     pub(super) issue: &'a ApiCompatIssue,
     pub(super) styles: &'a Styles,
     pub(super) status: CompatRenderStatus,
+    /// Total terminal width available, minus any external indent
+    /// applied by the caller. `None` disables wrapping.
+    pub(super) wrap_width: Option<usize>,
+}
+
+impl<'a> ApiCompatIssueDisplay<'a> {
+    /// Constrain rendering to wrap at `width` visible columns.
+    pub(crate) fn with_wrap_width(mut self, width: usize) -> Self {
+        self.wrap_width = Some(width);
+        self
+    }
 }
 
 impl fmt::Display for ApiCompatIssueDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let groups = collect_endpoint_groups(&self.issue.tree);
         let label_width = self.block_label_width(&groups);
+        // Continuation indent for wrapped rows and the leading prefix
+        // for tree-drawn lines: same length as `<right-aligned label>: `
+        // so columns align across the block.
+        let row_indent_string = " ".repeat(label_width + 2);
+        let row_indent = Indent::spaces(&row_indent_string);
 
         // Newlines separate sections rather than terminate them, so the
         // rendered block always ends mid-line regardless of whether a
@@ -49,12 +68,18 @@ impl fmt::Display for ApiCompatIssueDisplay<'_> {
             if i > 0 {
                 writeln!(f)?;
             }
-            self.write_change_header(f, change, label_width, marker)?;
+            self.write_change_header(
+                f,
+                change,
+                label_width,
+                row_indent,
+                marker,
+            )?;
             marker = None;
         }
         if !groups.is_empty() {
             writeln!(f)?;
-            self.write_used_by_section(f, &groups, label_width)?;
+            self.write_used_by_section(f, &groups, label_width, row_indent)?;
         }
         Ok(())
     }
@@ -83,7 +108,7 @@ impl ChangeAnchor {
     }
 }
 
-impl ApiCompatIssueDisplay<'_> {
+impl<'a> ApiCompatIssueDisplay<'a> {
     /// Compute the label column width for this block.
     ///
     /// The width is the longest label that will appear, across:
@@ -102,13 +127,33 @@ impl ApiCompatIssueDisplay<'_> {
         max
     }
 
+    /// Emit one rendered `Line` of content immediately after a label,
+    /// honoring [`Self::wrap_width`].
+    ///
+    /// The caller is expected to have already written the right-aligned
+    /// label and `: ` separator (see [`write_label`]), positioning the
+    /// formatter at the column where `row_indent` ends. Continuation
+    /// lines, if any, align to the same column.
+    fn write_row_content(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        row_indent: Indent<'_>,
+        content: &Line<'_>,
+    ) -> fmt::Result {
+        match self.wrap_width {
+            Some(width) => write_wrapped(f, content, width, row_indent),
+            None => content.write_inline(f),
+        }
+    }
+
     /// Render one change's severity and `at:` lines (without a trailing newline
     /// after `at:`).
     fn write_change_header(
         &self,
         f: &mut fmt::Formatter<'_>,
-        change: &SubpathChange,
+        change: &'a SubpathChange,
         label_width: usize,
+        row_indent: Indent<'_>,
         anchor: Option<ChangeAnchor>,
     ) -> fmt::Result {
         let styles = self.styles;
@@ -123,18 +168,22 @@ impl ApiCompatIssueDisplay<'_> {
             class_style(change.class, styles),
             label_width,
         )?;
-        f.write_str(&change.message)?;
+        let mut severity_line = Line::new();
+        severity_line.push_plain(change.message.as_str());
         if let Some(anchor) = anchor {
             let text = match anchor {
                 ChangeAnchor::Define(n) => format!("[#{n}]"),
                 ChangeAnchor::Reference(n) => format!("(see #{n})"),
             };
-            write!(f, " {}", text.style(styles.warning))?;
+            severity_line.push_plain(" ").push(text, styles.warning);
         }
+        self.write_row_content(f, row_indent, &severity_line)?;
         writeln!(f)?;
 
         write_label(f, "at", styles.dimmed, label_width)?;
-        self.write_at_content(f, change)
+        let mut at_line = Line::new();
+        self.append_at_content(&mut at_line, change);
+        self.write_row_content(f, row_indent, &at_line)
     }
 
     /// Render `used by:` lines and their intermediate trees, without a leading
@@ -142,8 +191,9 @@ impl ApiCompatIssueDisplay<'_> {
     fn write_used_by_section(
         &self,
         f: &mut fmt::Formatter<'_>,
-        groups: &[EndpointGroup<'_>],
+        groups: &[EndpointGroup<'a>],
         label_width: usize,
+        row_indent: Indent<'_>,
     ) -> fmt::Result {
         let styles = self.styles;
         // This map is used to elide shared subtrees with `(*)` back-references,
@@ -157,12 +207,11 @@ impl ApiCompatIssueDisplay<'_> {
                 writeln!(f)?;
             }
             write_label(f, "used by", styles.dimmed, label_width)?;
-            write_humanized_base(f, group.endpoint_base, styles)?;
+            let mut head = Line::new();
+            append_humanized_base(&mut head, group.endpoint_base, styles);
+            self.write_row_content(f, row_indent, &head)?;
             if !group.intermediates.children.is_empty() {
-                let mut prefix = String::new();
-                for _ in 0..(label_width + 2) {
-                    prefix.push(' ');
-                }
+                let mut prefix = row_indent.string.to_string();
                 self.write_intermediate_tree(
                     f,
                     &group.intermediates,
@@ -186,7 +235,14 @@ impl ApiCompatIssueDisplay<'_> {
     /// rendering. A repeated key is rendered with a trailing `(*)` and its
     /// subtree is suppressed — the reader can find the full chain at the
     /// first occurrence.
-    fn write_intermediate_tree<'a>(
+    ///
+    /// We don't try and wrap lines within the tree. That's because handling
+    /// such lines is quite complex: a line within the tree can be prefixed by
+    /// any number of `│ ` , and applying a wrap would require passing in the
+    /// right prefix. Endpoint paths inside the tree don't really happen in
+    /// practice, so we just let these lines overflow. Something worth
+    /// revisiting in the future, though!
+    fn write_intermediate_tree(
         &self,
         f: &mut fmt::Formatter<'_>,
         tree: &'a IntermediateTree<'a>,
@@ -214,13 +270,15 @@ impl ApiCompatIssueDisplay<'_> {
             // Type name stays bolded as the row's anchor; field path
             // renders at default weight so the tree stays quieter than
             // the `at:` line above.
-            write_humanized_at_pair(
-                f,
+            let mut row = Line::new();
+            append_humanized_at_pair(
+                &mut row,
                 &key.base,
                 &key.subpath,
                 styles,
                 Style::default(),
-            )?;
+            );
+            row.write_inline(f)?;
 
             // If this exact key was already expanded earlier in the
             // block, mark `(*)` and skip the subtree.
@@ -237,7 +295,7 @@ impl ApiCompatIssueDisplay<'_> {
         Ok(())
     }
 
-    /// Write the content of the `at:` line for one [`SubpathChange`].
+    /// Build the content of the `at:` line for one [`SubpathChange`].
     ///
     /// * If the blessed and generated locations match exactly, render once.
     /// * For pure additions (old subpath is root, base unchanged) or
@@ -253,11 +311,11 @@ impl ApiCompatIssueDisplay<'_> {
     ///   container being a noisy artifact of drift's path stack.
     /// * Otherwise (rename, type change with rename, etc.) render both
     ///   forms separated by ` -> ` so the rename is explicit.
-    fn write_at_content(
+    fn append_at_content(
         &self,
-        f: &mut fmt::Formatter<'_>,
-        change: &SubpathChange,
-    ) -> fmt::Result {
+        line: &mut Line<'a>,
+        change: &'a SubpathChange,
+    ) {
         let issue = self.issue;
         let styles = self.styles;
         let same_base = issue.blessed_base == issue.generated_base;
@@ -269,31 +327,34 @@ impl ApiCompatIssueDisplay<'_> {
         // a quieter field style; see `write_intermediate_tree`.
         let field_style = styles.bold;
         if same_base && same_subpath {
-            return write_humanized_at_pair(
-                f,
+            append_humanized_at_pair(
+                line,
                 &issue.blessed_base,
                 &change.old_subpath,
                 styles,
                 field_style,
             );
+            return;
         }
         if same_base && change.old_subpath.is_root() {
-            return write_humanized_at_pair(
-                f,
+            append_humanized_at_pair(
+                line,
                 &issue.generated_base,
                 &change.new_subpath,
                 styles,
                 field_style,
             );
+            return;
         }
         if same_base && change.new_subpath.is_root() {
-            return write_humanized_at_pair(
-                f,
+            append_humanized_at_pair(
+                line,
                 &issue.blessed_base,
                 &change.old_subpath,
                 styles,
                 field_style,
             );
+            return;
         }
 
         // Pair on `(blessed_is_paths_root, generated_is_paths_root)` so the
@@ -304,8 +365,8 @@ impl ApiCompatIssueDisplay<'_> {
         ) {
             // Endpoint added: drop the `.paths` side and render only the
             // new endpoint.
-            (true, false) => write_humanized_at_pair(
-                f,
+            (true, false) => append_humanized_at_pair(
+                line,
                 &issue.generated_base,
                 &change.new_subpath,
                 styles,
@@ -313,8 +374,8 @@ impl ApiCompatIssueDisplay<'_> {
             ),
             // Endpoint removed: drop the `.paths` side and render only the old
             // endpoint.
-            (false, true) => write_humanized_at_pair(
-                f,
+            (false, true) => append_humanized_at_pair(
+                line,
                 &issue.blessed_base,
                 &change.old_subpath,
                 styles,
@@ -324,21 +385,21 @@ impl ApiCompatIssueDisplay<'_> {
             // ordinarily happen, but handle it in case it does anyway. In both
             // cases, render both sides with ` -> `.
             (true, true) | (false, false) => {
-                write_humanized_at_pair(
-                    f,
+                append_humanized_at_pair(
+                    line,
                     &issue.blessed_base,
                     &change.old_subpath,
                     styles,
                     field_style,
-                )?;
-                f.write_str(" -> ")?;
-                write_humanized_at_pair(
-                    f,
+                );
+                line.push_plain(" -> ");
+                append_humanized_at_pair(
+                    line,
                     &issue.generated_base,
                     &change.new_subpath,
                     styles,
                     field_style,
-                )
+                );
             }
         }
     }
@@ -465,104 +526,107 @@ fn walk_and_collect<'a>(
     ancestors.pop();
 }
 
-/// Write a base and subpath pair in the form used by `at:` and the tree-drawn
-/// continuation lines.
+/// Append a (`base`, `subpath`) pair to `line` in the form used by `at:`
+/// and the tree-drawn continuation lines.
 ///
-/// `field_style` is forwarded to [`write_humanized_subpath`] for components
+/// `field_style` is forwarded to [`append_humanized_subpath`] for components
 /// and controls how the subpath portion is styled.
-fn write_humanized_at_pair(
-    f: &mut fmt::Formatter<'_>,
-    base: &DocumentBasePath,
-    subpath: &DocumentPath,
+fn append_humanized_at_pair<'a>(
+    line: &mut Line<'a>,
+    base: &'a DocumentBasePath,
+    subpath: &'a DocumentPath,
     styles: &Styles,
     field_style: Style,
-) -> fmt::Result {
-    write_humanized_base(f, base, styles)?;
+) {
+    append_humanized_base(line, base, styles);
     if subpath.is_root() {
-        return Ok(());
+        return;
     }
     match base {
         DocumentBasePath::Component(_) => {
-            write_humanized_subpath(f, subpath, field_style)
+            append_humanized_subpath(line, subpath, field_style);
         }
         DocumentBasePath::Endpoint { .. } => {
-            // We call `write_jq_path` and not `write_humanized_subpath`
+            // We call `append_jq_path` and not `append_humanized_subpath`
             // here. This is because segments like `properties` are not a
             // structural part of endpoints (only of components).
-            f.write_str(" (")?;
-            write_jq_path(f, subpath, Style::default())?;
-            f.write_str(")")
+            line.push_plain(" (");
+            append_jq_path(line, subpath, Style::default());
+            line.push_plain(")");
         }
         DocumentBasePath::PathsRoot | DocumentBasePath::Other(_) => {
-            write_jq_path(f, subpath, Style::default())
+            append_jq_path(line, subpath, Style::default());
         }
     }
 }
 
-/// Write `base` in humanized form by dispatching on its variant:
+/// Append `base` to `line` in humanized form by dispatching on its variant:
 ///
 /// * For [`DocumentBasePath::Component`], the bolded schema name.
 /// * For [`DocumentBasePath::Endpoint`], a green-bold `<METHOD>` followed by
 ///   `<route>`. If an `operation_id` is provided, it is appended in
 ///   parentheses.
 /// * For [`DocumentBasePath::PathsRoot`], the literal `.paths`. In practice
-///   this is dropped in [`Self::write_at_content`] before reaching here, so
-///   this is purely defensive.
+///   this is dropped in [`ApiCompatIssueDisplay::append_at_content`] before
+///   reaching here, so this is purely defensive.
 /// * For [`DocumentBasePath::Other`], falls back to full jq notation.
-fn write_humanized_base(
-    f: &mut fmt::Formatter<'_>,
-    base: &DocumentBasePath,
+fn append_humanized_base<'a>(
+    line: &mut Line<'a>,
+    base: &'a DocumentBasePath,
     styles: &Styles,
-) -> fmt::Result {
+) {
     match base {
         DocumentBasePath::Component(path) => {
-            write!(f, "{}", component_name(path).style(styles.bold))
+            line.push(component_name(path), styles.bold);
         }
         DocumentBasePath::Endpoint { name, operation_id } => {
-            write_endpoint_method_route(f, name, styles)?;
-            write_operation_id(f, operation_id.as_deref(), styles)
+            append_endpoint_method_route(line, name, styles);
+            append_operation_id(line, operation_id.as_deref(), styles);
         }
         DocumentBasePath::PathsRoot => {
-            write!(f, "{}", ".paths".style(styles.bold))
+            line.push(".paths", styles.bold);
         }
-        DocumentBasePath::Other(path) => write_jq_path(f, path, styles.bold),
+        DocumentBasePath::Other(path) => {
+            append_jq_path(line, path, styles.bold);
+        }
     }
 }
 
-/// Write `METHOD /route` for an endpoint base path.
+/// Append `METHOD /route` for an endpoint base path.
 ///
 /// `name` is assumed to match the `paths/<route>/<method>` shape that
 /// [`DocumentBasePath::classify`] enforces on `Endpoint` variants.
-fn write_endpoint_method_route(
-    f: &mut fmt::Formatter<'_>,
-    name: &DocumentPath,
+fn append_endpoint_method_route<'a>(
+    line: &mut Line<'a>,
+    name: &'a DocumentPath,
     styles: &Styles,
-) -> fmt::Result {
+) {
     // We expect this to be `paths/<route>/<method>`:
     //
     // * segments[1] is the unescaped route,
     // * segments[2] is the HTTP method.
-    let route = &name.segments[1];
-    let method = &name.segments[2];
-    write!(
-        f,
-        "{} {}",
-        method.to_uppercase().style(styles.success_header),
-        route.style(styles.filename),
-    )
+    let route = name.segments[1].as_str();
+    let method = name.segments[2].to_uppercase();
+    line.push(method, styles.success_header)
+        .push_plain(" ")
+        .push(route, styles.filename);
 }
 
-/// Append `" (<operation_id>)"`, or nothing if `operation_id` is `None`.
-fn write_operation_id(
-    f: &mut fmt::Formatter<'_>,
-    operation_id: Option<&str>,
+/// Append ` (<op_id>)` to `line` in the operation-id style, or no-op if
+/// `op_id` is `None`. A leading space is included so callers can call
+/// this unconditionally. The trio is split across three spans only for
+/// styling — no internal whitespace means a wrap can only occur before
+/// the leading space, not inside `(op_id)`.
+fn append_operation_id<'a>(
+    line: &mut Line<'a>,
+    op_id: Option<&'a str>,
     styles: &Styles,
-) -> fmt::Result {
-    let Some(op_id) = operation_id else { return Ok(()) };
-    write!(f, " ({})", op_id.style(styles.operation_id))
+) {
+    let Some(op_id) = op_id else { return };
+    line.push_plain(" (").push(op_id, styles.operation_id).push_plain(")");
 }
 
-/// Write a component's subpath in OpenAPI-aware form.
+/// Append a component's subpath in OpenAPI-aware form.
 ///
 /// With OpenAPI, paths can contain both structural keywords (`properties`,
 /// `items`, etc.) and field names. The structural pieces do not add much value,
@@ -575,59 +639,57 @@ fn write_operation_id(
 ///
 /// Other keywords (`allOf.0`, `additionalProperties`, etc.) are
 /// rendered literally.
-fn write_humanized_subpath(
-    f: &mut fmt::Formatter<'_>,
-    subpath: &DocumentPath,
+fn append_humanized_subpath<'a>(
+    line: &mut Line<'a>,
+    subpath: &'a DocumentPath,
     style: Style,
-) -> fmt::Result {
+) {
     let mut next_is_field_name = false;
     for s in &subpath.segments {
         if next_is_field_name {
-            write_jq_segment(f, s, style)?;
+            append_jq_segment(line, s, style);
             next_is_field_name = false;
             continue;
         }
         match s.as_str() {
             "properties" => next_is_field_name = true,
-            "items" => write!(f, "{}", "[]".style(style))?,
-            other => write_jq_segment(f, other, style)?,
+            "items" => {
+                line.push("[]", style);
+            }
+            other => append_jq_segment(line, other, style),
         }
     }
-    Ok(())
 }
 
-/// Write `path` in plain jq notation, applying `style` to every segment.
+/// Append `path` to `line` in plain jq notation, applying `style` to every
+/// segment.
 ///
 /// The root (empty) path renders as `.`, while non-empty paths render as
 /// `.seg1.seg2…`.
-fn write_jq_path(
-    f: &mut fmt::Formatter<'_>,
-    path: &DocumentPath,
+fn append_jq_path<'a>(
+    line: &mut Line<'a>,
+    path: &'a DocumentPath,
     style: Style,
-) -> fmt::Result {
+) {
     if path.is_root() {
-        return write!(f, "{}", ".".style(style));
+        line.push(".", style);
+        return;
     }
     for s in &path.segments {
-        write_jq_segment(f, s, style)?;
+        append_jq_segment(line, s, style);
     }
-    Ok(())
 }
 
-/// Write one jq segment starting with a leading `.`.
+/// Append one jq segment to `line` starting with a leading `.`.
 ///
 /// The segment text is quoted if it contains characters ambiguous as a bare jq
 /// identifier.
-fn write_jq_segment(
-    f: &mut fmt::Formatter<'_>,
-    segment: &str,
-    style: Style,
-) -> fmt::Result {
-    write!(f, "{}", ".".style(style))?;
+fn append_jq_segment<'a>(line: &mut Line<'a>, segment: &'a str, style: Style) {
+    line.push(".", style);
     if segment.contains(['/', '~']) {
-        write!(f, "{}", format_args!("\"{segment}\"").style(style))
+        line.push(format!("\"{segment}\""), style);
     } else {
-        write!(f, "{}", segment.style(style))
+        line.push(segment, style);
     }
 }
 
@@ -736,12 +798,14 @@ mod tests {
         );
     }
 
-    /// Render `path` unstyled into a `String` using [`write_jq_path`].
+    /// Render `path` unstyled into a `String` using [`append_jq_path`].
     fn jq_string(path: &DocumentPath) -> String {
         struct Render<'a>(&'a DocumentPath);
         impl fmt::Display for Render<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write_jq_path(f, self.0, Style::default())
+                let mut line = Line::new();
+                append_jq_path(&mut line, self.0, Style::default());
+                line.write_inline(f)
             }
         }
         Render(path).to_string()
@@ -1217,6 +1281,73 @@ mod tests {
         expectorate::assert_contents(
             output_path("abbreviated.ansi"),
             &format!("{}\n", issue.display(&colorized, status)),
+        );
+    }
+
+    #[test]
+    fn test_render_wrapped_long_endpoint() {
+        // A long, realistic Oxide-style endpoint name with multiple path
+        // parameters that would normally exceed terminal width when prefixed by
+        // `used by: GET `.
+        let endpoint = "#/paths/~1v1~1instances~1{instance}\
+                        ~1network-interfaces~1{network_interface}~1multicast/post";
+        let ops = op_ids(&[(endpoint, "instance_network_multicast_attach")]);
+        let make_chain = || {
+            vec![
+                PathTreeKey::parse(
+                    "#/components/schemas/MulticastGroupMember\
+                     /properties/identity/$ref",
+                    &ops,
+                ),
+                PathTreeKey::parse(
+                    &format!(
+                        "{}/responses/200/content/application~1json/schema/$ref",
+                        endpoint,
+                    ),
+                    &ops,
+                ),
+            ]
+        };
+        let mut tree = PathTree::default();
+        tree.insert(make_chain());
+
+        let issue = ApiCompatIssue {
+            blessed_base: component(
+                "#/components/schemas/MulticastGroupIdentity",
+            ),
+            generated_base: component(
+                "#/components/schemas/MulticastGroupIdentity",
+            ),
+            changes: BTreeSet::from([SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: "schema types changed".into(),
+                old_subpath: DocumentPath::parse("properties/id"),
+                new_subpath: DocumentPath::parse("properties/id"),
+            }]),
+            tree,
+            blessed_value: None,
+            generated_value: None,
+        };
+
+        // Pin the width so the test doesn't depend on the developer's
+        // terminal size. 80 is a typical width where the `used by:`
+        // endpoint overflows but the rest of the block doesn't.
+        let mut colorized = Styles::default();
+        colorized.colorize();
+        let status = CompatRenderStatus::FirstOccurrence { anchor: None };
+        expectorate::assert_contents(
+            output_path("wrapped_long_endpoint.txt"),
+            &format!(
+                "{}\n",
+                issue.display(&Styles::default(), status).with_wrap_width(80),
+            ),
+        );
+        expectorate::assert_contents(
+            output_path("wrapped_long_endpoint.ansi"),
+            &format!(
+                "{}\n",
+                issue.display(&colorized, status).with_wrap_width(80),
+            ),
         );
     }
 

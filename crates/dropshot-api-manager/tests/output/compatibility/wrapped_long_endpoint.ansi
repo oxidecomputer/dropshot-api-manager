@@ -1,0 +1,6 @@
+[31;1mincompatible[0m: schema types changed
+          [2mat[0m: [1mMulticastGroupIdentity[0m[1m.[0m[1mid[0m
+     [2mused by[0m: [32;1mPOST[0m
+              [36m/v1/instances/{instance}/network-interfaces/{network_interface}/multicast[0m
+              ([35minstance_network_multicast_attach[0m)
+[2m              [0m[2m└─ [0m[1mMulticastGroupMember[0m.identity
