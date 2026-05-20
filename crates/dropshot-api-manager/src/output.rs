@@ -3,7 +3,10 @@
 use crate::{
     FAILURE_EXIT_CODE, NEEDS_UPDATE_EXIT_CODE,
     apis::{ManagedApi, ManagedApis},
-    compatibility::ApiCompatIssue,
+    compatibility::{
+        ApiCompatIssue, CompatIssueLocation, CompatRenderStatus,
+        FinalizedCompatDedupMap,
+    },
     environment::{ErrorAccumulator, ResolvedEnv},
     resolved::{
         Fix, NonVersionProblem, Resolution, ResolutionKind, Resolved,
@@ -306,6 +309,8 @@ pub fn display_resolution(
     let mut num_failed = 0;
     let mut num_non_version_problems = 0;
 
+    let dedup = resolved.build_compat_dedup_map();
+
     // Print problems associated with a supported API version
     // (i.e., one of the expected OpenAPI documents).
     for api in apis.iter_apis() {
@@ -322,7 +327,9 @@ pub fn display_resolution(
             } else {
                 num_fresh += 1;
             }
-            summarize_one(writer, env, api, version, resolution, styles)?;
+            summarize_one(
+                writer, env, api, version, resolution, styles, &dedup,
+            )?;
         }
 
         if !api.is_versioned() {
@@ -483,6 +490,7 @@ fn summarize_one(
     version: &semver::Version,
     resolution: &Resolution<'_>,
     styles: &Styles,
+    dedup: &FinalizedCompatDedupMap<'_>,
 ) -> io::Result<()> {
     let problems: Vec<_> = resolution.problems().collect();
     if problems.is_empty() {
@@ -507,18 +515,31 @@ fn summarize_one(
             display_api_spec_version(api, version, styles, resolution),
         )?;
 
-        display_version_problems(writer, env, problems, styles)?;
+        let compat_ctx = CompatDisplayContext {
+            dedup,
+            current: CompatIssueLocation { api: api.ident(), version },
+        };
+        display_version_problems(writer, env, problems, styles, compat_ctx)?;
     }
     Ok(())
 }
 
+pub(crate) struct CompatDisplayContext<'a> {
+    pub(crate) dedup: &'a FinalizedCompatDedupMap<'a>,
+    pub(crate) current: CompatIssueLocation<'a>,
+}
+
 /// Print a formatted list of per-(api, version) [`VersionProblem`]s to
 /// `writer`, including any compatibility-issue diffs and fix descriptions.
-pub fn display_version_problems<'a, T>(
+///
+/// `compat_ctx` enables [`VersionProblem::BlessedVersionBroken`] rendering to
+/// abbreviate compatibility issues that have already been shown elsewhere.
+pub(crate) fn display_version_problems<'a, T>(
     writer: &mut dyn io::Write,
     env: &ResolvedEnv,
     problems: T,
     styles: &Styles,
+    compat_ctx: CompatDisplayContext<'_>,
 ) -> io::Result<()>
 where
     T: IntoIterator<Item = &'a VersionProblem<'a>>,
@@ -533,27 +554,24 @@ where
         // cargo headers.
         let issue_indent = " ".repeat(HEADER_WIDTH - "error".len());
 
-        // For BlessedVersionBroken, print each item separately, along with a
-        // diff between blessed and generated versions.
-        //
-        // Each issue is surrounded by blank lines: the leading blank in
-        // `display_compat_issue` separates it from the problem header (or
-        // the previous issue's diff), and a single trailing blank here
-        // separates the last issue from the next problem.
-        if let VersionProblem::BlessedVersionBroken { compatibility_issues } =
-            &p
-        {
-            for issue in compatibility_issues {
-                display_compat_issue(
-                    &mut *writer,
-                    issue,
-                    &issue_indent,
-                    styles,
-                )?;
-            }
-            if !compatibility_issues.is_empty() {
-                writeln!(writer)?;
-            }
+        // Each issue gets a leading blank (emitted by `display_compat_issue`,
+        // separating it from the problem header or the previous diff) and a
+        // single trailing blank here (separating the last issue from the next
+        // problem). An issue already reported elsewhere is rendered in
+        // abbreviated form, pointing at the canonical occurrence.
+        let issues = p.compatibility_issues();
+        for issue in issues {
+            let status = compat_ctx.dedup.status_for(issue, compat_ctx.current);
+            display_compat_issue(
+                &mut *writer,
+                issue,
+                &issue_indent,
+                styles,
+                status,
+            )?;
+        }
+        if !issues.is_empty() {
+            writeln!(writer)?;
         }
 
         // For BlessedLatestVersionBytewiseMismatch, show a diff between blessed
@@ -742,6 +760,7 @@ fn display_compat_issue(
     issue: &ApiCompatIssue,
     body_indent: &str,
     styles: &Styles,
+    status: CompatRenderStatus,
 ) -> io::Result<()> {
     // A blank line separates this issue from the previous problem header
     // (or, in the full form, from the previous issue's JSON diff which
@@ -754,29 +773,38 @@ fn display_compat_issue(
     write!(
         IndentWriter::new(body_indent, &mut buf),
         "{}",
-        issue.display(styles)
+        issue.display(styles, status),
     )
     .expect("writing to a String never fails");
     writeln!(writer, "{buf}")?;
 
-    // Print the textual diff between the blessed and generated values for
-    // this base.
-    let blessed_json = issue.blessed_json();
-    let generated_json = issue.generated_json();
+    match status {
+        CompatRenderStatus::FirstOccurrence { .. } => {
+            // Full form: print the textual diff between the blessed and
+            // generated values for this base.
+            let blessed_json = issue.blessed_json();
+            let generated_json = issue.generated_json();
 
-    let diff = TextDiff::from_lines(&blessed_json, &generated_json);
-    write_diff(
-        &diff,
-        "blessed".as_ref(),
-        "generated".as_ref(),
-        styles,
-        // context_radius: use a large radius to ensure that most of the
-        // schema is printed out.
-        8,
-        /* missing_newline_hint */ false,
-        // Align diff with the issue body.
-        &mut indent_write::io::IndentWriter::new(body_indent, writer),
-    )
+            let diff = TextDiff::from_lines(&blessed_json, &generated_json);
+            write_diff(
+                &diff,
+                "blessed".as_ref(),
+                "generated".as_ref(),
+                styles,
+                // context_radius: use a large radius to ensure that most
+                // of the schema is printed out.
+                8,
+                /* missing_newline_hint */ false,
+                // Align diff with the issue body.
+                &mut indent_write::io::IndentWriter::new(body_indent, writer),
+            )
+        }
+        CompatRenderStatus::Duplicate { .. } => {
+            // Abbreviated form: no JSON diff, since it was already shown
+            // at the first occurrence.
+            Ok(())
+        }
+    }
 }
 /// Adapter for [`Error`]s that provides a [`std::fmt::Display`] implementation
 /// that print the full chain of error sources, separated by `: `.

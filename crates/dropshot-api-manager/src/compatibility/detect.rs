@@ -6,8 +6,9 @@
 //! [`super::types`]; this module just bridges drift's output into them.
 
 use super::types::{
-    ApiCompatIssue, DocumentBasePath, DocumentPath, OperationIdMap, PathTree,
-    PathTreeKey, SubpathChange, unescape_pointer_component,
+    ApiCompatIssue, CompatIssueLocation, CompatRenderStatus, DocumentBasePath,
+    DocumentPath, OperationIdMap, PathTree, PathTreeKey, SubpathChange,
+    unescape_pointer_component,
 };
 use drift::{Change, ChangeClass, ChangeInfo, ChangePath};
 
@@ -62,6 +63,128 @@ impl ApiCompatIssue {
             tree,
             blessed_value,
             generated_value,
+        }
+    }
+}
+
+/// Tracks compatibility issues to deduplicate them.
+///
+/// Call [`Self::insert`] once per `(location, issue)` pair, then
+/// [`Self::finalize`] to enable lookups. The two-phase design lets anchor
+/// numbers be compact: only multi-site entries get a number, and the
+/// numbering is contiguous.
+#[derive(Debug, Default)]
+pub(crate) struct CompatDedupMap<'a> {
+    // This is a `Vec` rather than a `HashMap` because `serde_json::Value`
+    // doesn't implement `Hash` (floats), and the total entry count per run is
+    // expected to be small.
+    entries: Vec<RawEntry<'a>>,
+}
+
+#[derive(Debug)]
+struct RawEntry<'a> {
+    issue: &'a ApiCompatIssue,
+    first_occurrence: CompatIssueLocation<'a>,
+    count: usize,
+}
+
+impl<'a> CompatDedupMap<'a> {
+    pub(crate) fn insert(
+        &mut self,
+        location: CompatIssueLocation<'a>,
+        issue: &'a ApiCompatIssue,
+    ) {
+        if let Some(entry) =
+            self.entries.iter_mut().find(|e| e.issue.is_same_change_as(issue))
+        {
+            entry.count += 1;
+        } else {
+            self.entries.push(RawEntry {
+                issue,
+                first_occurrence: location,
+                count: 1,
+            });
+        }
+    }
+
+    /// Finalize the map and assign 1-indexed anchor numbers to duplicated
+    /// entries.
+    pub(crate) fn finalize(self) -> FinalizedCompatDedupMap<'a> {
+        let mut next_anchor = 1;
+        let entries = self
+            .entries
+            .into_iter()
+            .map(|raw| {
+                if raw.count > 1 {
+                    let anchor = next_anchor;
+                    next_anchor += 1;
+                    FinalizedEntry::MultiSite {
+                        issue: raw.issue,
+                        first_occurrence: raw.first_occurrence,
+                        anchor,
+                    }
+                } else {
+                    FinalizedEntry::Singleton { issue: raw.issue }
+                }
+            })
+            .collect();
+        FinalizedCompatDedupMap { entries }
+    }
+}
+
+/// Lookup-phase dedup map. Returned by [`CompatDedupMap::finalize`].
+#[derive(Debug)]
+pub(crate) struct FinalizedCompatDedupMap<'a> {
+    entries: Vec<FinalizedEntry<'a>>,
+}
+
+#[derive(Debug)]
+enum FinalizedEntry<'a> {
+    Singleton {
+        issue: &'a ApiCompatIssue,
+    },
+    MultiSite {
+        issue: &'a ApiCompatIssue,
+        first_occurrence: CompatIssueLocation<'a>,
+        anchor: usize,
+    },
+}
+
+impl<'a> FinalizedEntry<'a> {
+    fn issue(&self) -> &'a ApiCompatIssue {
+        match self {
+            Self::Singleton { issue } | Self::MultiSite { issue, .. } => issue,
+        }
+    }
+}
+
+impl FinalizedCompatDedupMap<'_> {
+    /// Returns how `issue` at `current` should be rendered.
+    ///
+    /// Panics if `issue` was never inserted.
+    pub(crate) fn status_for(
+        &self,
+        issue: &ApiCompatIssue,
+        current: CompatIssueLocation<'_>,
+    ) -> CompatRenderStatus {
+        let entry = self
+            .entries
+            .iter()
+            .find(|e| e.issue().is_same_change_as(issue))
+            .expect("every issue passed to status_for was inserted");
+        match entry {
+            FinalizedEntry::Singleton { .. } => {
+                CompatRenderStatus::FirstOccurrence { anchor: None }
+            }
+            FinalizedEntry::MultiSite { first_occurrence, anchor, .. } => {
+                if *first_occurrence == current {
+                    CompatRenderStatus::FirstOccurrence {
+                        anchor: Some(*anchor),
+                    }
+                } else {
+                    CompatRenderStatus::Duplicate { anchor: *anchor }
+                }
+            }
         }
     }
 }
@@ -265,7 +388,7 @@ fn normalize_old_websocket_responses(
     }
 }
 
-pub fn api_compatible(
+pub(crate) fn api_compatible(
     blessed: &serde_json::Value,
     generated: &serde_json::Value,
 ) -> anyhow::Result<Vec<ApiCompatIssue>> {
@@ -311,12 +434,21 @@ pub fn api_compatible(
             &generated_op_ids,
         ));
     }
+    // Sort by base to ensure a deterministic iteration order, independent of
+    // whatever drift returns. The JSON values are derived from the base, and
+    // `serde_json::Value` isn't `Ord`, so we don't include them in the key.
+    issues.sort_by(|a, b| {
+        (&a.blessed_base, &a.generated_base)
+            .cmp(&(&b.blessed_base, &b.generated_base))
+    });
     Ok(issues)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dropshot_api_manager_types::ApiIdent;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_normalize_old_websocket_responses() {
@@ -696,5 +828,384 @@ mod tests {
             !issues.is_empty(),
             "websocket-to-HTTP change should be detected as incompatible",
         );
+    }
+
+    /// Shorthand for a component-shaped [`DocumentBasePath`] from a JSON
+    /// Pointer string.
+    fn component_base(p: &str) -> DocumentBasePath {
+        DocumentBasePath::Component(DocumentPath::parse(p))
+    }
+
+    /// Build an `ApiCompatIssue` directly.
+    fn synthetic_issue(
+        base: &str,
+        message: &str,
+        blessed_value: serde_json::Value,
+        generated_value: serde_json::Value,
+    ) -> ApiCompatIssue {
+        ApiCompatIssue {
+            blessed_base: component_base(base),
+            generated_base: component_base(base),
+            changes: BTreeSet::from([SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: message.into(),
+                old_subpath: DocumentPath::parse("properties/value"),
+                new_subpath: DocumentPath::parse("properties/value"),
+            }]),
+            // Leave this empty since it's ignored by the dedup logic.
+            tree: PathTree::default(),
+            blessed_value: Some(blessed_value),
+            generated_value: Some(generated_value),
+        }
+    }
+
+    /// Owns the data a [`CompatIssueLocation`] borrows from, so a test can
+    /// hold it alive while passing the location around.
+    struct OwnedLoc {
+        api: ApiIdent,
+        version: semver::Version,
+    }
+
+    impl OwnedLoc {
+        fn new(api: &str, version: &str) -> Self {
+            Self {
+                api: ApiIdent::from(api.to_string()),
+                version: version.parse().unwrap(),
+            }
+        }
+
+        fn as_loc(&self) -> CompatIssueLocation<'_> {
+            CompatIssueLocation { api: &self.api, version: &self.version }
+        }
+    }
+
+    #[track_caller]
+    fn assert_status(
+        dedup: &FinalizedCompatDedupMap<'_>,
+        issue: &ApiCompatIssue,
+        current: CompatIssueLocation<'_>,
+        expected: CompatRenderStatus,
+    ) {
+        let actual = dedup.status_for(issue, current);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_dedup_basic() {
+        let issue_a = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+        let issue_b = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedup = CompatDedupMap::default();
+        dedup.insert(foo.as_loc(), &issue_a);
+        dedup.insert(bar.as_loc(), &issue_b);
+        let dedup = dedup.finalize();
+
+        assert_status(
+            &dedup,
+            &issue_a,
+            foo.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: Some(1) },
+        );
+        assert_status(
+            &dedup,
+            &issue_b,
+            bar.as_loc(),
+            CompatRenderStatus::Duplicate { anchor: 1 },
+        );
+    }
+
+    /// Two issues with the same name and message but different underlying
+    /// values are not duplicates: an `Error` schema in one API may be a
+    /// completely different type from `Error` in another.
+    #[test]
+    fn test_dedup_distinguishes_by_value() {
+        let issue_a = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+        // Same name, same change message, different concrete schema.
+        let issue_b = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "object"}}),
+            serde_json::json!({"Error": {"type": "array"}}),
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedup = CompatDedupMap::default();
+        dedup.insert(foo.as_loc(), &issue_a);
+        dedup.insert(bar.as_loc(), &issue_b);
+        let dedup = dedup.finalize();
+
+        // Both issues are reported by exactly one (api, version), so finalize
+        // didn't assign them anchors.
+        assert_status(
+            &dedup,
+            &issue_a,
+            foo.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: None },
+        );
+        assert_status(
+            &dedup,
+            &issue_b,
+            bar.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: None },
+        );
+    }
+
+    /// The same issue reported under multiple versions of the same API
+    /// dedups the second version, not the first.
+    #[test]
+    fn test_dedup_across_versions_of_same_api() {
+        let issue = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+
+        let v1 = OwnedLoc::new("foo", "1.0.0");
+        let v2 = OwnedLoc::new("foo", "2.0.0");
+        let mut dedup = CompatDedupMap::default();
+        dedup.insert(v1.as_loc(), &issue);
+        dedup.insert(v2.as_loc(), &issue);
+        let dedup = dedup.finalize();
+
+        assert_status(
+            &dedup,
+            &issue,
+            v1.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: Some(1) },
+        );
+        assert_status(
+            &dedup,
+            &issue,
+            v2.as_loc(),
+            CompatRenderStatus::Duplicate { anchor: 1 },
+        );
+    }
+
+    #[test]
+    fn test_dedup_asymmetric_versions_across_apis() {
+        let issue = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+
+        let a_v1 = OwnedLoc::new("api_a", "1.0.0");
+        let a_v2 = OwnedLoc::new("api_a", "2.0.0");
+        let a_v3 = OwnedLoc::new("api_a", "3.0.0");
+        let b_v2 = OwnedLoc::new("api_b", "2.0.0");
+
+        let mut dedup = CompatDedupMap::default();
+        dedup.insert(a_v1.as_loc(), &issue);
+        dedup.insert(a_v2.as_loc(), &issue);
+        dedup.insert(a_v3.as_loc(), &issue);
+        dedup.insert(b_v2.as_loc(), &issue);
+        let dedup = dedup.finalize();
+
+        // a@v1 is the canonical occurrence; everyone else is a duplicate
+        // pointing at anchor 1.
+        assert_status(
+            &dedup,
+            &issue,
+            a_v1.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: Some(1) },
+        );
+        for loc in [&a_v2, &a_v3, &b_v2] {
+            assert_status(
+                &dedup,
+                &issue,
+                loc.as_loc(),
+                CompatRenderStatus::Duplicate { anchor: 1 },
+            );
+        }
+    }
+
+    #[test]
+    fn test_dedup_ignores_tree() {
+        let ops = OperationIdMap::new();
+        let mut tree_a = PathTree::default();
+        tree_a.insert([PathTreeKey::parse(
+            "#/components/schemas/Wrapper/properties/a/$ref",
+            &ops,
+        )]);
+        let mut tree_b = PathTree::default();
+        tree_b.insert([PathTreeKey::parse(
+            "#/components/schemas/Wrapper/properties/b/$ref",
+            &ops,
+        )]);
+
+        let make_issue = |tree: PathTree| ApiCompatIssue {
+            blessed_base: component_base("#/components/schemas/SubType"),
+            generated_base: component_base("#/components/schemas/SubType"),
+            changes: BTreeSet::from([SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: "schema types changed".into(),
+                old_subpath: DocumentPath::parse("properties/value"),
+                new_subpath: DocumentPath::parse("properties/value"),
+            }]),
+            tree,
+            blessed_value: Some(
+                serde_json::json!({"SubType": {"type": "string"}}),
+            ),
+            generated_value: Some(
+                serde_json::json!({"SubType": {"type": "integer"}}),
+            ),
+        };
+
+        let issue_a = make_issue(tree_a);
+        let issue_b = make_issue(tree_b);
+
+        assert!(
+            issue_a.is_same_change_as(&issue_b),
+            "issues identical except for tree should dedup",
+        );
+    }
+
+    #[test]
+    fn test_anchor_numbering_skips_single_occurrence() {
+        let multi_a = synthetic_issue(
+            "#/components/schemas/MultiA",
+            "schema types changed",
+            serde_json::json!({"MultiA": {"type": "string"}}),
+            serde_json::json!({"MultiA": {"type": "integer"}}),
+        );
+        let solo = synthetic_issue(
+            "#/components/schemas/Solo",
+            "schema types changed",
+            serde_json::json!({"Solo": {"type": "string"}}),
+            serde_json::json!({"Solo": {"type": "integer"}}),
+        );
+        let multi_b = synthetic_issue(
+            "#/components/schemas/MultiB",
+            "schema types changed",
+            serde_json::json!({"MultiB": {"type": "string"}}),
+            serde_json::json!({"MultiB": {"type": "integer"}}),
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedup = CompatDedupMap::default();
+        // Insert order: multi_a (twice), solo (once), multi_b (twice). Solo
+        // sits between the multis in insert order, so a non-compact scheme
+        // would assign it anchor 2 and skip to 3 for multi_b.
+        dedup.insert(foo.as_loc(), &multi_a);
+        dedup.insert(bar.as_loc(), &multi_a);
+        dedup.insert(foo.as_loc(), &solo);
+        dedup.insert(foo.as_loc(), &multi_b);
+        dedup.insert(bar.as_loc(), &multi_b);
+        let dedup = dedup.finalize();
+
+        assert_status(
+            &dedup,
+            &multi_a,
+            foo.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: Some(1) },
+        );
+        assert_status(
+            &dedup,
+            &solo,
+            foo.as_loc(),
+            CompatRenderStatus::FirstOccurrence { anchor: None },
+        );
+        assert_status(
+            &dedup,
+            &multi_b,
+            foo.as_loc(),
+            // multi_b must be anchor 2, not 3 — the solo issue between the
+            // two multis takes no slot in the visible numbering.
+            CompatRenderStatus::FirstOccurrence { anchor: Some(2) },
+        );
+    }
+
+    /// Two issues at the same base with the same change set but reported in
+    /// different orders should dedup. The `changes` field is a `BTreeSet`,
+    /// so the comparison is order-independent regardless of what order
+    /// drift happened to emit the inner changes in.
+    #[test]
+    fn test_dedup_change_order_independent() {
+        fn make_change(message: &str, subpath: &str) -> SubpathChange {
+            SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: message.into(),
+                old_subpath: DocumentPath::parse(subpath),
+                new_subpath: DocumentPath::parse(subpath),
+            }
+        }
+
+        fn issue_with_changes(
+            changes: impl IntoIterator<Item = SubpathChange>,
+        ) -> ApiCompatIssue {
+            ApiCompatIssue {
+                blessed_base: component_base("#/components/schemas/User"),
+                generated_base: component_base("#/components/schemas/User"),
+                changes: changes.into_iter().collect(),
+                tree: PathTree::default(),
+                blessed_value: Some(serde_json::json!({"User": {}})),
+                generated_value: Some(serde_json::json!({"User": {}})),
+            }
+        }
+
+        let a_changes = [
+            make_change("a changed", "properties/a"),
+            make_change("b changed", "properties/b"),
+        ];
+        let b_changes = [
+            make_change("b changed", "properties/b"),
+            make_change("a changed", "properties/a"),
+        ];
+
+        let issue_a = issue_with_changes(a_changes);
+        let issue_b = issue_with_changes(b_changes);
+
+        assert!(
+            issue_a.is_same_change_as(&issue_b),
+            "issues with same change set in different order should dedup",
+        );
+
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let bar = OwnedLoc::new("bar", "1.0.0");
+        let mut dedup = CompatDedupMap::default();
+        dedup.insert(foo.as_loc(), &issue_a);
+        dedup.insert(bar.as_loc(), &issue_b);
+        let dedup = dedup.finalize();
+        assert_status(
+            &dedup,
+            &issue_b,
+            bar.as_loc(),
+            CompatRenderStatus::Duplicate { anchor: 1 },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "every issue passed to status_for was inserted")]
+    fn test_status_for_panics_on_uninserted() {
+        let issue = synthetic_issue(
+            "#/components/schemas/Error",
+            "schema types changed",
+            serde_json::json!({"Error": {"type": "string"}}),
+            serde_json::json!({"Error": {"type": "integer"}}),
+        );
+        let foo = OwnedLoc::new("foo", "1.0.0");
+        let dedup = CompatDedupMap::default().finalize();
+        let _ = dedup.status_for(&issue, foo.as_loc());
     }
 }

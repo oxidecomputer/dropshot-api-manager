@@ -7,8 +7,8 @@
 //! user sees on `cargo openapi check`.
 
 use super::types::{
-    ApiCompatIssue, DocumentBasePath, DocumentPath, PathTree, PathTreeKey,
-    SubpathChange,
+    ApiCompatIssue, CompatRenderStatus, DocumentBasePath, DocumentPath,
+    PathTree, PathTreeKey, SubpathChange,
 };
 use crate::output::Styles;
 use drift::ChangeClass;
@@ -27,11 +27,12 @@ use std::{
 /// within the same issue are all used by the same set of endpoints (by the
 /// structure of how OpenAPI works), so we combine those changes.
 ///
-/// Separately, `output.rs` emits a single JSON diff per issue which is treated
-/// as part of the block.
+/// Separately, if `status` is `FirstOccurrence`, `output.rs` emits a single
+/// JSON diff per issue.
 pub(crate) struct ApiCompatIssueDisplay<'a> {
     pub(super) issue: &'a ApiCompatIssue,
     pub(super) styles: &'a Styles,
+    pub(super) status: CompatRenderStatus,
 }
 
 impl fmt::Display for ApiCompatIssueDisplay<'_> {
@@ -43,17 +44,42 @@ impl fmt::Display for ApiCompatIssueDisplay<'_> {
         // rendered block always ends mid-line regardless of whether a
         // `used by:` section follows. The caller supplies the trailing
         // newline (typically via `eprintln!` or `format!("{}\n", ...)`).
+        let mut marker = ChangeAnchor::from_status(self.status);
         for (i, change) in self.issue.changes.iter().enumerate() {
             if i > 0 {
                 writeln!(f)?;
             }
-            self.write_change_header(f, change, label_width)?;
+            self.write_change_header(f, change, label_width, marker)?;
+            marker = None;
         }
         if !groups.is_empty() {
             writeln!(f)?;
             self.write_used_by_section(f, &groups, label_width)?;
         }
         Ok(())
+    }
+}
+
+/// Marker rendered after the change message.
+#[derive(Clone, Copy, Debug)]
+enum ChangeAnchor {
+    Define(usize),
+    Reference(usize),
+}
+
+impl ChangeAnchor {
+    /// Derive the marker (if any) for this issue's first severity line from
+    /// its [`CompatRenderStatus`].
+    fn from_status(status: CompatRenderStatus) -> Option<Self> {
+        match status {
+            CompatRenderStatus::FirstOccurrence { anchor: Some(n) } => {
+                Some(Self::Define(n))
+            }
+            CompatRenderStatus::FirstOccurrence { anchor: None } => None,
+            CompatRenderStatus::Duplicate { anchor } => {
+                Some(Self::Reference(anchor))
+            }
+        }
     }
 }
 
@@ -83,12 +109,13 @@ impl ApiCompatIssueDisplay<'_> {
         f: &mut fmt::Formatter<'_>,
         change: &SubpathChange,
         label_width: usize,
+        anchor: Option<ChangeAnchor>,
     ) -> fmt::Result {
         let styles = self.styles;
 
-        // Severity line: `<severity>: <message>`. The surrounding cargo
-        // Failure header already names the API/version, so this line just
-        // describes the change itself.
+        // Severity line, with an optional `[#N]` / `(see #N)` anchor suffix.
+        // The number is shared so a terminal search for `#N` jumps between
+        // sites in scrollback.
         let severity = class_label(change.class);
         write_label(
             f,
@@ -97,6 +124,13 @@ impl ApiCompatIssueDisplay<'_> {
             label_width,
         )?;
         f.write_str(&change.message)?;
+        if let Some(anchor) = anchor {
+            let text = match anchor {
+                ChangeAnchor::Define(n) => format!("[#{n}]"),
+                ChangeAnchor::Reference(n) => format!("(see #{n})"),
+            };
+            write!(f, " {}", text.style(styles.warning))?;
+        }
         writeln!(f)?;
 
         write_label(f, "at", styles.dimmed, label_width)?;
@@ -115,8 +149,8 @@ impl ApiCompatIssueDisplay<'_> {
         // This map is used to elide shared subtrees with `(*)` back-references,
         // similar to `cargo tree`.
         //
-        // Note that the same `base` with a different `subpath` is not deduped
-        // at that level, though it's likely to be deduped at the level above.
+        // Note that the same `base` with a different `subpath` doesn't dedup
+        // at that level, though it likely will at the level above.
         let mut seen = HashSet::new();
         for (i, group) in groups.iter().enumerate() {
             if i > 0 {
@@ -608,8 +642,8 @@ fn component_name(base: &DocumentPath) -> &str {
 mod tests {
     use super::{
         super::types::{
-            ApiCompatIssue, DocumentBasePath, DocumentPath, OperationIdMap,
-            PathTree, PathTreeKey, SubpathChange,
+            ApiCompatIssue, CompatRenderStatus, DocumentBasePath, DocumentPath,
+            OperationIdMap, PathTree, PathTreeKey, SubpathChange,
         },
         *,
     };
@@ -651,7 +685,13 @@ mod tests {
         }
         let mut out = issues
             .iter()
-            .map(|i| i.display(styles).to_string())
+            .map(|i| {
+                i.display(
+                    styles,
+                    CompatRenderStatus::FirstOccurrence { anchor: None },
+                )
+                .to_string()
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
         out.push('\n');
@@ -685,13 +725,14 @@ mod tests {
     fn assert_issue_snapshots(name: &str, issue: &ApiCompatIssue) {
         let mut colorized = Styles::default();
         colorized.colorize();
+        let status = CompatRenderStatus::FirstOccurrence { anchor: None };
         expectorate::assert_contents(
             output_path(&format!("{name}.txt")),
-            &format!("{}\n", issue.display(&Styles::default())),
+            &format!("{}\n", issue.display(&Styles::default(), status)),
         );
         expectorate::assert_contents(
             output_path(&format!("{name}.ansi")),
-            &format!("{}\n", issue.display(&colorized)),
+            &format!("{}\n", issue.display(&colorized, status)),
         );
     }
 
@@ -1064,6 +1105,121 @@ mod tests {
         );
     }
 
+    /// Abbreviated rendering of an issue with multiple [`SubpathChange`]s.
+    ///
+    /// The `(see #N)` back-reference must appear *only* on the first severity
+    /// line.
+    #[test]
+    fn test_render_abbreviated_multi_change() {
+        let ops = op_ids(&[("#/paths/~1bar1/get", "get_bar1")]);
+        let make_chain = |route: &str| {
+            vec![
+                PathTreeKey::parse(
+                    "#/components/schemas/Wrapper/properties/value/$ref",
+                    &ops,
+                ),
+                PathTreeKey::parse(
+                    &format!(
+                        "#/paths/~1{route}/get/responses/200/content/application~1json/schema/$ref"
+                    ),
+                    &ops,
+                ),
+            ]
+        };
+        let mut tree = PathTree::default();
+        tree.insert(make_chain("bar1"));
+
+        let issue = ApiCompatIssue {
+            blessed_base: component("#/components/schemas/SubType"),
+            generated_base: component("#/components/schemas/SubType"),
+            changes: BTreeSet::from([
+                SubpathChange {
+                    class: ChangeClass::Incompatible,
+                    message: "schema kind changed".into(),
+                    old_subpath: DocumentPath::parse("properties/value"),
+                    new_subpath: DocumentPath::parse("properties/value"),
+                },
+                SubpathChange {
+                    class: ChangeClass::Unhandled,
+                    message: "object properties changed".into(),
+                    old_subpath: DocumentPath::root(),
+                    new_subpath: DocumentPath::root(),
+                },
+            ]),
+            tree,
+            blessed_value: None,
+            generated_value: None,
+        };
+
+        let mut colorized = Styles::default();
+        colorized.colorize();
+        // 7 (rather than 1) to make it visually clear the marker is whatever
+        // anchor the caller passes, and is not tied to insert order.
+        let status = CompatRenderStatus::Duplicate { anchor: 7 };
+        expectorate::assert_contents(
+            output_path("abbreviated_multi_change.txt"),
+            &format!("{}\n", issue.display(&Styles::default(), status)),
+        );
+        expectorate::assert_contents(
+            output_path("abbreviated_multi_change.ansi"),
+            &format!("{}\n", issue.display(&colorized, status)),
+        );
+    }
+
+    /// Snapshot the abbreviated rendering used for duplicate issues. The
+    /// header and the per-API tree should both appear; the back-reference
+    /// `(see #N)` should be on the header line.
+    #[test]
+    fn test_render_abbreviated() {
+        let ops = op_ids(&[
+            ("#/paths/~1bar1/get", "get_bar1"),
+            ("#/paths/~1bar2/get", "get_bar2"),
+        ]);
+        let make_chain = |route: &str| {
+            vec![
+                PathTreeKey::parse(
+                    "#/components/schemas/Wrapper/properties/value/$ref",
+                    &ops,
+                ),
+                PathTreeKey::parse(
+                    &format!(
+                        "#/paths/~1{route}/get/responses/200/content/application~1json/schema/$ref"
+                    ),
+                    &ops,
+                ),
+            ]
+        };
+        let mut tree = PathTree::default();
+        tree.insert(make_chain("bar1"));
+        tree.insert(make_chain("bar2"));
+
+        let issue = ApiCompatIssue {
+            blessed_base: component("#/components/schemas/SubType"),
+            generated_base: component("#/components/schemas/SubType"),
+            changes: BTreeSet::from([SubpathChange {
+                class: ChangeClass::Incompatible,
+                message: "schema types changed".into(),
+                old_subpath: DocumentPath::parse("properties/value"),
+                new_subpath: DocumentPath::parse("properties/value"),
+            }]),
+            tree,
+            blessed_value: None,
+            generated_value: None,
+        };
+
+        let mut colorized = Styles::default();
+        colorized.colorize();
+        let status = CompatRenderStatus::Duplicate { anchor: 3 };
+        expectorate::assert_contents(
+            output_path("abbreviated.txt"),
+            &format!("{}\n", issue.display(&Styles::default(), status)),
+        );
+        expectorate::assert_contents(
+            output_path("abbreviated.ansi"),
+            &format!("{}\n", issue.display(&colorized, status)),
+        );
+    }
+
     /// Snapshot the issue in its surrounding render context: a cargo-style
     /// `Failure` header, the second-tier `error:` keyword, and the issue
     /// body indented so its leftmost label aligns with where `error`
@@ -1150,7 +1306,10 @@ mod tests {
                     &mut indented,
                 ),
                 "{}",
-                issue.display(styles),
+                issue.display(
+                    styles,
+                    CompatRenderStatus::FirstOccurrence { anchor: None },
+                ),
             )
             .unwrap();
             out.push_str(&indented);

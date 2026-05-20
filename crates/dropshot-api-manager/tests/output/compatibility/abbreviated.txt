@@ -1,0 +1,6 @@
+incompatible: schema types changed (see #3)
+          at: SubType.value
+     used by: GET /bar1 (get_bar1)
+              └─ Wrapper.value
+     used by: GET /bar2 (get_bar2)
+              └─ Wrapper.value (*)

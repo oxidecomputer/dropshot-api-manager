@@ -6,5 +6,9 @@ mod detect;
 mod display;
 mod types;
 
-pub use detect::api_compatible;
-pub use types::ApiCompatIssue;
+pub(crate) use detect::{
+    CompatDedupMap, FinalizedCompatDedupMap, api_compatible,
+};
+pub(crate) use types::{
+    ApiCompatIssue, CompatIssueLocation, CompatRenderStatus,
+};

@@ -9,7 +9,7 @@
        error: OpenAPI document generated from the current code is not compatible
               with the blessed document (from upstream)
 
-       backward-incompatible: The parameter 'verbose' was removed
+       backward-incompatible: The parameter 'verbose' was removed [#1]
                           at: GET /health/detailed (detailed_health_check) (.parameters.0)
        --- a/blessed
        +++ b/generated
@@ -41,33 +41,8 @@
        error: OpenAPI document generated from the current code is not compatible
               with the blessed document (from upstream)
 
-       backward-incompatible: The parameter 'verbose' was removed
+       backward-incompatible: The parameter 'verbose' was removed (see #1)
                           at: GET /health/detailed (detailed_health_check) (.parameters.0)
-       --- a/blessed
-       +++ b/generated
-       @@ -1,22 +1,11 @@
-        {
-          "get": {
-       -    "description": "Adds a required query parameter `verbose` relative to the blessed shape. See `DetailedFilter` below.",
-            "operationId": "detailed_health_check",
-       -    "parameters": [
-       -      {
-       -        "in": "query",
-       -        "name": "verbose",
-       -        "required": true,
-       -        "schema": {
-       -          "type": "boolean"
-       -        }
-       -      }
-       -    ],
-            "responses": {
-              "200": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "$ref": "#/components/schemas/DetailedHealthStatus"
-                    }
-                  }
 
        backward-incompatible: The operation get_system_info was removed
                           at: GET /system/info (get_system_info)
