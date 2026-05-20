@@ -9,7 +9,7 @@
        error: OpenAPI document generated from the current code is not compatible
               with the blessed document (from upstream)
 
-       backward-incompatible: A new, required parameter 'verbose' was added
+       backward-incompatible: A new, required parameter 'verbose' was added [#1]
                           at: GET /health/detailed (detailed_health_check)
                               (.parameters.0)
        --- a/blessed
@@ -43,11 +43,11 @@
               with the blessed document (from upstream)
 
        backward-incompatible: A new, required parameter 'verbose' was added (see
-                              versioned-health v2.0.0)
+                              #1)
                           at: GET /health/detailed (detailed_health_check)
                               (.parameters.0)
 
-       forward-incompatible: The operation get_system_info was added
+       forward-incompatible: The operation get_system_info was added [#2]
                          at: GET /system/info (get_system_info)
        --- a/blessed
        +++ b/generated
@@ -85,7 +85,7 @@
               with the blessed document (from upstream)
 
        backward-incompatible: A new, required parameter 'verbose' was added (see
-                              versioned-health v2.0.0)
+                              #1)
                           at: GET /health/detailed (detailed_health_check)
                               (.parameters.0)
 
@@ -94,12 +94,11 @@
               with the blessed document (from upstream)
 
        backward-incompatible: A new, required parameter 'verbose' was added (see
-                              versioned-health v2.0.0)
+                              #1)
                           at: GET /health/detailed (detailed_health_check)
                               (.parameters.0)
 
-       forward-incompatible: The operation get_system_info was added (see
-                             versioned-health v3.0.0)
+       forward-incompatible: The operation get_system_info was added (see #2)
                          at: GET /system/info (get_system_info)
 
        Fresh versioned-monitor "latest" symlink

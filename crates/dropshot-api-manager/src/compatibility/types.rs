@@ -11,10 +11,7 @@ use super::display::ApiCompatIssueDisplay;
 use crate::output::Styles;
 use drift::ChangeClass;
 use dropshot_api_manager_types::ApiIdent;
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    fmt,
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A compatibility error between two OpenAPI documents.
 ///
@@ -23,7 +20,7 @@ use std::{
 /// inverted reference tree records every such chain so we can show all affected
 /// endpoints.
 #[derive(Debug)]
-pub struct ApiCompatIssue {
+pub(crate) struct ApiCompatIssue {
     /// Base location in the blessed (old) document, e.g. a schema component
     /// or an endpoint.
     pub(super) blessed_base: DocumentBasePath,
@@ -34,12 +31,8 @@ pub struct ApiCompatIssue {
     pub(super) generated_base: DocumentBasePath,
     /// Non-trivial changes detected within this base location.
     ///
-    /// A `BTreeSet` rather than a `Vec` so that:
-    /// * iteration (and therefore display) order is deterministic regardless
-    ///   of the order drift emits changes in;
-    /// * dedupe comparison via `is_same_change_as` is order-independent — two
-    ///   issues that name the same set of changes in different orders are
-    ///   correctly recognized as duplicates.
+    /// This is a `BTreeSet` rather than a `Vec` so display order and dedup
+    /// comparisons are both independent of whatever drift returns.
     pub(super) changes: BTreeSet<SubpathChange>,
     /// Inverted reference tree.
     ///
@@ -61,59 +54,30 @@ impl ApiCompatIssue {
         to_json_pretty(self.generated_value.as_ref())
     }
 
-    /// Returns a `Display` adapter that renders this issue with the given
-    /// styles applied. Pass `&Styles::default()` for unstyled output.
+    /// Returns a `Display` adapter that renders this issue per `status`.
     ///
     /// The returned adapter does not perform any wrapping by default. Call
     /// [`ApiCompatIssueDisplay::with_wrap_width`] to wrap long lines.
     pub(crate) fn display<'a>(
         &'a self,
         styles: &'a Styles,
+        status: CompatRenderStatus,
     ) -> ApiCompatIssueDisplay<'a> {
-        ApiCompatIssueDisplay {
-            issue: self,
-            styles,
-            prev: None,
-            wrap_width: None,
-        }
-    }
-
-    /// Returns a `Display` adapter that renders this issue with a
-    /// `(see <api> v<version>)` back-reference to the first occurrence of
-    /// the same issue.
-    ///
-    /// Used for cross-API duplicates, to suppress the bulky JSON diff and emit
-    /// only the header and the per-API "used by" list.
-    pub(crate) fn display_abbreviated<'a>(
-        &'a self,
-        styles: &'a Styles,
-        prev: CompatIssueLocation<'a>,
-    ) -> ApiCompatIssueDisplay<'a> {
-        ApiCompatIssueDisplay {
-            issue: self,
-            styles,
-            prev: Some(prev),
-            wrap_width: None,
-        }
+        ApiCompatIssueDisplay { issue: self, styles, status, wrap_width: None }
     }
 
     /// Returns true if `self` and `other` represent the same underlying
-    /// compatibility change for cross-API dedup purposes.
+    /// compatibility change for dedup purposes.
     ///
-    /// `Self::tree` is deliberately excluded for this comparison. That's
-    /// because if for two versions of an API, a change is the same along all
-    /// dimensions other than the tree, we still want to treat it as a
-    /// duplicate. (The abbreviated display renders the tree for duplicates, so
-    /// there's no loss of information this way.)
+    /// `tree` is deliberately excluded: two sites reaching the same component
+    /// via different `$ref` chains are still the same change. (The
+    /// abbreviated display renders each site's tree, so no info is lost.)
     pub(super) fn is_same_change_as(&self, other: &Self) -> bool {
         let Self {
             blessed_base,
             generated_base,
             changes,
-            // See doc comment for why tree is excluded.
             tree: _,
-            // We do include the blessed and generated value fields so that the
-            // same schema name with different values doesn't get deduplicated.
             blessed_value,
             generated_value,
         } = self;
@@ -125,23 +89,27 @@ impl ApiCompatIssue {
     }
 }
 
-/// A label identifying which API and version first reported a given
-/// compatibility issue.
-///
-/// Used by [`super::detect::CompatDedupeMap`] to point readers from a
-/// deduplicated issue back to its first occurrence. The fields borrow from
-/// the [`super::super::resolved::Resolved`] that the dedupe map was built
-/// over, sharing the map's lifetime.
+/// A label identifying which API and version reported a given compatibility
+/// issue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CompatIssueLocation<'a> {
     pub(crate) api: &'a ApiIdent,
     pub(crate) version: &'a semver::Version,
 }
 
-impl fmt::Display for CompatIssueLocation<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} v{}", self.api, self.version)
-    }
+/// How the issue renderer should render one compatibility issue at one `(api,
+/// version)` site.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompatRenderStatus {
+    /// First (canonical) occurrence of the issue.
+    ///
+    /// `anchor` is `Some(n)` if the issue is also reported at another site.
+    FirstOccurrence { anchor: Option<usize> },
+    /// Issue already rendered in full at an earlier site.
+    ///
+    /// The renderer emits the abbreviated form with a `(see #anchor)`
+    /// back-reference.
+    Duplicate { anchor: usize },
 }
 
 /// A non-trivial change at a particular subpath within a base location.

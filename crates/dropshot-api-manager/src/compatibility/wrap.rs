@@ -22,21 +22,12 @@ use std::{
 };
 use textwrap::core::display_width;
 
-/// One styled piece of content. The content itself contains no ANSI escape
-/// sequences; the style is applied at render time via
-/// [`OwoColorize::style`].
 #[derive(Clone, Debug)]
 pub(super) struct Span<'a> {
     content: Cow<'a, str>,
     style: Style,
 }
 
-/// A single logical line of styled content, built up incrementally and then
-/// wrapped by [`write_wrapped`].
-///
-/// Whitespace inside any pushed content is treated as a break candidate;
-/// non-space characters from one or more spans form a single "word" that stays
-/// together at wrap time.
 #[derive(Debug, Default)]
 pub(super) struct Line<'a> {
     spans: Vec<Span<'a>>,
@@ -60,7 +51,9 @@ impl<'a> Line<'a> {
         self
     }
 
-    /// Append an unstyled span. Shorthand for `push(content, Style::default())`.
+    /// Append an unstyled span.
+    ///
+    /// Shorthand for `push(content, Style::default())`.
     pub(super) fn push_plain(
         &mut self,
         content: impl Into<Cow<'a, str>>,
@@ -96,8 +89,7 @@ pub(super) struct Indent<'a> {
 }
 
 impl<'a> Indent<'a> {
-    /// Construct from a string of ASCII spaces. Width equals byte
-    /// length, since each space occupies one column.
+    /// Construct an `Indent` from a string of ASCII spaces.
     pub(super) fn spaces(string: &'a str) -> Self {
         debug_assert!(
             string.bytes().all(|b| b == b' '),
@@ -195,10 +187,9 @@ fn collect_words<'a>(line: &'a Line<'a>) -> Vec<StyledWord<'a>> {
 /// (typically by writing a right-aligned label of the same visible
 /// width), so the same content width applies to every line of the block.
 ///
-/// Single words wider than the line print on a line of their own and
-/// extend past `width`; the alternative — breaking a route like
-/// `/v1/instances/{instance}/…` mid-segment — would defeat the user's
-/// ability to copy it from the terminal in one piece.
+/// Single words that overflow extend past width. The alternative would defeat
+/// the user's ability to copy it from the terminal in one piece (particularly
+/// for long endpoint paths).
 pub(super) fn write_wrapped(
     f: &mut fmt::Formatter<'_>,
     line: &Line<'_>,
