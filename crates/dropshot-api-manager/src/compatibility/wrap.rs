@@ -267,7 +267,6 @@ mod tests {
         Adapter { line, width, indent: Indent::spaces(indent) }.to_string()
     }
 
-    /// A line that fits the width prints unchanged.
     #[test]
     fn test_fit_on_one_line() {
         let mut line = Line::new();
@@ -275,9 +274,6 @@ mod tests {
         assert_eq!(render(&line, 80, "    "), "GET /short");
     }
 
-    /// Two ordinary (non-overflowing) words past the limit split at the
-    /// whitespace between them; the trailing space at the end of the
-    /// first line is dropped.
     #[test]
     fn test_break_at_whitespace() {
         let mut line = Line::new();
@@ -288,9 +284,6 @@ mod tests {
         assert_eq!(render(&line, 7, "  "), "alpha\n  beta");
     }
 
-    /// Adjacent spans without a space between them belong to the same
-    /// word and don't introduce a break — the styled split between
-    /// `/route` and `(op_id)` must stay glued.
     #[test]
     fn test_adjacent_spans_form_one_word() {
         let mut line = Line::new();
@@ -301,9 +294,6 @@ mod tests {
         assert_eq!(render(&line, 3, "  "), "ABCD");
     }
 
-    /// A word wider than the line width prints on its own line rather
-    /// than being broken mid-word — copy-from-terminal stays intact at
-    /// the cost of overflowing the margin.
     #[test]
     fn test_long_word_overflows() {
         let mut line = Line::new();
@@ -313,9 +303,6 @@ mod tests {
         assert_eq!(render(&line, 5, ""), "a\nloooooooooong\nz");
     }
 
-    /// Style transitions inside a word survive wrapping: when a word that
-    /// mixes styles gets pushed to a new line, every styled slice still
-    /// renders with its original style.
     #[test]
     fn test_preserve_styles_across_wrap() {
         let bold = Style::new().bold();
