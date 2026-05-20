@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.7.2] - 2026-05-20
+
 ### Changed
 
 For incompatible changes to blessed API documents, the output is now significantly improved. It now shows all the endpoints and paths from which the change is reachable, and also deduplicates identical changes across different API versions.
@@ -136,6 +138,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.7.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.2
 [0.7.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.1
 [0.7.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.0
 [0.6.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.6.0
