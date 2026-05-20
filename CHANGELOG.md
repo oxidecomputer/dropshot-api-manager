@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Changed
+
+For incompatible changes to blessed API documents, the output is now significantly improved. It now shows all the endpoints and paths from which the change is reachable, and also deduplicates identical changes across different API versions.
+
 ## [0.7.1] - 2026-04-15
 
 ### Added
