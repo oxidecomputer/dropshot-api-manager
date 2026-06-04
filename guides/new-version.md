@@ -403,7 +403,16 @@ Run `cargo xtask openapi generate`. If all goes well, you'll see:
 - all current versions of the API marked `Fresh`
 - a new version `my-server-api/my-server-api-3.0.0-{hash}.json` added
 
-If one of the current versions errored out, you may have mistyped a `versions` bound or mixed up types. Double-check the output and diff to ensure that all previous types were preserved.
+If one of the current versions errored out, you may have mistyped a `versions` bound or mixed up types.
+
+**Confirm the diff is exactly what you intended.** With Git stub storage enabled, the new version appears in `git diff` (or `jj diff --git`) as a rename of the previous version's document, so the diff shows precisely what changed in the document. Check that:
+
+- Every intended change appears in the diff.
+- Nothing else does. If an unexpected endpoint, field, or type changed, you may have edited the wrong version of a type. Track it down and fix it before continuing.
+
+Prior versions' documents must not change at all. For blessed versions present in `main`, this is ensured by the API manager. With a stack of commits with successive changes to the same API, though, there might be accidental changes in earlier versions that are not detected by the API manager.
+
+(Without Git stub storage, or with a stack of successive changes, the new version is a brand-new file rather than a rename. Diff it explicitly against the previous version with `git diff --no-index {prev}.json {new}.json`.)
 
 ### Update API implementations
 
