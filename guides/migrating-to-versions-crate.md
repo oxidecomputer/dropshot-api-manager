@@ -46,9 +46,10 @@ In API traits and their implementations, always import `latest` and `vN` modules
 6. If a prior-version endpoint delegates to a helper function that exclusively serves that old version, the helper's signature must also use `vN::` paths — not floating identifiers from the types crate. Floating identifiers resolve to the latest version today, but will break when the type changes in a future version.
 7. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**.
 8. For other types, strongly prefer retaining existing imports. If an existing module imports `iddqd::IdOrdMap` and uses it as `IdOrdMap`, maintain the same pattern in the destination.
-9. Retain all existing comments. Don't add useless comments like "parameter moved from params.rs". Be extremely sparing with added prose.
-10. Don't make any semantic changes. Move code AS IS, as far as possible. This is purely a reorganization.
-11. Do NOT delete any tests. Most tests in the types crate should move into the versions crate's `impls` module. Tests specifically for conversion between versions should be moved to version modules. Tests that use unpublished types can stay in the types crate.
+9. **Preserve existing comments verbatim.** When you move or edit code containing comments, copy the comments through unchanged: same words, same line wrapping, even if you'd phrase them differently or spot a typo. Do not reword, reflow, regenerate, or "improve" them. If you notice yourself rephrasing a comment, that is a bug: stop and restore the original. This is a reorganization: comments move with their code, untouched. (For typos or substantially incorrect comments, raise them with the user at the end of your work so that they can make an informed decision.)
+10. **Add as little new prose as possible.** Don't add comments that restate the code or narrate the migration (e.g. "parameter moved from params.rs"); only add one to explain a non-obvious "why."
+11. Don't make any semantic changes. Move code AS IS, as far as possible. This is purely a reorganization.
+12. Do NOT delete any tests. Most tests in the types crate should move into the versions crate's `impls` module. Tests specifically for conversion between versions should be moved to version modules. Tests that use unpublished types can stay in the types crate.
 
 **Order of operations:**
 
@@ -74,6 +75,8 @@ cargo xtask openapi check
 ```
 cargo clippy --workspace --all-targets
 ```
+
+**Before declaring done:** run `git diff` or `jj diff --git` (based on the repository type) and inspect every changed line that touches a comment. Since this is a pure reorganization, almost no comment should change wording. If one did and you don't have a specific, substantive reason, revert it to the original.
 
 </details>
 

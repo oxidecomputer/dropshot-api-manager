@@ -54,8 +54,9 @@ In API traits, always import `latest` and `vN` modules with `use foo_versions::{
 5. The `vN::` impl signatures must exactly match the trait signatures (`vN::` paths).
 6. If a prior-version endpoint delegates to a helper function that exclusively serves that old version, the helper's signature must also use `vN::` paths — not floating identifiers from the types crate.
 7. For trait endpoints with `latest::`, the impl must import the floating identifier **from the types crate**, not the versions crate.
-8. Retain all existing comments. Don't add useless comments. Be extremely sparing with added prose.
-9. Don't make unrelated changes. Focus only on the new version being added.
+8. **Preserve existing comments verbatim.** When you copy or edit code containing comments, copy the comments through unchanged: same words, same line wrapping, even if you'd phrase them differently or spot a typo. Do not reword, reflow, regenerate, or "improve" them. If you notice yourself rephrasing a comment, that is a bug: stop and restore the original. These comments often encode hard-won context (such as merge-conflict resistance) that reads fine but silently loses information when paraphrased. (For typos or substantially incorrect comments, raise them with the user at the end of your work so that they can make an informed decision.)
+9. **Add as little new prose as possible.** Don't add comments that restate the code; only add one to explain a non-obvious "why."
+10. Don't make unrelated changes. Focus only on the new version being added.
 
 **Order of operations:**
 
@@ -83,6 +84,8 @@ cargo xtask openapi check
 ```
 
 This verifies that blessed API versions remain compatible and locally-added versions are correctly generated.
+
+**Before declaring done:** run `git diff` or `jj diff --git` (based on the repository type) and inspect every changed or added line that touches a comment. If a comment's wording changed and you don't have a specific, substantive reason, revert it to the original.
 
 </details>
 
