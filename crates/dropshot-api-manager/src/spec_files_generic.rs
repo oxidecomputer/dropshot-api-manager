@@ -8,8 +8,8 @@ use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
-    VersionedApiSpecFileName, VersionedApiSpecKind,
+    ApiDocFileName, ApiIdent, LockstepApiDocFileName, VersionedApiDocFileName,
+    VersionedApiDocKind,
 };
 use git_stub::GitCommitHash;
 use openapiv3::OpenAPI;
@@ -42,14 +42,14 @@ pub struct UnparseableFile {
     pub path: Utf8PathBuf,
 }
 
-/// Attempts to parse the given file basename as a `VersionedApiSpecFileName`.
+/// Attempts to parse the given file basename as a `VersionedApiDocFileName`.
 ///
 /// These look like: `ident-SEMVER-HASH.json`.
 pub(crate) fn parse_versioned_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
-) -> Result<VersionedApiSpecFileName, BadVersionedFileName> {
+) -> Result<VersionedApiDocFileName, BadVersionedFileName> {
     let ident = ApiIdent::from(ident.to_string());
     let Some(api) = apis.api(&ident) else {
         return Err(BadVersionedFileName::NoSuchApi);
@@ -116,10 +116,10 @@ pub(crate) fn parse_versioned_file_name(
         });
     }
 
-    Ok(VersionedApiSpecFileName::new(ident, version, hash.to_string()))
+    Ok(VersionedApiDocFileName::new(ident, version, hash.to_string()))
 }
 
-/// Attempts to parse the given file basename as a `VersionedApiSpecFileName`
+/// Attempts to parse the given file basename as a `VersionedApiDocFileName`
 /// with Git stub storage.
 ///
 /// These look like: `ident-SEMVER-HASH.json.gitstub`.
@@ -127,7 +127,7 @@ pub(crate) fn parse_versioned_git_stub_file_name(
     apis: &ManagedApis,
     ident: &str,
     basename: &str,
-) -> Result<VersionedApiSpecFileName, BadVersionedFileName> {
+) -> Result<VersionedApiDocFileName, BadVersionedFileName> {
     // The file name must end with .json.gitstub.
     let json_basename = basename.strip_suffix(".gitstub").ok_or_else(|| {
         BadVersionedFileName::UnexpectedName {
@@ -143,11 +143,11 @@ pub(crate) fn parse_versioned_git_stub_file_name(
     Ok(versioned.to_git_stub())
 }
 
-/// Attempts to parse the given file basename as a `LockstepApiSpecFileName`.
+/// Attempts to parse the given file basename as a `LockstepApiDocFileName`.
 pub(crate) fn parse_lockstep_file_name(
     apis: &ManagedApis,
     basename: &str,
-) -> Result<LockstepApiSpecFileName, BadLockstepFileName> {
+) -> Result<LockstepApiDocFileName, BadLockstepFileName> {
     let ident = ApiIdent::from(
         basename
             .strip_suffix(".json")
@@ -161,7 +161,7 @@ pub(crate) fn parse_lockstep_file_name(
         return Err(BadLockstepFileName::NotLockstep);
     }
 
-    Ok(LockstepApiSpecFileName::new(ident))
+    Ok(LockstepApiDocFileName::new(ident))
 }
 
 /// Describes a failure to parse a file name for a lockstep API.
@@ -220,7 +220,7 @@ enum ApiSpecFileParseError {
 #[derive(Debug)]
 pub struct ApiSpecFile {
     /// describes how the document should be named on disk
-    name: ApiSpecFileName,
+    name: ApiDocFileName,
     /// serde_json::Value representation of the document
     value: DebugIgnore<serde_json::Value>,
     /// parsed contents of the document
@@ -238,7 +238,7 @@ impl ApiSpecFile {
     /// that callers can still use the contents (e.g., for unparseable file
     /// tracking).
     pub fn for_contents(
-        spec_file_name: ApiSpecFileName,
+        spec_file_name: ApiDocFileName,
         contents_buf: Vec<u8>,
     ) -> Result<ApiSpecFile, (anyhow::Error, Vec<u8>)> {
         Self::for_contents_inner(spec_file_name, contents_buf)
@@ -246,7 +246,7 @@ impl ApiSpecFile {
     }
 
     fn for_contents_inner(
-        spec_file_name: ApiSpecFileName,
+        spec_file_name: ApiDocFileName,
         contents_buf: Vec<u8>,
     ) -> Result<ApiSpecFile, (ApiSpecFileParseError, Vec<u8>)> {
         // Parse a serde_json::Value from the contents buffer.
@@ -294,7 +294,7 @@ impl ApiSpecFile {
         };
 
         match &spec_file_name {
-            ApiSpecFileName::Versioned(v) => {
+            ApiDocFileName::Versioned(v) => {
                 if *v.version() != parsed_version {
                     return Err((
                         ApiSpecFileParseError::VersionMismatch {
@@ -307,7 +307,7 @@ impl ApiSpecFile {
 
                 // Only check hash for JSON files. Git stubs use the Git
                 // stub itself as the source of truth.
-                if v.kind() == VersionedApiSpecKind::Json {
+                if v.kind() == VersionedApiDocKind::Json {
                     let expected_hash = hash_contents(&contents_buf);
                     if expected_hash != v.hash() {
                         return Err((
@@ -321,7 +321,7 @@ impl ApiSpecFile {
                     }
                 }
             }
-            ApiSpecFileName::Lockstep(_) => {}
+            ApiDocFileName::Lockstep(_) => {}
         }
 
         Ok(ApiSpecFile {
@@ -334,7 +334,7 @@ impl ApiSpecFile {
     }
 
     /// Returns the name of the OpenAPI document
-    pub fn spec_file_name(&self) -> &ApiSpecFileName {
+    pub fn spec_file_name(&self) -> &ApiDocFileName {
         &self.name
     }
 
@@ -435,7 +435,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         self.error_accumulator.warning(error);
     }
 
-    /// Returns an `ApiSpecFileName` for the given lockstep API.
+    /// Returns an `ApiDocFileName` for the given lockstep API.
     ///
     /// On success, this does not load anything into `self`.  Callers generally
     /// invoke `load_parsed()` with the returned value.  On failure, warnings
@@ -443,7 +443,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     pub fn lockstep_file_name(
         &mut self,
         basename: &str,
-    ) -> Option<ApiSpecFileName> {
+    ) -> Option<ApiDocFileName> {
         match parse_lockstep_file_name(self.apis, basename) {
             // When we're looking at the blessed files, the caller provides
             // `misconfigurations_okay: true` and we treat these as
@@ -543,7 +543,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
     }
 
-    /// Returns an `ApiSpecFileName` for the given versioned API.
+    /// Returns an `ApiDocFileName` for the given versioned API.
     ///
     /// On success, this does not load anything into `self`. Callers generally
     /// parse the contents, then invoke `load_parsed()` or
@@ -553,7 +553,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         &mut self,
         ident: &ApiIdent,
         basename: &str,
-    ) -> Option<ApiSpecFileName> {
+    ) -> Option<ApiDocFileName> {
         self.handle_versioned_parse(
             parse_versioned_file_name(self.apis, ident, basename),
             &format!("file {basename}"),
@@ -562,7 +562,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         .map(Into::into)
     }
 
-    /// Returns an `ApiSpecFileName` for the given versioned Git stub.
+    /// Returns an `ApiDocFileName` for the given versioned Git stub.
     ///
     /// On success, this does not load anything into `self`. Callers generally
     /// parse the contents, then invoke `load_parsed()` or
@@ -572,7 +572,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         &mut self,
         ident: &ApiIdent,
         basename: &str,
-    ) -> Option<ApiSpecFileName> {
+    ) -> Option<ApiDocFileName> {
         self.handle_versioned_parse(
             parse_versioned_git_stub_file_name(self.apis, ident, basename),
             &format!("Git stub {basename}"),
@@ -588,7 +588,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         symlink_path: &Utf8Path,
         ident: &ApiIdent,
         basename: &str,
-    ) -> Option<VersionedApiSpecFileName> {
+    ) -> Option<VersionedApiDocFileName> {
         self.handle_versioned_parse(
             parse_versioned_file_name(self.apis, ident, basename),
             &format!("bad symlink {symlink_path} pointing to {basename}"),
@@ -598,16 +598,16 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
 
     /// Shared error handling for versioned file name parsing.
     ///
-    /// On success, returns the parsed `VersionedApiSpecFileName`. On
+    /// On success, returns the parsed `VersionedApiDocFileName`. On
     /// failure, records a warning or error (depending on the kind of
     /// failure and whether misconfigurations are allowed) and returns
     /// `None`.
     fn handle_versioned_parse(
         &mut self,
-        result: Result<VersionedApiSpecFileName, BadVersionedFileName>,
+        result: Result<VersionedApiDocFileName, BadVersionedFileName>,
         error_label: &str,
         warning_label: &str,
-    ) -> Option<VersionedApiSpecFileName> {
+    ) -> Option<VersionedApiDocFileName> {
         match result {
             Ok(file_name) => Some(file_name),
             Err(
@@ -666,7 +666,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// other contexts, the error is recorded.
     pub fn load_maybe_unparseable(
         &mut self,
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
     ) {
         match result {
@@ -690,7 +690,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// contexts, the error is recorded.
     pub fn load_unparseable(
         &mut self,
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         contents: Vec<u8>,
         reason: anyhow::Error,
     ) {
@@ -704,7 +704,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     /// contexts, the error is recorded.
     fn insert_unparseable(
         &mut self,
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         contents: Vec<u8>,
         reason: anyhow::Error,
     ) {
@@ -769,7 +769,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     pub fn load_latest_link(
         &mut self,
         ident: &ApiIdent,
-        links_to: VersionedApiSpecFileName,
+        links_to: VersionedApiDocFileName,
     ) {
         let Some(api) = self.apis.api(ident) else {
             let error =
@@ -858,7 +858,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
 #[derive(Debug)]
 pub struct ApiFiles<T> {
     spec_files: BTreeMap<semver::Version, T>,
-    latest_link: Option<VersionedApiSpecFileName>,
+    latest_link: Option<VersionedApiDocFileName>,
     /// Files that exist on disk but couldn't be parsed. These are tracked so
     /// that generate can delete them and create correct files in their place.
     unparseable_files: Vec<UnparseableFile>,
@@ -877,7 +877,7 @@ impl<T: AsRawFiles> ApiFiles<T> {
         &self.spec_files
     }
 
-    pub fn latest_link(&self) -> Option<&VersionedApiSpecFileName> {
+    pub fn latest_link(&self) -> Option<&VersionedApiDocFileName> {
         self.latest_link.as_ref()
     }
 
@@ -893,7 +893,7 @@ impl<T: AsRawFiles> ApiFiles<T> {
 /// being able to access their names.
 pub trait SpecFileInfo {
     /// Returns the spec file name.
-    fn spec_file_name(&self) -> &ApiSpecFileName;
+    fn spec_file_name(&self) -> &ApiDocFileName;
 
     /// Returns the version from the parsed file, if available.
     ///
@@ -904,7 +904,7 @@ pub trait SpecFileInfo {
 }
 
 impl SpecFileInfo for ApiSpecFile {
-    fn spec_file_name(&self) -> &ApiSpecFileName {
+    fn spec_file_name(&self) -> &ApiDocFileName {
         &self.name
     }
 
@@ -977,7 +977,7 @@ pub trait ApiLoad {
     /// allowed in this context, `None` otherwise. When `Self::Unparseable` is
     /// `Infallible`, this always returns `None`.
     fn make_unparseable(
-        name: ApiSpecFileName,
+        name: ApiDocFileName,
         contents: Vec<u8>,
     ) -> Option<Self::Unparseable>;
 
@@ -1035,7 +1035,7 @@ mod tests {
         let name = parse_lockstep_file_name(&apis, "lockstep.json").unwrap();
         assert_eq!(
             name,
-            LockstepApiSpecFileName::new(ApiIdent::from("lockstep".to_owned()))
+            LockstepApiDocFileName::new(ApiIdent::from("lockstep".to_owned()))
         );
     }
 
@@ -1050,7 +1050,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             name,
-            VersionedApiSpecFileName::new(
+            VersionedApiDocFileName::new(
                 ApiIdent::from("versioned".to_owned()),
                 Version::new(1, 2, 3),
                 "feedface".to_owned(),
@@ -1142,7 +1142,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             name,
-            VersionedApiSpecFileName::new_git_stub(
+            VersionedApiDocFileName::new_git_stub(
                 ApiIdent::from("versioned".to_owned()),
                 Version::new(1, 2, 3),
                 "feedface".to_owned(),

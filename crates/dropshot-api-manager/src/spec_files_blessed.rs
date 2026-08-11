@@ -16,7 +16,7 @@ use crate::{
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
+    ApiDocFileName, ApiIdent, VersionedApiDocFileName,
 };
 use git_stub::{GitCommitHash, GitStub};
 use rayon::prelude::*;
@@ -35,7 +35,7 @@ use std::{collections::BTreeMap, ops::Deref};
 pub struct BlessedApiSpecFile {
     inner: ApiSpecFile,
     /// Cached versioned filename, avoiding repeated conversion.
-    versioned_name: VersionedApiSpecFileName,
+    versioned_name: VersionedApiDocFileName,
 }
 
 impl std::fmt::Debug for BlessedApiSpecFile {
@@ -77,10 +77,10 @@ impl BlessedApiSpecFile {
 
     /// Returns the versioned spec file name.
     ///
-    /// Unlike `spec_file_name()` which returns `&ApiSpecFileName`, this method
-    /// returns the more specific `&VersionedApiSpecFileName` since blessed
+    /// Unlike `spec_file_name()` which returns `&ApiDocFileName`, this method
+    /// returns the more specific `&VersionedApiDocFileName` since blessed
     /// files are always versioned.
-    pub fn versioned_spec_file_name(&self) -> &VersionedApiSpecFileName {
+    pub fn versioned_spec_file_name(&self) -> &VersionedApiDocFileName {
         &self.versioned_name
     }
 }
@@ -109,7 +109,7 @@ impl ApiLoad for BlessedApiSpecFile {
     }
 
     fn make_unparseable(
-        _name: ApiSpecFileName,
+        _name: ApiDocFileName,
         _contents: Vec<u8>,
     ) -> Option<Self::Unparseable> {
         None
@@ -368,7 +368,7 @@ fn process_blessed_entry(
             let Some(spec_file_name) =
                 parse_versioned_file_name(apis, api_dir, basename)
                     .ok()
-                    .map(ApiSpecFileName::from)
+                    .map(ApiDocFileName::from)
             else {
                 return BlessedFileResult::VersionedParseFailed {
                     api_dir: api_dir.to_owned(),
@@ -400,7 +400,7 @@ fn process_blessed_entry(
             let Some(spec_file_name) =
                 parse_versioned_git_stub_file_name(apis, api_dir, basename)
                     .ok()
-                    .map(ApiSpecFileName::from)
+                    .map(ApiDocFileName::from)
             else {
                 return BlessedFileResult::GitStubParseFailed {
                     api_dir: api_dir.to_owned(),
