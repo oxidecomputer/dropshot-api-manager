@@ -250,12 +250,12 @@ impl ManagedApi {
         // but this is the easiest way to do so (currently, Dropshot doesn't
         // return the OpenAPI type directly). It is also consistent with the
         // other code paths.
-        let contents = self.generate_spec_bytes(version)?;
+        let contents = self.generate_doc_bytes(version)?;
         serde_json::from_slice(&contents)
             .context("generated document is not valid OpenAPI")
     }
 
-    pub(crate) fn generate_spec_bytes(
+    pub(crate) fn generate_doc_bytes(
         &self,
         version: &semver::Version,
     ) -> anyhow::Result<Vec<u8>> {

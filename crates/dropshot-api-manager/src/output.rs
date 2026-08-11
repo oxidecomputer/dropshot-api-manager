@@ -159,7 +159,7 @@ fn format_diff_path(prefix: &str, path: &Utf8Path) -> String {
     }
 }
 
-pub(crate) fn display_api_spec(api: &ManagedApi, styles: &Styles) -> String {
+pub(crate) fn display_api_doc(api: &ManagedApi, styles: &Styles) -> String {
     let mut versions = api.iter_versions_semver();
     let count = versions.len();
     let latest_version =
@@ -182,7 +182,7 @@ pub(crate) fn display_api_spec(api: &ManagedApi, styles: &Styles) -> String {
     }
 }
 
-pub(crate) fn display_api_spec_version(
+pub(crate) fn display_api_doc_version(
     api: &ManagedApi,
     version: &semver::Version,
     styles: &Styles,
@@ -499,7 +499,7 @@ fn summarize_one(
             writer,
             "{:>HEADER_WIDTH$} {}",
             FRESH.style(styles.success_header),
-            display_api_spec_version(api, version, styles, resolution),
+            display_api_doc_version(api, version, styles, resolution),
         )?;
     } else {
         // There were one or more problems, some of which may be unfixable.
@@ -512,7 +512,7 @@ fn summarize_one(
                 assert!(resolution.has_problems());
                 STALE.style(styles.warning_header)
             },
-            display_api_spec_version(api, version, styles, resolution),
+            display_api_doc_version(api, version, styles, resolution),
         )?;
 
         let compat_ctx = CompatDisplayContext {
@@ -584,9 +584,9 @@ where
             let diff =
                 TextDiff::from_lines(blessed.contents(), generated.contents());
             let path1 =
-                env.openapi_abs_dir().join(blessed.spec_file_name().path());
+                env.openapi_abs_dir().join(blessed.doc_file_name().path());
             let path2 =
-                env.openapi_abs_dir().join(generated.spec_file_name().path());
+                env.openapi_abs_dir().join(generated.doc_file_name().path());
             let indent = " ".repeat(HEADER_WIDTH + 1);
             write_diff(
                 &diff,
@@ -614,10 +614,10 @@ where
                     generated.contents(),
                 );
                 let path1 =
-                    env.openapi_abs_dir().join(found.spec_file_name().path());
+                    env.openapi_abs_dir().join(found.doc_file_name().path());
                 let path2 = env
                     .openapi_abs_dir()
-                    .join(generated.spec_file_name().path());
+                    .join(generated.doc_file_name().path());
                 Some((diff, path1, path2))
             }
             VersionProblem::ExtraFileStale {
@@ -628,19 +628,19 @@ where
                 let diff = TextDiff::from_lines(actual, expected);
                 Some((diff, full_path.clone(), full_path.clone()))
             }
-            VersionProblem::LocalVersionStale { spec_files, generated }
-                if spec_files.len() == 1 =>
+            VersionProblem::LocalVersionStale { doc_files, generated }
+                if doc_files.len() == 1 =>
             {
                 let diff = TextDiff::from_lines(
-                    spec_files[0].contents(),
+                    doc_files[0].contents(),
                     generated.contents(),
                 );
                 let path1 = env
                     .openapi_abs_dir()
-                    .join(spec_files[0].spec_file_name().path());
+                    .join(doc_files[0].doc_file_name().path());
                 let path2 = env
                     .openapi_abs_dir()
-                    .join(generated.spec_file_name().path());
+                    .join(generated.doc_file_name().path());
                 Some((diff, path1, path2))
             }
             _ => None,

@@ -1,8 +1,8 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::{
     apis::ManagedApis,
-    output::{OutputOpts, display_api_spec, display_error, plural},
+    output::{OutputOpts, display_api_doc, display_error, plural},
 };
 use indent_write::io::IndentWriter;
 use openapiv3::OpenAPI;
@@ -138,13 +138,13 @@ pub(crate) fn list_impl(
             }
         }
     } else {
-        for (ix, spec) in apis.iter_apis().enumerate() {
+        for (ix, api) in apis.iter_apis().enumerate() {
             let count = ix + 1;
 
             writeln!(
                 &mut out,
                 "{count:count_width$}) {}",
-                display_api_spec(spec, &styles),
+                display_api_doc(api, &styles),
             )?;
         }
 

@@ -5,12 +5,12 @@
 
 use crate::{
     apis::ManagedApis,
-    environment::ErrorAccumulator,
-    spec_files_generic::{
-        ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        GitStubKey, SpecFileInfo, parse_versioned_file_name,
+    doc_files_generic::{
+        ApiDocFile, ApiDocFilesBuilder, ApiFiles, ApiLoad, AsRawFiles,
+        DocFileInfo, GitStubKey, parse_versioned_file_name,
         parse_versioned_git_stub_file_name,
     },
+    environment::ErrorAccumulator,
     vcs::{RepoVcs, VcsRevision},
 };
 use anyhow::{anyhow, bail};
@@ -22,7 +22,7 @@ use git_stub::{GitCommitHash, GitStub};
 use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
 
-/// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents from
+/// Newtype wrapper around [`ApiDocFile`] to describe OpenAPI documents from
 /// the "blessed" source.
 ///
 /// The blessed source contains the documents that are not allowed to be changed
@@ -32,43 +32,41 @@ use std::{collections::BTreeMap, ops::Deref};
 /// don't have a meaningful "blessed" source since they're always regenerated.
 /// The type system enforces this invariant: construction will panic if given a
 /// lockstep spec.
-pub struct BlessedApiSpecFile {
-    inner: ApiSpecFile,
+pub struct BlessedApiDocFile {
+    inner: ApiDocFile,
     /// Cached versioned filename, avoiding repeated conversion.
     versioned_name: VersionedApiDocFileName,
 }
 
-impl std::fmt::Debug for BlessedApiSpecFile {
+impl std::fmt::Debug for BlessedApiDocFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BlessedApiSpecFile")
-            .field("inner", &self.inner)
-            .finish()
+        f.debug_struct("BlessedApiDocFile").field("inner", &self.inner).finish()
     }
 }
 
-impl Deref for BlessedApiSpecFile {
-    type Target = ApiSpecFile;
+impl Deref for BlessedApiDocFile {
+    type Target = ApiDocFile;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl BlessedApiSpecFile {
-    /// Creates a new `BlessedApiSpecFile` from an `ApiSpecFile`.
+impl BlessedApiDocFile {
+    /// Creates a new `BlessedApiDocFile` from an `ApiDocFile`.
     ///
     /// # Panics
     ///
     /// Panics if the spec file is for a lockstep API. Blessed files only exist
     /// for versioned APIs.
-    pub fn new(inner: ApiSpecFile) -> Self {
+    pub fn new(inner: ApiDocFile) -> Self {
         let versioned_name = inner
-            .spec_file_name()
+            .doc_file_name()
             .as_versioned()
             .unwrap_or_else(|| {
                 panic!(
-                    "BlessedApiSpecFile requires a versioned API spec, \
+                    "BlessedApiDocFile requires a versioned API spec, \
                      got lockstep: {}",
-                    inner.spec_file_name()
+                    inner.doc_file_name()
                 )
             })
             .clone();
@@ -77,34 +75,34 @@ impl BlessedApiSpecFile {
 
     /// Returns the versioned spec file name.
     ///
-    /// Unlike `spec_file_name()` which returns `&ApiDocFileName`, this method
+    /// Unlike `doc_file_name()` which returns `&ApiDocFileName`, this method
     /// returns the more specific `&VersionedApiDocFileName` since blessed
     /// files are always versioned.
-    pub fn versioned_spec_file_name(&self) -> &VersionedApiDocFileName {
+    pub fn versioned_doc_file_name(&self) -> &VersionedApiDocFileName {
         &self.versioned_name
     }
 }
 
-// Trait impls that allow us to use `ApiFiles<BlessedApiSpecFile>`
+// Trait impls that allow us to use `ApiFiles<BlessedApiDocFile>`
 //
 // Note that this is NOT a `Vec` because it's NOT allowed to have more than one
-// BlessedApiSpecFile for a given version.
+// BlessedApiDocFile for a given version.
 
-impl ApiLoad for BlessedApiSpecFile {
+impl ApiLoad for BlessedApiDocFile {
     const MISCONFIGURATIONS_ALLOWED: bool = true;
     type Unparseable = std::convert::Infallible;
 
-    fn make_item(raw: ApiSpecFile) -> Self {
-        BlessedApiSpecFile::new(raw)
+    fn make_item(raw: ApiDocFile) -> Self {
+        BlessedApiDocFile::new(raw)
     }
 
-    fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
+    fn try_extend(&mut self, item: ApiDocFile) -> anyhow::Result<()> {
         // This should be impossible.
         bail!(
             "found more than one blessed OpenAPI document for a given \
              API version: at least {} and {}",
-            self.spec_file_name(),
-            item.spec_file_name()
+            self.doc_file_name(),
+            item.doc_file_name()
         );
     }
 
@@ -124,11 +122,11 @@ impl ApiLoad for BlessedApiSpecFile {
     }
 }
 
-impl AsRawFiles for BlessedApiSpecFile {
+impl AsRawFiles for BlessedApiDocFile {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
-        Box::new(std::iter::once(self.deref() as &dyn SpecFileInfo))
+    ) -> Box<dyn Iterator<Item = &'a dyn DocFileInfo> + 'a> {
+        Box::new(std::iter::once(self.deref() as &dyn DocFileInfo))
     }
 }
 
@@ -257,11 +255,11 @@ impl<'a> BlessedPathKind<'a> {
 /// structure.**
 ///
 /// For more on what's been validated at this point, see
-/// [`ApiSpecFilesBuilder`].
+/// [`ApiDocFilesBuilder`].
 #[derive(Debug)]
 pub struct BlessedFiles {
     /// The loaded blessed files.
-    files: BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>,
+    files: BTreeMap<ApiIdent, ApiFiles<BlessedApiDocFile>>,
     /// Git stubs for each blessed file, keyed by (ident, version).
     git_stubs: BTreeMap<GitStubKey, BlessedGitStub>,
     /// The merge base used when loading blessed files from VCS history.
@@ -273,7 +271,7 @@ pub struct BlessedFiles {
 }
 
 impl Deref for BlessedFiles {
-    type Target = BTreeMap<ApiIdent, ApiFiles<BlessedApiSpecFile>>;
+    type Target = BTreeMap<ApiIdent, ApiFiles<BlessedApiDocFile>>;
 
     fn deref(&self) -> &Self::Target {
         &self.files
@@ -315,13 +313,13 @@ enum BlessedFileResult {
     /// Read a versioned JSON file from git. The `result` indicates whether
     /// deserialization succeeded.
     VersionedDeserialized {
-        result: Result<ApiSpecFile, anyhow::Error>,
+        result: Result<ApiDocFile, anyhow::Error>,
         git_path: String,
     },
     /// Read a Git stub file and resolved its contents. The `result`
     /// indicates whether deserialization succeeded.
     GitStubDeserialized {
-        result: Result<ApiSpecFile, anyhow::Error>,
+        result: Result<ApiDocFile, anyhow::Error>,
         git_stub: GitStub,
     },
 
@@ -365,7 +363,7 @@ fn process_blessed_entry(
                 return BlessedFileResult::Skip;
             }
 
-            let Some(spec_file_name) =
+            let Some(doc_file_name) =
                 parse_versioned_file_name(apis, api_dir, basename)
                     .ok()
                     .map(ApiDocFileName::from)
@@ -386,9 +384,9 @@ fn process_blessed_entry(
                 };
 
             // Deserialize.
-            let result = ApiSpecFile::for_contents(spec_file_name, contents)
+            let result = ApiDocFile::for_contents(doc_file_name, contents)
                 .map_err(|(err, _bytes)| {
-                    // BlessedApiSpecFile doesn't track unparseable
+                    // BlessedApiDocFile doesn't track unparseable
                     // files, so drop the raw bytes (as _bytes).
                     err
                 });
@@ -397,7 +395,7 @@ fn process_blessed_entry(
         }
 
         BlessedPathKind::GitStubFile { api_dir, basename } => {
-            let Some(spec_file_name) =
+            let Some(doc_file_name) =
                 parse_versioned_git_stub_file_name(apis, api_dir, basename)
                     .ok()
                     .map(ApiDocFileName::from)
@@ -449,9 +447,8 @@ fn process_blessed_entry(
                 };
 
             // Deserialize.
-            let result =
-                ApiSpecFile::for_contents(spec_file_name, json_contents)
-                    .map_err(|(err, _bytes)| err);
+            let result = ApiDocFile::for_contents(doc_file_name, json_contents)
+                .map_err(|(err, _bytes)| err);
 
             BlessedFileResult::GitStubDeserialized { result, git_stub }
         }
@@ -520,8 +517,8 @@ impl BlessedFiles {
             .collect();
 
         // Phase 2 (reduce): build up the internal builder state.
-        let mut api_files: ApiSpecFilesBuilder<BlessedApiSpecFile> =
-            ApiSpecFilesBuilder::new(apis, error_accumulator);
+        let mut api_files: ApiDocFilesBuilder<BlessedApiDocFile> =
+            ApiDocFilesBuilder::new(apis, error_accumulator);
         let mut git_stubs: BTreeMap<GitStubKey, BlessedGitStub> =
             BTreeMap::new();
         // Cache for `versioned_directory()` results to avoid duplicate
@@ -551,7 +548,7 @@ impl BlessedFiles {
                         // when needed (i.e., when Git stub storage is
                         // enabled).
                         let version = file.version().clone();
-                        let ident = file.spec_file_name().ident().clone();
+                        let ident = file.doc_file_name().ident().clone();
                         git_stubs.insert(
                             GitStubKey { ident, version },
                             BlessedGitStub::Lazy {
@@ -571,7 +568,7 @@ impl BlessedFiles {
                             // The Git stub already contains the first
                             // commit, so use it directly.
                             let version = file.version().clone();
-                            let ident = file.spec_file_name().ident().clone();
+                            let ident = file.doc_file_name().ident().clone();
                             git_stubs.insert(
                                 GitStubKey { ident, version },
                                 BlessedGitStub::Known {
@@ -612,8 +609,8 @@ impl BlessedFiles {
     }
 }
 
-impl<'a> From<ApiSpecFilesBuilder<'a, BlessedApiSpecFile>> for BlessedFiles {
-    fn from(api_files: ApiSpecFilesBuilder<'a, BlessedApiSpecFile>) -> Self {
+impl<'a> From<ApiDocFilesBuilder<'a, BlessedApiDocFile>> for BlessedFiles {
+    fn from(api_files: ApiDocFilesBuilder<'a, BlessedApiDocFile>) -> Self {
         // When loading from a directory, we don't have Git stubs or a merge
         // base.
         BlessedFiles {

@@ -1,8 +1,8 @@
 // Copyright 2026 Oxide Computer Company
 
 use crate::{
-    apis::ManagedApi, environment::ResolvedEnv,
-    spec_files_generated::GeneratedApiSpecFile,
+    apis::ManagedApi, doc_files_generated::GeneratedApiDocFile,
+    environment::ResolvedEnv,
 };
 use anyhow::Context;
 use atomicwrites::AtomicFile;
@@ -24,13 +24,13 @@ pub fn validate(
     is_latest: bool,
     is_blessed: Option<bool>,
     validation: Option<&DynValidationFn>,
-    generated: &GeneratedApiSpecFile,
+    generated: &GeneratedApiDocFile,
 ) -> anyhow::Result<Vec<(Utf8PathBuf, CheckStatus)>> {
     let openapi = generated.openapi();
     let validation_result = validate_generated_openapi_document(
         api,
         openapi,
-        generated.spec_file_name(),
+        generated.doc_file_name(),
         is_latest,
         is_blessed,
         validation,

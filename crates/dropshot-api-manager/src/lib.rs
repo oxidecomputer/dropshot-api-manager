@@ -11,14 +11,14 @@
 mod apis;
 mod cmd;
 mod compatibility;
+mod doc_files_blessed;
+mod doc_files_generated;
+mod doc_files_generic;
+mod doc_files_local;
 mod environment;
 mod iter_only;
 mod output;
 mod resolved;
-mod spec_files_blessed;
-mod spec_files_generated;
-mod spec_files_generic;
-mod spec_files_local;
 pub mod test_util;
 mod validation;
 mod vcs;

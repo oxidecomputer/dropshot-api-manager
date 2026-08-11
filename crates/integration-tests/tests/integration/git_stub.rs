@@ -3288,7 +3288,7 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -3324,7 +3324,7 @@ fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -3366,7 +3366,7 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -3407,7 +3407,7 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );

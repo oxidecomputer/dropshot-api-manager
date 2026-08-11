@@ -14,8 +14,8 @@ use drift::{Change, ChangeClass, ChangeInfo, ChangePath};
 
 impl ApiCompatIssue {
     fn new(
-        blessed_spec: &serde_json::Value,
-        generated_spec: &serde_json::Value,
+        blessed_doc: &serde_json::Value,
+        generated_doc: &serde_json::Value,
         paths: Vec<ChangePath>,
         change_infos: Vec<ChangeInfo>,
         blessed_op_ids: &OperationIdMap<'_>,
@@ -43,10 +43,10 @@ impl ApiCompatIssue {
         // the diff renders as plain additions (or deletions) of the one
         // endpoint that actually changed.
         let blessed_value = (!blessed_base.is_paths_root())
-            .then(|| get_json_value(blessed_base_ptr, blessed_spec))
+            .then(|| get_json_value(blessed_base_ptr, blessed_doc))
             .flatten();
         let generated_value = (!generated_base.is_paths_root())
-            .then(|| get_json_value(generated_base_ptr, generated_spec))
+            .then(|| get_json_value(generated_base_ptr, generated_doc))
             .flatten();
 
         let changes =
@@ -266,13 +266,13 @@ fn extract_operation_ids(doc: &serde_json::Value) -> OperationIdMap<'_> {
 
 fn get_json_value(
     pointer: &str,
-    spec: &serde_json::Value,
+    doc: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     // serde_json's JSON Pointer implementation does not accept
     // leading `#`, so strip that.
     let pointer = pointer.trim_start_matches('#');
 
-    spec.pointer(pointer).map(|v| {
+    doc.pointer(pointer).map(|v| {
         // Add a map around the value, with the key being the last
         // component of the pointer.
         let last_component = pointer.split('/').next_back().unwrap_or("");
@@ -537,7 +537,7 @@ mod tests {
     fn test_normalize_already_new_format_is_noop() {
         // Both blessed and generated have the new format — normalization
         // should be a no-op.
-        let mut spec = serde_json::json!({
+        let mut doc = serde_json::json!({
             "paths": {
                 "/subscribe": {
                     "get": {
@@ -555,14 +555,14 @@ mod tests {
             }
         });
 
-        let original = spec.clone();
-        normalize_old_websocket_responses(&mut spec, &original);
-        assert_eq!(spec, original);
+        let original = doc.clone();
+        normalize_old_websocket_responses(&mut doc, &original);
+        assert_eq!(doc, original);
     }
 
     #[test]
     fn test_normalize_no_websocket_endpoints_is_noop() {
-        let mut spec = serde_json::json!({
+        let mut doc = serde_json::json!({
             "paths": {
                 "/health": {
                     "get": {
@@ -573,9 +573,9 @@ mod tests {
             }
         });
 
-        let original = spec.clone();
-        normalize_old_websocket_responses(&mut spec, &original);
-        assert_eq!(spec, original);
+        let original = doc.clone();
+        normalize_old_websocket_responses(&mut doc, &original);
+        assert_eq!(doc, original);
     }
 
     #[test]

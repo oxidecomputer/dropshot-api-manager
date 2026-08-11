@@ -8,13 +8,13 @@ use crate::{
         ApiCompatIssue, CompatDedupMap, CompatIssueLocation,
         FinalizedCompatDedupMap, api_compatible,
     },
+    doc_files_blessed::{BlessedApiDocFile, BlessedFiles, BlessedGitStub},
+    doc_files_generated::{GeneratedApiDocFile, GeneratedFiles},
+    doc_files_generic::{ApiFiles, UnparseableFile},
+    doc_files_local::{LocalApiDocFile, LocalFiles},
     environment::ResolvedEnv,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
-    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles, BlessedGitStub},
-    spec_files_generated::{GeneratedApiSpecFile, GeneratedFiles},
-    spec_files_generic::{ApiFiles, UnparseableFile},
-    spec_files_local::{LocalApiSpecFile, LocalFiles},
     validation::{
         CheckStale, CheckStatus, DynValidationFn, overwrite_file, validate,
     },
@@ -149,10 +149,10 @@ impl Display for ResolutionKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[expect(missing_docs)]
 pub enum ProblemKind {
-    LocalSpecFileOrphaned,
+    LocalDocFileOrphaned,
     UnparseableLocalFile,
     BlessedVersionMissingLocal,
-    BlessedVersionExtraLocalSpec,
+    BlessedVersionExtraLocalDoc,
     BlessedVersionCompareError,
     BlessedVersionBroken,
     BlessedLatestVersionBytewiseMismatch,
@@ -225,13 +225,13 @@ impl ProblemSummary {
 pub enum NonVersionProblem<'a> {
     #[error(
         "A local OpenAPI document was found that does not correspond to a \
-         supported version of this API: {spec_file_name}.  This is unusual, \
+         supported version of this API: {doc_file_name}.  This is unusual, \
          but it could happen if you're either retiring an older version of \
          this API or if you created this version in this branch and later \
          merged with upstream and had to change your local version number.  \
          In either case, this tool can remove the unused file for you."
     )]
-    LocalSpecFileOrphaned { spec_file_name: VersionedApiDocFileName },
+    LocalDocFileOrphaned { doc_file_name: VersionedApiDocFileName },
 
     #[error(
         "A local OpenAPI document could not be parsed: {}. \
@@ -269,23 +269,23 @@ pub enum VersionProblem<'a> {
          missing a local OpenAPI document. This can happen with dependent \
          commits or PRs. This tool can restore the file from the blessed \
          version for you: {}",
-        blessed.versioned_spec_file_name()
+        blessed.versioned_doc_file_name()
     )]
     BlessedVersionMissingLocal {
-        blessed: &'a BlessedApiSpecFile,
+        blessed: &'a BlessedApiDocFile,
         git_stub: Option<GitStub>,
     },
 
     #[error(
         "For this blessed version, found an extra OpenAPI document that does \
-         not match the blessed (upstream) OpenAPI document: {spec_file_name}.  \
+         not match the blessed (upstream) OpenAPI document: {doc_file_name}.  \
          This can happen if you created this version of the API in this branch, \
          then merged with an upstream commit that also added the same version \
          number.  In that case, you likely already bumped your local version \
          number (when you merged the list of supported versions in Rust) and \
          this file is vestigial. This tool can remove the unused file for you."
     )]
-    BlessedVersionExtraLocalSpec { spec_file_name: VersionedApiDocFileName },
+    BlessedVersionExtraLocalDoc { doc_file_name: VersionedApiDocFileName },
 
     #[error(
         "error comparing OpenAPI document generated from current code with \
@@ -310,8 +310,8 @@ pub enum VersionProblem<'a> {
          changes to any endpoints."
     )]
     BlessedLatestVersionBytewiseMismatch {
-        blessed: &'a BlessedApiSpecFile,
-        generated: &'a GeneratedApiSpecFile,
+        blessed: &'a BlessedApiDocFile,
+        generated: &'a GeneratedApiDocFile,
     },
 
     #[error(
@@ -319,16 +319,16 @@ pub enum VersionProblem<'a> {
          only expected if you're adding a new lockstep API.  This tool can \
          generate the file for you."
     )]
-    LockstepMissingLocal { generated: &'a GeneratedApiSpecFile },
+    LockstepMissingLocal { generated: &'a GeneratedApiDocFile },
 
     #[error(
         "For this lockstep API, OpenAPI document generated from the current \
          code does not match the local file: {:?}.  This tool can update the \
-         local file for you.", generated.spec_file_name().path()
+         local file for you.", generated.doc_file_name().path()
     )]
     LockstepStale {
-        found: &'a LocalApiSpecFile,
-        generated: &'a GeneratedApiSpecFile,
+        found: &'a LocalApiDocFile,
+        generated: &'a GeneratedApiDocFile,
     },
 
     #[error(
@@ -336,14 +336,14 @@ pub enum VersionProblem<'a> {
          This is normal if you have added or changed this API version.  \
          This tool can generate the file for you."
     )]
-    LocalVersionMissingLocal { generated: &'a GeneratedApiSpecFile },
+    LocalVersionMissingLocal { generated: &'a GeneratedApiDocFile },
 
     #[error(
         "Extra (incorrect) OpenAPI documents were found for locally-added \
-         version: {spec_file_names}.  This tool can remove the files for you."
+         version: {doc_file_names}.  This tool can remove the files for you."
     )]
     LocalVersionExtra {
-        spec_file_names: DisplayableVec<VersionedApiDocFileName>,
+        doc_file_names: DisplayableVec<VersionedApiDocFileName>,
     },
 
     #[error(
@@ -351,7 +351,7 @@ pub enum VersionProblem<'a> {
          from the current code does not match the local file: {}. \
          This tool can update the local file(s) for you.",
         DisplayableVec(
-            spec_files.iter().map(|s| s.spec_file_name().to_string()).collect()
+            doc_files.iter().map(|s| s.doc_file_name().to_string()).collect()
         )
     )]
     // For versioned APIs, since the filename has its own hash in it, when the
@@ -360,8 +360,8 @@ pub enum VersionProblem<'a> {
     // one will be missing.  The fix will be to remove all the incorrect ones
     // and add the correct one.
     LocalVersionStale {
-        spec_files: Vec<&'a LocalApiSpecFile>,
-        generated: &'a GeneratedApiSpecFile,
+        doc_files: Vec<&'a LocalApiDocFile>,
+        generated: &'a GeneratedApiDocFile,
     },
 
     #[error(
@@ -398,7 +398,7 @@ pub enum VersionProblem<'a> {
          you."
     )]
     BlessedVersionShouldBeGitStub {
-        local_file: &'a LocalApiSpecFile,
+        local_file: &'a LocalApiDocFile,
         git_stub: GitStub,
     },
 
@@ -407,8 +407,8 @@ pub enum VersionProblem<'a> {
          JSON. This tool can perform the conversion for you."
     )]
     GitStubShouldBeJson {
-        local_file: &'a LocalApiSpecFile,
-        blessed: &'a BlessedApiSpecFile,
+        local_file: &'a LocalApiDocFile,
+        blessed: &'a BlessedApiDocFile,
     },
 
     #[error(
@@ -417,8 +417,8 @@ pub enum VersionProblem<'a> {
          blessed version for you."
     )]
     BlessedVersionCorruptedLocal {
-        local_file: &'a LocalApiSpecFile,
-        blessed: &'a BlessedApiSpecFile,
+        local_file: &'a LocalApiDocFile,
+        blessed: &'a BlessedApiDocFile,
         /// If Some, regenerate as a Git stub instead of JSON.
         git_stub: Option<GitStub>,
     },
@@ -427,14 +427,14 @@ pub enum VersionProblem<'a> {
         "Duplicate local file found: both JSON and Git stub versions exist for \
          this API version. This tool can remove the redundant file for you."
     )]
-    DuplicateLocalFile { local_file: &'a LocalApiSpecFile },
+    DuplicateLocalFile { local_file: &'a LocalApiDocFile },
 
     #[error(
         "Git stub has an outdated commit reference that is no longer \
          an ancestor of the merge base. This can happen after a rebase or \
          force-push. This tool can update the Git stub for you."
     )]
-    GitStubCommitStale { local_file: &'a LocalApiSpecFile, git_stub: GitStub },
+    GitStubCommitStale { local_file: &'a LocalApiDocFile, git_stub: GitStub },
 
     #[error(
         "The first commit for this blessed version could not be determined. This \
@@ -444,7 +444,7 @@ pub enum VersionProblem<'a> {
          // <source>".
     )]
     GitStubFirstCommitUnknown {
-        spec_file_name: VersionedApiDocFileName,
+        doc_file_name: VersionedApiDocFileName,
         #[source]
         source: anyhow::Error,
     },
@@ -457,8 +457,8 @@ impl<'a> NonVersionProblem<'a> {
     /// variant without updating this method causes a compile error.
     pub fn kind(&self) -> ProblemKind {
         match self {
-            NonVersionProblem::LocalSpecFileOrphaned { .. } => {
-                ProblemKind::LocalSpecFileOrphaned
+            NonVersionProblem::LocalDocFileOrphaned { .. } => {
+                ProblemKind::LocalDocFileOrphaned
             }
             NonVersionProblem::UnparseableLocalFile { .. } => {
                 ProblemKind::UnparseableLocalFile
@@ -478,9 +478,9 @@ impl<'a> NonVersionProblem<'a> {
 
     pub fn fix(&'a self) -> Option<Fix<'a>> {
         match self {
-            NonVersionProblem::LocalSpecFileOrphaned { spec_file_name } => {
+            NonVersionProblem::LocalDocFileOrphaned { doc_file_name } => {
                 Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![spec_file_name.clone().into()]),
+                    files: DisplayableVec(vec![doc_file_name.clone().into()]),
                 })
             }
             NonVersionProblem::UnparseableLocalFile { unparseable_file } => {
@@ -507,8 +507,8 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::BlessedVersionMissingLocal { .. } => {
                 ProblemKind::BlessedVersionMissingLocal
             }
-            VersionProblem::BlessedVersionExtraLocalSpec { .. } => {
-                ProblemKind::BlessedVersionExtraLocalSpec
+            VersionProblem::BlessedVersionExtraLocalDoc { .. } => {
+                ProblemKind::BlessedVersionExtraLocalDoc
             }
             VersionProblem::BlessedVersionCompareError { .. } => {
                 ProblemKind::BlessedVersionCompareError
@@ -573,7 +573,7 @@ impl<'a> VersionProblem<'a> {
                 compatibility_issues
             }
             VersionProblem::BlessedVersionMissingLocal { .. }
-            | VersionProblem::BlessedVersionExtraLocalSpec { .. }
+            | VersionProblem::BlessedVersionExtraLocalDoc { .. }
             | VersionProblem::BlessedVersionCompareError { .. }
             | VersionProblem::BlessedLatestVersionBytewiseMismatch { .. }
             | VersionProblem::LockstepMissingLocal { .. }
@@ -602,9 +602,9 @@ impl<'a> VersionProblem<'a> {
                 blessed,
                 git_stub: git_stub.as_ref(),
             }),
-            VersionProblem::BlessedVersionExtraLocalSpec { spec_file_name } => {
+            VersionProblem::BlessedVersionExtraLocalDoc { doc_file_name } => {
                 Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![spec_file_name.clone().into()]),
+                    files: DisplayableVec(vec![doc_file_name.clone().into()]),
                 })
             }
             VersionProblem::BlessedVersionCompareError { .. } => None,
@@ -620,10 +620,10 @@ impl<'a> VersionProblem<'a> {
                     generated,
                 })
             }
-            VersionProblem::LocalVersionExtra { spec_file_names } => {
+            VersionProblem::LocalVersionExtra { doc_file_names } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(
-                        spec_file_names
+                        doc_file_names
                             .0
                             .iter()
                             .cloned()
@@ -632,10 +632,10 @@ impl<'a> VersionProblem<'a> {
                     ),
                 })
             }
-            VersionProblem::LocalVersionStale { spec_files, generated } => {
+            VersionProblem::LocalVersionStale { doc_files, generated } => {
                 Some(Fix::UpdateVersionedFiles {
                     old: DisplayableVec(
-                        spec_files.iter().map(|s| s.spec_file_name()).collect(),
+                        doc_files.iter().map(|s| s.doc_file_name()).collect(),
                     ),
                     generated,
                 })
@@ -664,7 +664,7 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::DuplicateLocalFile { local_file } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![
-                        local_file.spec_file_name().clone(),
+                        local_file.doc_file_name().clone(),
                     ]),
                 })
             }
@@ -681,11 +681,11 @@ pub enum Fix<'a> {
         files: DisplayableVec<ApiDocFileName>,
     },
     UpdateLockstepFile {
-        generated: &'a GeneratedApiSpecFile,
+        generated: &'a GeneratedApiDocFile,
     },
     UpdateVersionedFiles {
         old: DisplayableVec<&'a ApiDocFileName>,
-        generated: &'a GeneratedApiSpecFile,
+        generated: &'a GeneratedApiDocFile,
     },
     UpdateExtraFile {
         path: &'a Utf8Path,
@@ -697,18 +697,18 @@ pub enum Fix<'a> {
     },
     /// Convert a full JSON file to a Git stub.
     ConvertToGitStub {
-        local_file: &'a LocalApiSpecFile,
+        local_file: &'a LocalApiDocFile,
         git_stub: &'a GitStub,
     },
     /// Convert a Git stub back to a full JSON file.
     ConvertToJson {
-        local_file: &'a LocalApiSpecFile,
-        blessed: &'a BlessedApiSpecFile,
+        local_file: &'a LocalApiDocFile,
+        blessed: &'a BlessedApiDocFile,
     },
     /// Regenerate a corrupted local file from the blessed content.
     RegenerateFromBlessed {
-        local_file: &'a LocalApiSpecFile,
-        blessed: &'a BlessedApiSpecFile,
+        local_file: &'a LocalApiDocFile,
+        blessed: &'a BlessedApiDocFile,
         /// If Some, regenerate as a Git stub instead of JSON.
         git_stub: Option<&'a GitStub>,
     },
@@ -717,16 +717,16 @@ pub enum Fix<'a> {
     ///
     /// Unlike `RegenerateFromBlessed`, there is no existing `local_file` to
     /// delete. The target path is derived from
-    /// `blessed.versioned_spec_file_name()`.
+    /// `blessed.versioned_doc_file_name()`.
     RestoreFromBlessed {
-        blessed: &'a BlessedApiSpecFile,
+        blessed: &'a BlessedApiDocFile,
         /// If Some, write as a Git stub instead of JSON.
         git_stub: Option<&'a GitStub>,
     },
     /// Update a Git stub whose commit hash has become stale (e.g.,
     /// after a rebase).
     UpdateGitStub {
-        local_file: &'a LocalApiSpecFile,
+        local_file: &'a LocalApiDocFile,
         git_stub: &'a GitStub,
     },
     /// Delete an unparseable file (e.g., one with merge conflict markers).
@@ -749,7 +749,7 @@ impl Display for Fix<'_> {
                 writeln!(
                     f,
                     "rewrite lockstep file {} from generated",
-                    generated.spec_file_name().path()
+                    generated.doc_file_name().path()
                 )?;
             }
             Fix::UpdateVersionedFiles { old, generated } => {
@@ -763,7 +763,7 @@ impl Display for Fix<'_> {
                 writeln!(
                     f,
                     "write new file {} from generated",
-                    generated.spec_file_name().path()
+                    generated.doc_file_name().path()
                 )?;
             }
             Fix::UpdateExtraFile { path, check_stale } => {
@@ -784,14 +784,14 @@ impl Display for Fix<'_> {
                 writeln!(
                     f,
                     "convert {} to Git stub",
-                    local_file.spec_file_name().path()
+                    local_file.doc_file_name().path()
                 )?;
             }
             Fix::ConvertToJson { local_file, .. } => {
                 writeln!(
                     f,
                     "convert {} from Git stub to JSON",
-                    local_file.spec_file_name().path()
+                    local_file.doc_file_name().path()
                 )?;
             }
             Fix::RegenerateFromBlessed { local_file, git_stub, .. } => {
@@ -799,13 +799,13 @@ impl Display for Fix<'_> {
                     writeln!(
                         f,
                         "regenerate {} from blessed content as Git stub",
-                        local_file.spec_file_name().path()
+                        local_file.doc_file_name().path()
                     )?;
                 } else {
                     writeln!(
                         f,
                         "regenerate {} from blessed content",
-                        local_file.spec_file_name().path()
+                        local_file.doc_file_name().path()
                     )?;
                 }
             }
@@ -814,13 +814,13 @@ impl Display for Fix<'_> {
                     writeln!(
                         f,
                         "restore {} from blessed content as Git stub",
-                        blessed.versioned_spec_file_name().to_git_stub().path()
+                        blessed.versioned_doc_file_name().to_git_stub().path()
                     )?;
                 } else {
                     writeln!(
                         f,
                         "restore {} from blessed content",
-                        blessed.versioned_spec_file_name().path()
+                        blessed.versioned_doc_file_name().path()
                     )?;
                 }
             }
@@ -828,7 +828,7 @@ impl Display for Fix<'_> {
                 writeln!(
                     f,
                     "update Git stub {} to commit {}",
-                    local_file.spec_file_name().path(),
+                    local_file.doc_file_name().path(),
                     git_stub.commit(),
                 )?;
             }
@@ -848,10 +848,10 @@ impl Fix<'_> {
         match self {
             Fix::DeleteFiles { .. } => {}
             Fix::UpdateLockstepFile { generated } => {
-                paths.insert(generated.spec_file_name().path().to_owned());
+                paths.insert(generated.doc_file_name().path().to_owned());
             }
             Fix::UpdateVersionedFiles { generated, .. } => {
-                paths.insert(generated.spec_file_name().path().to_owned());
+                paths.insert(generated.doc_file_name().path().to_owned());
             }
             Fix::UpdateExtraFile { path, .. } => {
                 paths.insert((*path).to_owned());
@@ -860,13 +860,13 @@ impl Fix<'_> {
             Fix::ConvertToGitStub { local_file, .. } => {
                 // Writes to the .gitstub path, not the JSON path.
                 paths.insert(
-                    local_file.spec_file_name().to_git_stub_filename().path(),
+                    local_file.doc_file_name().to_git_stub_filename().path(),
                 );
             }
             Fix::ConvertToJson { local_file, .. } => {
                 // Writes to the JSON path.
                 paths.insert(
-                    local_file.spec_file_name().to_json_filename().path(),
+                    local_file.doc_file_name().to_json_filename().path(),
                 );
             }
             Fix::RegenerateFromBlessed { local_file, git_stub, .. } => {
@@ -874,29 +874,29 @@ impl Fix<'_> {
                     // Writes to a .gitstub file.
                     paths.insert(
                         local_file
-                            .spec_file_name()
+                            .doc_file_name()
                             .to_git_stub_filename()
                             .path(),
                     );
                 } else {
                     // Overwrites the corrupted local file.
-                    paths.insert(local_file.spec_file_name().path().to_owned());
+                    paths.insert(local_file.doc_file_name().path().to_owned());
                 }
             }
             Fix::RestoreFromBlessed { blessed, git_stub } => {
                 if git_stub.is_some() {
                     paths.insert(
-                        blessed.versioned_spec_file_name().to_git_stub().path(),
+                        blessed.versioned_doc_file_name().to_git_stub().path(),
                     );
                 } else {
                     paths.insert(
-                        blessed.versioned_spec_file_name().path().to_owned(),
+                        blessed.versioned_doc_file_name().path().to_owned(),
                     );
                 }
             }
             Fix::UpdateGitStub { local_file, .. } => {
                 // Overwrites the existing .gitstub file in place.
-                paths.insert(local_file.spec_file_name().path().to_owned());
+                paths.insert(local_file.doc_file_name().path().to_owned());
             }
             Fix::DeleteUnparseableFile { .. } => {}
         }
@@ -917,7 +917,7 @@ impl Fix<'_> {
                 Ok(rv)
             }
             Fix::UpdateLockstepFile { generated } => {
-                let path = root.join(generated.spec_file_name().path());
+                let path = root.join(generated.doc_file_name().path());
                 Ok(vec![format!(
                     "updated {}: {:?}",
                     &path,
@@ -932,7 +932,7 @@ impl Fix<'_> {
                     rv.push(format!("removed {}", path));
                 }
 
-                let path = root.join(generated.spec_file_name().path());
+                let path = root.join(generated.doc_file_name().path());
                 rv.push(format!(
                     "created {}: {:?}",
                     path,
@@ -974,10 +974,10 @@ impl Fix<'_> {
                 Ok(vec![format!("wrote link {} -> {}", path, target)])
             }
             Fix::ConvertToGitStub { local_file, git_stub } => {
-                let json_path = root.join(local_file.spec_file_name().path());
+                let json_path = root.join(local_file.doc_file_name().path());
 
                 let git_stub_basename =
-                    local_file.spec_file_name().git_stub_basename();
+                    local_file.doc_file_name().git_stub_basename();
                 let git_stub_path = json_path
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
@@ -1003,13 +1003,13 @@ impl Fix<'_> {
             }
             Fix::ConvertToJson { local_file, blessed } => {
                 let git_stub_path =
-                    root.join(local_file.spec_file_name().path());
+                    root.join(local_file.doc_file_name().path());
 
                 // Use the blessed file's contents since it's guaranteed to be
                 // valid.
                 let contents = blessed.contents();
 
-                let json_basename = local_file.spec_file_name().json_basename();
+                let json_basename = local_file.doc_file_name().json_basename();
                 let json_path = git_stub_path
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
@@ -1028,7 +1028,7 @@ impl Fix<'_> {
                 ])
             }
             Fix::RegenerateFromBlessed { local_file, blessed, git_stub } => {
-                let local_path = root.join(local_file.spec_file_name().path());
+                let local_path = root.join(local_file.doc_file_name().path());
 
                 // Remove the corrupted file.
                 match fs_err::remove_file(&local_path) {
@@ -1040,7 +1040,7 @@ impl Fix<'_> {
                 if let Some(git_stub) = git_stub {
                     // Write as a Git stub.
                     let git_stub_basename =
-                        local_file.spec_file_name().git_stub_basename();
+                        local_file.doc_file_name().git_stub_basename();
                     let git_stub_path = local_path
                         .parent()
                         .ok_or_else(|| anyhow!("cannot get parent directory"))?
@@ -1072,7 +1072,7 @@ impl Fix<'_> {
             Fix::RestoreFromBlessed { blessed, git_stub } => {
                 if let Some(git_stub) = git_stub {
                     let git_stub_path = root.join(
-                        blessed.versioned_spec_file_name().to_git_stub().path(),
+                        blessed.versioned_doc_file_name().to_git_stub().path(),
                     );
                     let overwrite_status = overwrite_file(
                         &git_stub_path,
@@ -1084,7 +1084,7 @@ impl Fix<'_> {
                     )])
                 } else {
                     let path =
-                        root.join(blessed.versioned_spec_file_name().path());
+                        root.join(blessed.versioned_doc_file_name().path());
                     let overwrite_status =
                         overwrite_file(&path, blessed.contents())?;
                     Ok(vec![format!(
@@ -1095,7 +1095,7 @@ impl Fix<'_> {
             }
             Fix::UpdateGitStub { local_file, git_stub } => {
                 let git_stub_path =
-                    root.join(local_file.spec_file_name().path());
+                    root.join(local_file.doc_file_name().path());
                 let overwrite_status = overwrite_file(
                     &git_stub_path,
                     git_stub.to_file_contents().as_bytes(),
@@ -1185,15 +1185,15 @@ impl<'a> Resolved<'a> {
             ApiIdent,
             Option<semver::Version>,
             NonVersionProblem<'_>,
-        )> = resolve_orphaned_local_specs(&supported_versions_by_api, local)
-            .map(|spec_file_name| {
-                let ident = spec_file_name.ident().clone();
-                let version = Some(spec_file_name.version().clone());
+        )> = resolve_orphaned_local_docs(&supported_versions_by_api, local)
+            .map(|doc_file_name| {
+                let ident = doc_file_name.ident().clone();
+                let version = Some(doc_file_name.version().clone());
                 (
                     ident,
                     version,
-                    NonVersionProblem::LocalSpecFileOrphaned {
-                        spec_file_name: spec_file_name.clone(),
+                    NonVersionProblem::LocalDocFileOrphaned {
+                        doc_file_name: doc_file_name.clone(),
                     },
                 )
             })
@@ -1428,7 +1428,7 @@ fn resolve_removed_blessed_versions<'a>(
     })
 }
 
-fn resolve_orphaned_local_specs<'a>(
+fn resolve_orphaned_local_docs<'a>(
     supported_versions_by_api: &'a BTreeMap<
         &'a ApiIdent,
         BTreeSet<&'a semver::Version>,
@@ -1445,7 +1445,7 @@ fn resolve_orphaned_local_specs<'a>(
             .filter_map(move |(version, files)| match set {
                 Some(set) if !set.contains(version) => {
                     Some(files.iter().map(|f| {
-                        f.spec_file_name()
+                        f.doc_file_name()
                             .as_versioned()
                             .expect("orphaned specs are versioned")
                     }))
@@ -1463,9 +1463,9 @@ fn resolve_api<'a>(
     validation: Option<&DynValidationFn>,
     use_git_stub_storage: bool,
     all_blessed: &'a BlessedFiles,
-    api_blessed: Option<&'a ApiFiles<BlessedApiSpecFile>>,
-    api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
-    api_local: Option<&'a ApiFiles<Vec<LocalApiSpecFile>>>,
+    api_blessed: Option<&'a ApiFiles<BlessedApiDocFile>>,
+    api_generated: &'a ApiFiles<GeneratedApiDocFile>,
+    api_local: Option<&'a ApiFiles<Vec<LocalApiDocFile>>>,
 ) -> ApiResolved<'a> {
     let (by_version, symlink) = if api.is_lockstep() {
         (
@@ -1508,11 +1508,11 @@ fn resolve_api<'a>(
                             // version.
                             let blessed_file = api_blessed
                                 .and_then(|b| b.versions().get(latest_version));
-                            let spec_file_name = blessed_file
-                                .map(|f| f.versioned_spec_file_name().clone());
+                            let doc_file_name = blessed_file
+                                .map(|f| f.versioned_doc_file_name().clone());
                             (
                                 LatestFirstCommit::BlessedError,
-                                Some((spec_file_name, error)),
+                                Some((doc_file_name, error)),
                             )
                         }
                     },
@@ -1580,11 +1580,11 @@ fn resolve_api<'a>(
 
         // If there was an error computing the first commit for the latest
         // version, add the error to the latest version's resolution.
-        if let Some((Some(spec_file_name), error)) = latest_first_commit_error
+        if let Some((Some(doc_file_name), error)) = latest_first_commit_error
             && let Some(resolution) = by_version.get_mut(latest_version)
         {
             resolution.add_problem(VersionProblem::GitStubFirstCommitUnknown {
-                spec_file_name,
+                doc_file_name,
                 source: error,
             });
         }
@@ -1683,7 +1683,7 @@ fn resolve_api<'a>(
                                 });
                             Some(NonVersionProblem::LatestLinkStale {
                                 api_ident: api.ident().clone(),
-                                link: blessed.versioned_spec_file_name(),
+                                link: blessed.versioned_doc_file_name(),
                                 found: latest_local,
                             })
                         }
@@ -1727,7 +1727,7 @@ fn resolve_api<'a>(
                             });
                         Some(NonVersionProblem::LatestLinkMissing {
                             api_ident: api.ident().clone(),
-                            link: blessed.versioned_spec_file_name(),
+                            link: blessed.versioned_doc_file_name(),
                         })
                     }
                     ResolutionKind::NewLocally => {
@@ -1752,8 +1752,8 @@ fn resolve_api_lockstep<'a>(
     env: &'a ResolvedEnv,
     api: &'a ManagedApi,
     validation: Option<&DynValidationFn>,
-    api_generated: &'a ApiFiles<GeneratedApiSpecFile>,
-    api_local: Option<&'a ApiFiles<Vec<LocalApiSpecFile>>>,
+    api_generated: &'a ApiFiles<GeneratedApiDocFile>,
+    api_local: Option<&'a ApiFiles<Vec<LocalApiDocFile>>>,
 ) -> BTreeMap<semver::Version, Resolution<'a>> {
     assert!(api.is_lockstep());
 
@@ -1838,10 +1838,10 @@ fn resolve_api_version<'a>(
     validation: Option<&DynValidationFn>,
     use_git_stub_storage: bool,
     version: ApiVersion<'_>,
-    blessed: Option<&'a BlessedApiSpecFile>,
+    blessed: Option<&'a BlessedApiDocFile>,
     git_stub: Option<&'a BlessedGitStub>,
-    generated: &'a GeneratedApiSpecFile,
-    local: &'a [LocalApiSpecFile],
+    generated: &'a GeneratedApiDocFile,
+    local: &'a [LocalApiDocFile],
     latest_first_commit: LatestFirstCommit,
     merge_base: Option<GitCommitHash>,
 ) -> Resolution<'a> {
@@ -1872,10 +1872,10 @@ fn resolve_api_version_blessed<'a>(
     validation: Option<&DynValidationFn>,
     use_git_stub_storage: bool,
     version: ApiVersion<'_>,
-    blessed: &'a BlessedApiSpecFile,
+    blessed: &'a BlessedApiDocFile,
     git_stub: Option<&'a BlessedGitStub>,
-    generated: &'a GeneratedApiSpecFile,
-    local: &'a [LocalApiSpecFile],
+    generated: &'a GeneratedApiDocFile,
+    local: &'a [LocalApiDocFile],
     latest_first_commit: LatestFirstCommit,
     merge_base: Option<GitCommitHash>,
 ) -> Resolution<'a> {
@@ -1933,7 +1933,7 @@ fn resolve_api_version_blessed<'a>(
     // 2. Unparseable files with matching hash -> corrupted (need regeneration)
     // 3. Everything else -> non-matching
     let blessed_hash = blessed
-        .spec_file_name()
+        .doc_file_name()
         .hash()
         .expect("this should be a versioned file so it should have a hash");
 
@@ -1943,7 +1943,7 @@ fn resolve_api_version_blessed<'a>(
 
     for local_file in local {
         let local_hash = local_file
-            .spec_file_name()
+            .doc_file_name()
             .hash()
             .expect("this should be a versioned file so it should have a hash");
         let hashes_match = local_hash == blessed_hash;
@@ -1989,8 +1989,8 @@ fn resolve_api_version_blessed<'a>(
                         Err(error) => {
                             problems.push(
                                 VersionProblem::GitStubFirstCommitUnknown {
-                                    spec_file_name: blessed
-                                        .versioned_spec_file_name()
+                                    doc_file_name: blessed
+                                        .versioned_doc_file_name()
                                         .clone(),
                                     source: error,
                                 },
@@ -2054,7 +2054,7 @@ fn resolve_api_version_blessed<'a>(
             // version. Mark the redundant file (always the gitstub file in this
             // case) for deletion.
             for local_file in matching {
-                if local_file.spec_file_name().is_git_stub() {
+                if local_file.doc_file_name().is_git_stub() {
                     problems.push(VersionProblem::DuplicateLocalFile {
                         local_file,
                     });
@@ -2062,7 +2062,7 @@ fn resolve_api_version_blessed<'a>(
             }
         } else {
             let local_file = matching[0];
-            if local_file.spec_file_name().is_git_stub() {
+            if local_file.doc_file_name().is_git_stub() {
                 problems.push(VersionProblem::GitStubShouldBeJson {
                     local_file,
                     blessed,
@@ -2094,7 +2094,7 @@ fn resolve_api_version_blessed<'a>(
         // compared to what the blessed source expects. This is shared
         // between the single-match and duplicate-files branches below.
         let check_git_stub_staleness =
-            |local_file: &'a LocalApiSpecFile,
+            |local_file: &'a LocalApiDocFile,
              expected_git_stub: &GitStub,
              problems: &mut Vec<VersionProblem<'a>>| {
                 // Non-gitstub files (JSON) don't have a commit to check.
@@ -2119,7 +2119,7 @@ fn resolve_api_version_blessed<'a>(
             for local_file in matching {
                 match (
                     &storage_format,
-                    local_file.spec_file_name().is_git_stub(),
+                    local_file.doc_file_name().is_git_stub(),
                 ) {
                     // Should be Git stub but have JSON, or should be JSON but
                     // have Git stub: this file is redundant.
@@ -2148,7 +2148,7 @@ fn resolve_api_version_blessed<'a>(
         } else {
             let local_file = matching[0];
 
-            match (&storage_format, local_file.spec_file_name().is_git_stub()) {
+            match (&storage_format, local_file.doc_file_name().is_git_stub()) {
                 (VersionStorageFormat::GitStub(git_stub), false) => {
                     // Should be Git stub but is JSON: convert to Git stub.
                     problems.push(
@@ -2186,9 +2186,9 @@ fn resolve_api_version_blessed<'a>(
 
     // Report non-matching local files as extra.
     problems.extend(non_matching.into_iter().map(|s| {
-        VersionProblem::BlessedVersionExtraLocalSpec {
-            spec_file_name: s
-                .spec_file_name()
+        VersionProblem::BlessedVersionExtraLocalDoc {
+            doc_file_name: s
+                .doc_file_name()
                 .as_versioned()
                 .expect("blessed extra spec is versioned")
                 .clone(),
@@ -2203,8 +2203,8 @@ fn resolve_api_version_local<'a>(
     api: &'_ ManagedApi,
     validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
-    generated: &'a GeneratedApiSpecFile,
-    local: &'a [LocalApiSpecFile],
+    generated: &'a GeneratedApiDocFile,
+    local: &'a [LocalApiDocFile],
 ) -> Resolution<'a> {
     let mut problems = Vec::new();
 
@@ -2224,25 +2224,25 @@ fn resolve_api_version_local<'a>(
         } else {
             // There were non-matching specs.  This is your basic "stale" case.
             problems.push(VersionProblem::LocalVersionStale {
-                spec_files: non_matching,
+                doc_files: non_matching,
                 generated,
             });
         }
     } else if !non_matching.is_empty() {
         // There was a matching spec, but also some non-matching ones.
         // These are superfluous.  (It's not clear how this could happen.)
-        let spec_file_names = DisplayableVec(
+        let doc_file_names = DisplayableVec(
             non_matching
                 .iter()
                 .map(|s| {
-                    s.spec_file_name()
+                    s.doc_file_name()
                         .as_versioned()
                         .expect("local specs in versioned API are versioned")
                         .clone()
                 })
                 .collect(),
         );
-        problems.push(VersionProblem::LocalVersionExtra { spec_file_names });
+        problems.push(VersionProblem::LocalVersionExtra { doc_file_names });
     }
 
     Resolution::new_new_locally(problems)
@@ -2253,7 +2253,7 @@ fn validate_generated(
     api: &ManagedApi,
     validation: Option<&DynValidationFn>,
     version: ApiVersion<'_>,
-    generated: &GeneratedApiSpecFile,
+    generated: &GeneratedApiDocFile,
     problems: &mut Vec<VersionProblem<'_>>,
 ) {
     match validate(

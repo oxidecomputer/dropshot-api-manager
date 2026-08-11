@@ -197,7 +197,7 @@ pub(crate) enum BadVersionedFileName {
 
 /// Errors that can occur when parsing an API spec file.
 #[derive(Debug, Error)]
-enum ApiSpecFileParseError {
+enum ApiDocFileParseError {
     #[error("file {path:?}: parsing as JSON")]
     JsonParse { path: Utf8PathBuf, source: serde_json::Error },
     #[error("file {path:?}: parsing OpenAPI document")]
@@ -218,7 +218,7 @@ enum ApiSpecFileParseError {
 
 /// Describes an OpenAPI document
 #[derive(Debug)]
-pub struct ApiSpecFile {
+pub struct ApiDocFile {
     /// describes how the document should be named on disk
     name: ApiDocFileName,
     /// serde_json::Value representation of the document
@@ -231,32 +231,32 @@ pub struct ApiSpecFile {
     version: semver::Version,
 }
 
-impl ApiSpecFile {
+impl ApiDocFile {
     /// Parse an OpenAPI document from raw contents.
     ///
     /// On error, returns both the error and the original contents buffer so
     /// that callers can still use the contents (e.g., for unparseable file
     /// tracking).
     pub fn for_contents(
-        spec_file_name: ApiDocFileName,
+        doc_file_name: ApiDocFileName,
         contents_buf: Vec<u8>,
-    ) -> Result<ApiSpecFile, (anyhow::Error, Vec<u8>)> {
-        Self::for_contents_inner(spec_file_name, contents_buf)
+    ) -> Result<ApiDocFile, (anyhow::Error, Vec<u8>)> {
+        Self::for_contents_inner(doc_file_name, contents_buf)
             .map_err(|(e, buf)| (e.into(), buf))
     }
 
     fn for_contents_inner(
-        spec_file_name: ApiDocFileName,
+        doc_file_name: ApiDocFileName,
         contents_buf: Vec<u8>,
-    ) -> Result<ApiSpecFile, (ApiSpecFileParseError, Vec<u8>)> {
+    ) -> Result<ApiDocFile, (ApiDocFileParseError, Vec<u8>)> {
         // Parse a serde_json::Value from the contents buffer.
         let value: serde_json::Value =
             match serde_json::from_slice(&contents_buf) {
                 Ok(v) => v,
                 Err(e) => {
                     return Err((
-                        ApiSpecFileParseError::JsonParse {
-                            path: spec_file_name.path(),
+                        ApiDocFileParseError::JsonParse {
+                            path: doc_file_name.path(),
                             source: e,
                         },
                         contents_buf,
@@ -270,8 +270,8 @@ impl ApiSpecFile {
             Ok(o) => o,
             Err(e) => {
                 return Err((
-                    ApiSpecFileParseError::OpenApiParse {
-                        path: spec_file_name.path(),
+                    ApiDocFileParseError::OpenApiParse {
+                        path: doc_file_name.path(),
                         source: e,
                     },
                     contents_buf,
@@ -284,8 +284,8 @@ impl ApiSpecFile {
             Ok(v) => v,
             Err(e) => {
                 return Err((
-                    ApiSpecFileParseError::VersionParse {
-                        path: spec_file_name.path(),
+                    ApiDocFileParseError::VersionParse {
+                        path: doc_file_name.path(),
                         source: e,
                     },
                     contents_buf,
@@ -293,12 +293,12 @@ impl ApiSpecFile {
             }
         };
 
-        match &spec_file_name {
+        match &doc_file_name {
             ApiDocFileName::Versioned(v) => {
                 if *v.version() != parsed_version {
                     return Err((
-                        ApiSpecFileParseError::VersionMismatch {
-                            path: spec_file_name.path(),
+                        ApiDocFileParseError::VersionMismatch {
+                            path: doc_file_name.path(),
                             file_version: parsed_version,
                         },
                         contents_buf,
@@ -311,8 +311,8 @@ impl ApiSpecFile {
                     let expected_hash = hash_contents(&contents_buf);
                     if expected_hash != v.hash() {
                         return Err((
-                            ApiSpecFileParseError::HashMismatch {
-                                path: spec_file_name.path(),
+                            ApiDocFileParseError::HashMismatch {
+                                path: doc_file_name.path(),
                                 expected: expected_hash,
                                 actual: v.hash().to_owned(),
                             },
@@ -324,8 +324,8 @@ impl ApiSpecFile {
             ApiDocFileName::Lockstep(_) => {}
         }
 
-        Ok(ApiSpecFile {
-            name: spec_file_name,
+        Ok(ApiDocFile {
+            name: doc_file_name,
             value: DebugIgnore(value),
             contents: DebugIgnore(openapi),
             contents_buf: DebugIgnore(contents_buf),
@@ -334,7 +334,7 @@ impl ApiSpecFile {
     }
 
     /// Returns the name of the OpenAPI document
-    pub fn spec_file_name(&self) -> &ApiDocFileName {
+    pub fn doc_file_name(&self) -> &ApiDocFileName {
         &self.name
     }
 
@@ -367,21 +367,21 @@ impl ApiSpecFile {
 /// **Be sure to check for load errors and warnings before using this
 /// structure.**
 ///
-/// The source `T` is generally a Newtype wrapper around `ApiSpecFile`.  `T`
+/// The source `T` is generally a Newtype wrapper around `ApiDocFile`.  `T`
 /// must impl `ApiLoad` (which applies constraints on loading these documents)
-/// and `AsRawFiles` (which converts the Newtype back to `ApiSpecFile` for
+/// and `AsRawFiles` (which converts the Newtype back to `ApiDocFile` for
 /// consumers that don't care which Newtype they're dealing with).  There are
 /// three values of `T` that get used here:
 ///
-/// * `BlessedApiSpecFile`: only one allowed per version, and it's okay if we
+/// * `BlessedApiDocFile`: only one allowed per version, and it's okay if we
 ///   find (and ignore) a file that doesn't match the API's configured type
 ///   (e.g., a lockstep file for a versioned API or vice versa).  This is
 ///   important for supporting changing the type of an API (e.g., converting
 ///   from lockstep to versioned).
-/// * `GeneratedApiSpecFile`: only one allowed per version.  It is an error to
+/// * `GeneratedApiDocFile`: only one allowed per version.  It is an error to
 ///   find files of a different type than the API (e.g., a lockstep file for a
 ///   versioned API or vice versa).
-/// * `Vec<LocalApiSpecFile>`: as the type suggests, more than one is allowed
+/// * `Vec<LocalApiDocFile>`: as the type suggests, more than one is allowed
 ///   per version.  It is an error to find files of a different type than the
 ///   API (e.g., a lockstep file for a versioned API or vice versa).
 ///
@@ -401,20 +401,20 @@ impl ApiSpecFile {
 ///   versioned API or vice versa depends on the source `T` (see above).  If
 ///   it's not an error when this happens, the file is still ignored.  Hence,
 ///   any files present in this structure _do_ match the expected type.
-pub struct ApiSpecFilesBuilder<'a, T> {
+pub struct ApiDocFilesBuilder<'a, T> {
     apis: &'a ManagedApis,
-    spec_files: BTreeMap<ApiIdent, ApiFiles<T>>,
+    doc_files: BTreeMap<ApiIdent, ApiFiles<T>>,
     error_accumulator: &'a mut ErrorAccumulator,
 }
 
-impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
+impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
     pub fn new(
         apis: &'a ManagedApis,
         error_accumulator: &'a mut ErrorAccumulator,
-    ) -> ApiSpecFilesBuilder<'a, T> {
-        ApiSpecFilesBuilder {
+    ) -> ApiDocFilesBuilder<'a, T> {
+        ApiDocFilesBuilder {
             apis,
-            spec_files: BTreeMap::new(),
+            doc_files: BTreeMap::new(),
             error_accumulator,
         }
     }
@@ -635,14 +635,14 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     }
 
     /// Load an already-parsed API document.
-    pub fn load_parsed(&mut self, file: ApiSpecFile) {
-        let ident = file.spec_file_name().ident();
+    pub fn load_parsed(&mut self, file: ApiDocFile) {
+        let ident = file.doc_file_name().ident();
         let api_version = file.version();
         let entry = self
-            .spec_files
+            .doc_files
             .entry(ident.clone())
             .or_insert_with(ApiFiles::new)
-            .spec_files
+            .doc_files
             .entry(api_version.clone());
 
         match entry {
@@ -667,7 +667,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
     pub fn load_maybe_unparseable(
         &mut self,
         file_name: ApiDocFileName,
-        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
     ) {
         match result {
             Ok(file) => {
@@ -719,10 +719,10 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
                 if let Some(version) = file_name.version() {
                     let ident = file_name.ident().clone();
                     let entry = self
-                        .spec_files
+                        .doc_files
                         .entry(ident)
                         .or_insert_with(ApiFiles::new)
-                        .spec_files
+                        .doc_files
                         .entry(version.clone());
 
                     match entry {
@@ -756,7 +756,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         ident: ApiIdent,
         unparseable: UnparseableFile,
     ) {
-        self.spec_files
+        self.doc_files
             .entry(ident)
             .or_insert_with(ApiFiles::new)
             .unparseable_files
@@ -798,7 +798,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         }
 
         let api_files =
-            self.spec_files.entry(ident.clone()).or_insert_with(ApiFiles::new);
+            self.doc_files.entry(ident.clone()).or_insert_with(ApiFiles::new);
         if let Some(previous) = api_files.latest_link.replace(links_to) {
             // unwrap(): we just put this here.
             let new_link = api_files.latest_link.as_ref().unwrap().to_string();
@@ -823,8 +823,8 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
         version: &semver::Version,
         commit: GitCommitHash,
     ) {
-        if let Some(api_files) = self.spec_files.get_mut(ident)
-            && let Some(item) = api_files.spec_files.get_mut(version)
+        if let Some(api_files) = self.doc_files.get_mut(ident)
+            && let Some(item) = api_files.doc_files.get_mut(version)
         {
             item.set_git_stub_commit(commit);
         }
@@ -846,18 +846,18 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiSpecFilesBuilder<'a, T> {
 
     /// Returns the underlying set of files loaded
     pub fn into_map(self) -> BTreeMap<ApiIdent, ApiFiles<T>> {
-        self.spec_files
+        self.doc_files
     }
 }
 
 /// Describes a set of OpenAPI documents and associated "latest" symlink for a
 /// given API.
 ///
-/// Parametrized by `T` because callers use newtypes around `ApiSpecFile` to
-/// avoid confusing them.  See the documentation on [`ApiSpecFilesBuilder`].
+/// Parametrized by `T` because callers use newtypes around `ApiDocFile` to
+/// avoid confusing them.  See the documentation on [`ApiDocFilesBuilder`].
 #[derive(Debug)]
 pub struct ApiFiles<T> {
-    spec_files: BTreeMap<semver::Version, T>,
+    doc_files: BTreeMap<semver::Version, T>,
     latest_link: Option<VersionedApiDocFileName>,
     /// Files that exist on disk but couldn't be parsed. These are tracked so
     /// that generate can delete them and create correct files in their place.
@@ -867,14 +867,14 @@ pub struct ApiFiles<T> {
 impl<T: AsRawFiles> ApiFiles<T> {
     fn new() -> ApiFiles<T> {
         ApiFiles {
-            spec_files: BTreeMap::new(),
+            doc_files: BTreeMap::new(),
             latest_link: None,
             unparseable_files: Vec::new(),
         }
     }
 
     pub fn versions(&self) -> &BTreeMap<semver::Version, T> {
-        &self.spec_files
+        &self.doc_files
     }
 
     pub fn latest_link(&self) -> Option<&VersionedApiDocFileName> {
@@ -891,20 +891,20 @@ impl<T: AsRawFiles> ApiFiles<T> {
 ///
 /// This allows iterating over both valid and unparseable files while still
 /// being able to access their names.
-pub trait SpecFileInfo {
+pub trait DocFileInfo {
     /// Returns the spec file name.
-    fn spec_file_name(&self) -> &ApiDocFileName;
+    fn doc_file_name(&self) -> &ApiDocFileName;
 
     /// Returns the version from the parsed file, if available.
     ///
     /// For unparseable files, this returns `None`. Use
-    /// `spec_file_name().version()` to get the version from the filename
+    /// `doc_file_name().version()` to get the version from the filename
     /// instead.
     fn version(&self) -> Option<&semver::Version>;
 }
 
-impl SpecFileInfo for ApiSpecFile {
-    fn spec_file_name(&self) -> &ApiDocFileName {
+impl DocFileInfo for ApiDocFile {
+    fn doc_file_name(&self) -> &ApiDocFileName {
         &self.name
     }
 
@@ -913,30 +913,30 @@ impl SpecFileInfo for ApiSpecFile {
     }
 }
 
-/// Implemented by Newtype wrappers around `ApiSpecFile` to convert back to an
-/// iterator of `&'a dyn SpecFileInfo` for callers that do not care which
+/// Implemented by Newtype wrappers around `ApiDocFile` to convert back to an
+/// iterator of `&'a dyn DocFileInfo` for callers that do not care which
 /// Newtype they're operating on.
 ///
 /// This is sort of like `Deref` except that some of the implementors are
-/// collections.  See [`ApiSpecFilesBuilder`] for more on this.
+/// collections.  See [`ApiDocFilesBuilder`] for more on this.
 pub trait AsRawFiles: Debug {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a>;
+    ) -> Box<dyn Iterator<Item = &'a dyn DocFileInfo> + 'a>;
 }
 
-impl AsRawFiles for Vec<ApiSpecFile> {
+impl AsRawFiles for Vec<ApiDocFile> {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
-        Box::new(self.iter().map(|f| f as &dyn SpecFileInfo))
+    ) -> Box<dyn Iterator<Item = &'a dyn DocFileInfo> + 'a> {
+        Box::new(self.iter().map(|f| f as &dyn DocFileInfo))
     }
 }
 
-/// Implemented by Newtype wrappers around `ApiSpecFile` to load the newtype
-/// from an `ApiSpecFile`.
+/// Implemented by Newtype wrappers around `ApiDocFile` to load the newtype
+/// from an `ApiDocFile`.
 ///
-/// This is a bit like `TryFrom<Vec<ApiSpecFile>>` but we cannot use that
+/// This is a bit like `TryFrom<Vec<ApiDocFile>>` but we cannot use that
 /// directly because of the orphan rules (neither `TryFrom` nor `Vec` is defined
 /// in this package).
 pub trait ApiLoad {
@@ -962,14 +962,14 @@ pub trait ApiLoad {
     type Unparseable;
 
     /// Record having loaded a single OpenAPI document for an API.
-    fn make_item(raw: ApiSpecFile) -> Self;
+    fn make_item(raw: ApiDocFile) -> Self;
 
     /// Try to record additional OpenAPI documents for an API.
     ///
     /// (This trait API might seem a little strange.  It looks this way because
     /// every implementor supports loading a single OpenAPI document, but only
     /// some allow more than one.)
-    fn try_extend(&mut self, raw: ApiSpecFile) -> anyhow::Result<()>;
+    fn try_extend(&mut self, raw: ApiDocFile) -> anyhow::Result<()>;
 
     /// Try to create unparseable file data.
     ///
@@ -994,7 +994,7 @@ pub trait ApiLoad {
     /// Set the Git stub commit hash on the most recently loaded item.
     ///
     /// The default implementation does nothing. Only
-    /// `Vec<LocalApiSpecFile>` overrides this.
+    /// `Vec<LocalApiDocFile>` overrides this.
     fn set_git_stub_commit(&mut self, _commit: GitCommitHash) {}
 }
 

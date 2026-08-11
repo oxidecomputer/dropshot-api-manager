@@ -7,7 +7,7 @@ use crate::{
     environment::{BlessedSource, GeneratedSource, ResolvedEnv},
     output::{
         CheckResult, CompatDisplayContext, OutputOpts, Styles,
-        display_api_spec_version, display_load_problems,
+        display_api_doc_version, display_load_problems,
         display_non_version_problems, display_resolution,
         display_version_problems,
         headers::{self, *},
@@ -126,7 +126,7 @@ fn generate_impl_inner(
                     writer,
                     "{:>HEADER_WIDTH$} {}",
                     UNCHANGED.style(styles.unchanged_header),
-                    display_api_spec_version(api, version, styles, resolution),
+                    display_api_doc_version(api, version, styles, resolution),
                 )?;
                 num_unchanged += 1;
             } else {
@@ -134,7 +134,7 @@ fn generate_impl_inner(
                     writer,
                     "{:>HEADER_WIDTH$} {}",
                     STALE.style(styles.warning_header),
-                    display_api_spec_version(api, version, styles, resolution),
+                    display_api_doc_version(api, version, styles, resolution),
                 )?;
 
                 apply_fixes(
