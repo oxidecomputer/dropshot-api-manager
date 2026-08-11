@@ -342,7 +342,7 @@ impl ManagedApis {
         for api in api_list {
             let api = api.into();
             if let Some(old) = apis.insert(api.ident.clone(), api) {
-                bail!("API is defined twice: {:?}", &old.ident);
+                bail!("API is defined twice: {:?}", old.ident);
             }
         }
 
