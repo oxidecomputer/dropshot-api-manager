@@ -94,7 +94,7 @@ pub(crate) fn list_impl(
             writeln!(
                 &mut out,
                 "{initial_indent} {}:",
-                "spec details".style(styles.header),
+                "document details".style(styles.header),
             )?;
 
             for v in api.iter_versions_semver() {

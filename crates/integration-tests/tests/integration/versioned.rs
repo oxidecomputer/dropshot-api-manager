@@ -1908,16 +1908,16 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
     blessed_version_missing_local_verify(&env)
 }
 
-// --- Websocket spec format normalization tests ---
+// --- Websocket document format normalization tests ---
 
-/// Verify that without normalization, old-format websocket blessed specs
+/// Verify that without normalization, old-format websocket blessed documents
 /// would be detected as incompatible by drift. This proves the normalizer
 /// is necessary.
 #[test]
 fn test_blessed_ws_old_format_fails_without_normalizer() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    // Generate old-format and new-format v1 specs from their respective
+    // Generate old-format and new-format v1 documents from their respective
     // API traits and compare directly with drift.
     let old_apis = versioned_ws_old_apis()?;
     env.generate_documents(&old_apis)?;
@@ -1962,7 +1962,7 @@ fn test_blessed_ws_old_format_fails_without_normalizer() -> Result<()> {
 /// Test that blessed documents with old websocket response format (pre-0.17
 /// dropshot) are normalized during compatibility checking. Older (non-latest)
 /// blessed versions pass because they use semantic equality. The latest version
-/// still fails because it requires bytewise equality — the normalized spec
+/// still fails because it requires bytewise equality — the normalized document
 /// format differs from the old committed format.
 #[test]
 fn test_blessed_ws_old_format_normalized_older_versions_pass() -> Result<()> {

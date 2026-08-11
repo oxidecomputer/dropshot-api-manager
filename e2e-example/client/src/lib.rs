@@ -11,7 +11,8 @@
 //! 2. The `generate_api!` macro uses `relative_to = OutDir` to read the
 //!    materialized file from `OUT_DIR`.
 
-// Generate a client from the v1.0.0 API spec which is stored as a Git stub.
+// Generate a client from the v1.0.0 API document which is stored as a Git
+// stub.
 // The build script materializes this to OUT_DIR/git-stub-vcs/.
 progenitor::generate_api!(
     spec = {

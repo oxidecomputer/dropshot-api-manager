@@ -59,7 +59,7 @@ pub enum LocalApiDocFile {
 }
 
 impl LocalApiDocFile {
-    /// Returns the spec file name.
+    /// Returns the document file name.
     pub fn doc_file_name(&self) -> &ApiDocFileName {
         match self {
             Self::Valid { doc, .. } => doc.doc_file_name(),

@@ -195,14 +195,14 @@ pub(crate) enum BadVersionedFileName {
     UnexpectedName { ident: ApiIdent, source: anyhow::Error },
 }
 
-/// Errors that can occur when parsing an API spec file.
+/// Errors that can occur when parsing an API document file.
 #[derive(Debug, Error)]
 enum ApiDocFileParseError {
     #[error("file {path:?}: parsing as JSON")]
     JsonParse { path: Utf8PathBuf, source: serde_json::Error },
     #[error("file {path:?}: parsing OpenAPI document")]
     OpenApiParse { path: Utf8PathBuf, source: serde_json::Error },
-    #[error("file {path:?}: parsing version from generated spec")]
+    #[error("file {path:?}: parsing version from generated document")]
     VersionParse { path: Utf8PathBuf, source: semver::Error },
     #[error(
         "file {path:?}: version in the file ({file_version}) differs from \
@@ -453,7 +453,8 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
                 if T::MISCONFIGURATIONS_ALLOWED =>
             {
                 // If the ident is part of unknown_apis, then we don't print a
-                // warning here (it will be printed for the generated spec).
+                // warning here (it will be printed for the generated
+                // document).
                 if !self.apis.unknown_apis().contains(&ident) {
                     let warning = anyhow!(
                         "skipping file {basename:?}: {} \
@@ -887,12 +888,12 @@ impl<T: AsRawFiles> ApiFiles<T> {
     }
 }
 
-/// Trait for types that provide spec file metadata.
+/// Trait for types that provide document file metadata.
 ///
 /// This allows iterating over both valid and unparseable files while still
 /// being able to access their names.
 pub trait DocFileInfo {
-    /// Returns the spec file name.
+    /// Returns the document file name.
     fn doc_file_name(&self) -> &ApiDocFileName;
 
     /// Returns the version from the parsed file, if available.

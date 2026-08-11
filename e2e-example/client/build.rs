@@ -12,7 +12,7 @@ fn main() {
     let materializer = Materializer::for_build_script("../..")
         .expect("detected VCS at repo root");
 
-    // Materialize the v1.0.0 API spec from its Git stub.
+    // Materialize the v1.0.0 API document from its Git stub.
     //
     // The .gitstub file contains a reference like:
     //   11ce810ee5...:e2e-example/documents/versioned-git-stub/versioned-git-stub-1.0.0-50a3d4.json
@@ -22,12 +22,12 @@ fn main() {
     // 1. Read the git-stub file.
     // 2. Fetch the content from git (or jj) history.
     // 3. Write it to OUT_DIR/git-stub-vcs/e2e-example/documents/versioned-git-stub/versioned-git-stub-1.0.0-50a3d4.json.
-    let spec_path = materializer
+    let doc_path = materializer
         .materialize(
             "e2e-example/documents/versioned-git-stub/versioned-git-stub-1.0.0-50a3d4.json.gitstub",
         )
         .expect("materialized git-stub file");
 
     // Print the path for debugging purposes.
-    println!("cargo::warning=materialized spec to: {}", spec_path);
+    println!("cargo::warning=materialized document to: {}", doc_path);
 }

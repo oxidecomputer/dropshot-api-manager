@@ -294,8 +294,8 @@ fn escape_json_pointer(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
-/// Normalize old-format websocket responses in the blessed spec to match the
-/// new format used by the generated spec.
+/// Normalize old-format websocket responses in the blessed document to match
+/// the new format used by the generated document.
 ///
 /// Dropshot 0.17 changed how websocket endpoints are represented in OpenAPI
 /// (see https://github.com/oxidecomputer/dropshot/pull/1554):
@@ -318,9 +318,9 @@ fn escape_json_pointer(s: &str) -> String {
 ///
 /// This function detects operations with the `x-dropshot-websocket` extension
 /// that still have the old response format and replaces their responses with
-/// those from the corresponding operation in the generated spec. This is safe
-/// because the wire format did not change — only the OpenAPI representation
-/// did.
+/// those from the corresponding operation in the generated document. This is
+/// safe because the wire format did not change — only the OpenAPI
+/// representation did.
 fn normalize_old_websocket_responses(
     blessed: &mut serde_json::Value,
     generated: &serde_json::Value,
@@ -394,14 +394,14 @@ pub(crate) fn api_compatible(
 ) -> anyhow::Result<Vec<ApiCompatIssue>> {
     let mut blessed = blessed.clone();
 
-    // Normalize old-format websocket responses in the blessed spec before
+    // Normalize old-format websocket responses in the blessed document before
     // comparison. Dropshot 0.17 changed how websocket endpoints are
     // represented: from a `default` response with `*/*` content to explicit
-    // `101`/`4XX`/`5XX` responses. This is purely a spec-generation change,
-    // not a wire-format change.
+    // `101`/`4XX`/`5XX` responses. This is purely a document-generation
+    // change, not a wire-format change.
     normalize_old_websocket_responses(&mut blessed, generated);
 
-    // Build the per-spec op-id maps once. Each issue consults them through
+    // Build the per-document op-id maps once. Each issue consults them through
     // `DocumentBasePath::classify` to populate the `operation_id` field on
     // its endpoint variants.
     let blessed_op_ids = extract_operation_ids(&blessed);
@@ -580,8 +580,8 @@ mod tests {
 
     #[test]
     fn test_normalize_missing_generated_path_leaves_blessed_unchanged() {
-        // If the generated spec doesn't have the websocket path, the blessed
-        // spec should be left unchanged.
+        // If the generated document doesn't have the websocket path, the
+        // blessed document should be left unchanged.
         let mut blessed = serde_json::json!({
             "paths": {
                 "/subscribe": {
@@ -610,8 +610,8 @@ mod tests {
 
     #[test]
     fn test_api_compatible_old_ws_format() {
-        // Old-format blessed spec should be compatible with new-format
-        // generated spec after normalization.
+        // Old-format blessed document should be compatible with new-format
+        // generated document after normalization.
         let blessed = serde_json::json!({
             "openapi": "3.0.3",
             "info": { "title": "Test", "version": "1.0.0" },

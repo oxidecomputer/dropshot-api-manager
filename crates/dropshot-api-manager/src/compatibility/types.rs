@@ -138,8 +138,8 @@ pub(super) struct SubpathChange {
 /// This enum classifies base document paths so the rendering layer can pattern
 /// match on the variant rather than asking "is this a component? is this an
 /// endpoint?" each time it inspects a base path. For endpoint variants, the
-/// spec's `operationId` is carried alongside the path so that display code can
-/// annotate it on the rendered endpoint.
+/// document's `operationId` is carried alongside the path so that display code
+/// can annotate it on the rendered endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum DocumentBasePath {
     /// A reusable component, e.g., `#/components/schemas/Foo`.
@@ -148,7 +148,7 @@ pub(super) enum DocumentBasePath {
     Endpoint {
         /// The path (`paths/<route>/<method>`).
         name: DocumentPath,
-        /// The endpoint's `operationId` from the spec, if found.
+        /// The endpoint's `operationId` from the document, if found.
         operation_id: Option<String>,
     },
     /// The `.paths` container itself — not a meaningful change location.
