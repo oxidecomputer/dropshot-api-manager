@@ -192,7 +192,7 @@ pub enum VersionProblem<'a> {
 // Problems not tied to a specific version: orphaned files, unparseable
 // files, and the "latest" symlink for versioned APIs.
 pub enum NonVersionProblem<'a> {
-    LocalSpecFileOrphaned { ... },
+    LocalDocFileOrphaned { ... },
     UnparseableLocalFile { ... },
     LatestLinkMissing { ... },
     LatestLinkStale { ... },
@@ -236,16 +236,17 @@ crates/
 │   │   │   ├── git.rs             # Git-specific operations
 │   │   │   └── jj.rs              # Jujutsu-specific operations
 │   │   ├── output.rs              # User-facing output formatting
-│   │   ├── spec_files_blessed.rs  # Blessed source file handling
-│   │   ├── spec_files_generated.rs # Generated source file handling
-│   │   ├── spec_files_local.rs    # Local source file handling
+│   │   ├── doc_files_generic.rs   # Document file handling common to all sources
+│   │   ├── doc_files_blessed.rs   # Blessed source file handling
+│   │   ├── doc_files_generated.rs # Generated source file handling
+│   │   ├── doc_files_local.rs     # Local source file handling
 │   │   └── test_util/             # Test utilities
 │   └── Cargo.toml
 ├── dropshot-api-manager-types/    # Core types (minimal deps, for API crates to depend on)
 │   └── src/
 │       ├── lib.rs
-│       ├── apis.rs                # ApiIdent, ApiDocFileName
-│       ├── validation.rs          # ValidationContext, ValidationBackend
+│       ├── apis.rs                # ManagedApiMetadata
+│       ├── validation.rs          # ValidationContext, ValidationBackend, ApiIdent, ApiDocFileName
 │       └── versions.rs            # Versions, SupportedVersions, api_versions! macro
 └── integration-tests/             # Integration test suite
     ├── src/
@@ -283,7 +284,7 @@ crates/
 - **clap**: CLI parsing with derives.
 - **atomicwrites**: Safe atomic file writing.
 - **fs-err**: Better filesystem error messages.
-- **sha2**: Hashing for versioned spec filenames.
+- **sha2**: Hashing for versioned document filenames.
 - **owo-colors**: Colored terminal output.
 - **similar**: Diff generation for display.
 - **supports-color**: Terminal color capability detection.
