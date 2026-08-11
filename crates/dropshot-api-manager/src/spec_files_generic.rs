@@ -59,7 +59,7 @@ pub(crate) fn parse_versioned_file_name(
         return Err(BadVersionedFileName::NotVersioned);
     }
 
-    let expected_prefix = format!("{}-", &ident);
+    let expected_prefix = format!("{}-", ident);
     let suffix = basename.strip_prefix(&expected_prefix).ok_or_else(|| {
         BadVersionedFileName::UnexpectedName {
             ident: ident.clone(),

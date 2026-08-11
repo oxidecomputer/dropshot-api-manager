@@ -938,7 +938,7 @@ impl Fix<'_> {
                 let path = root.join(generated.spec_file_name().path());
                 rv.push(format!(
                     "created {}: {:?}",
-                    &path,
+                    path,
                     overwrite_file(&path, generated.contents())?
                 ));
                 Ok(rv)
