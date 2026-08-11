@@ -8,7 +8,7 @@ use anyhow::Context;
 use atomicwrites::AtomicFile;
 use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, ManagedApiMetadata, ValidationBackend,
+    ApiDocFileName, ApiIdent, ManagedApiMetadata, ValidationBackend,
     ValidationContext, Versions,
 };
 use openapiv3::OpenAPI;
@@ -50,7 +50,7 @@ pub fn validate(
 fn validate_generated_openapi_document(
     api: &ManagedApi,
     openapi_doc: &OpenAPI,
-    file_name: &ApiSpecFileName,
+    file_name: &ApiDocFileName,
     is_latest: bool,
     is_blessed: Option<bool>,
     validation: Option<&DynValidationFn>,
@@ -192,7 +192,7 @@ pub struct ValidationResult {
 
 struct ValidationContextImpl {
     ident: ApiIdent,
-    file_name: ApiSpecFileName,
+    file_name: ApiDocFileName,
     versions: Versions,
     is_latest: bool,
     is_blessed: Option<bool>,
@@ -207,7 +207,7 @@ impl ValidationBackend for ValidationContextImpl {
         &self.ident
     }
 
-    fn file_name(&self) -> &ApiSpecFileName {
+    fn file_name(&self) -> &ApiDocFileName {
         &self.file_name
     }
 

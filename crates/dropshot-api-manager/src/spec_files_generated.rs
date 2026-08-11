@@ -13,8 +13,7 @@ use crate::{
 };
 use anyhow::{anyhow, bail};
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, LockstepApiSpecFileName,
-    VersionedApiSpecFileName,
+    ApiDocFileName, ApiIdent, LockstepApiDocFileName, VersionedApiDocFileName,
 };
 use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
@@ -54,7 +53,7 @@ impl ApiLoad for GeneratedApiSpecFile {
     }
 
     fn make_unparseable(
-        _name: ApiSpecFileName,
+        _name: ApiDocFileName,
         _contents: Vec<u8>,
     ) -> Option<Self::Unparseable> {
         None
@@ -103,7 +102,7 @@ enum GeneratedApiResult {
     Versioned {
         ident: ApiIdent,
         versions: Vec<Result<ApiSpecFile, anyhow::Error>>,
-        latest: Option<VersionedApiSpecFileName>,
+        latest: Option<VersionedApiDocFileName>,
     },
 }
 
@@ -118,7 +117,7 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
                 api.generate_spec_bytes(version)
                     .and_then(|contents| {
                         let file_name =
-                            LockstepApiSpecFileName::new(api.ident().clone());
+                            LockstepApiDocFileName::new(api.ident().clone());
                         ApiSpecFile::for_contents(file_name.into(), contents)
                             .map_err(|(e, _buf)| e)
                     })
@@ -146,7 +145,7 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
                 let version = supported_version.semver();
                 api.generate_spec_bytes(version)
                     .and_then(|contents| {
-                        let file_name = VersionedApiSpecFileName::new(
+                        let file_name = VersionedApiDocFileName::new(
                             api.ident().clone(),
                             version.clone(),
                             hash_contents(&contents),
@@ -170,8 +169,8 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
         // (Note that ParallelIterator::map does not reorder items.)
         let latest = versions.iter().rev().find_map(|r| {
             r.as_ref().ok().map(|file| match file.spec_file_name() {
-                ApiSpecFileName::Versioned(v) => v.clone(),
-                ApiSpecFileName::Lockstep(_) => {
+                ApiDocFileName::Versioned(v) => v.clone(),
+                ApiDocFileName::Lockstep(_) => {
                     unreachable!("lockstep file name in versioned API path")
                 }
             })

@@ -53,7 +53,7 @@ Every Rust source file must start with:
 
 ### Type system patterns
 
-- **Newtypes** for domain types (e.g., `ApiIdent`, `VcsRevision`, `GitCommitHash`, `ApiSpecFileName`)
+- **Newtypes** for domain types (e.g., `ApiIdent`, `VcsRevision`, `GitCommitHash`, `ApiDocFileName`)
 - **Builder patterns** for complex construction (e.g., `ManagedApi` with `with_extra_validation`, `with_git_stub_storage`)
 - **Type states** encoded in generics when state transitions matter
 - **Lifetimes** used extensively to avoid cloning (e.g., `VersionProblem<'a>`, `Resolution<'a>`, `Fix<'a>`)
@@ -244,7 +244,7 @@ crates/
 ├── dropshot-api-manager-types/    # Core types (minimal deps, for API crates to depend on)
 │   └── src/
 │       ├── lib.rs
-│       ├── apis.rs                # ApiIdent, ApiSpecFileName
+│       ├── apis.rs                # ApiIdent, ApiDocFileName
 │       ├── validation.rs          # ValidationContext, ValidationBackend
 │       └── versions.rs            # Versions, SupportedVersions, api_versions! macro
 └── integration-tests/             # Integration test suite

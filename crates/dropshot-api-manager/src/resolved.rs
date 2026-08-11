@@ -22,7 +22,7 @@ use crate::{
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
-    ApiIdent, ApiSpecFileName, VersionedApiSpecFileName,
+    ApiDocFileName, ApiIdent, VersionedApiDocFileName,
 };
 use git_stub::{GitCommitHash, GitStub};
 use rayon::prelude::*;
@@ -231,7 +231,7 @@ pub enum NonVersionProblem<'a> {
          merged with upstream and had to change your local version number.  \
          In either case, this tool can remove the unused file for you."
     )]
-    LocalSpecFileOrphaned { spec_file_name: VersionedApiSpecFileName },
+    LocalSpecFileOrphaned { spec_file_name: VersionedApiDocFileName },
 
     #[error(
         "A local OpenAPI document could not be parsed: {}. \
@@ -243,10 +243,7 @@ pub enum NonVersionProblem<'a> {
     UnparseableLocalFile { unparseable_file: UnparseableFile },
 
     #[error("\"Latest\" symlink for versioned API {api_ident:?} is missing")]
-    LatestLinkMissing {
-        api_ident: ApiIdent,
-        link: &'a VersionedApiSpecFileName,
-    },
+    LatestLinkMissing { api_ident: ApiIdent, link: &'a VersionedApiDocFileName },
 
     #[error(
         "\"Latest\" symlink for versioned API {api_ident:?} is stale: points \
@@ -256,8 +253,8 @@ pub enum NonVersionProblem<'a> {
     )]
     LatestLinkStale {
         api_ident: ApiIdent,
-        found: &'a VersionedApiSpecFileName,
-        link: &'a VersionedApiSpecFileName,
+        found: &'a VersionedApiDocFileName,
+        link: &'a VersionedApiDocFileName,
     },
 }
 
@@ -288,7 +285,7 @@ pub enum VersionProblem<'a> {
          number (when you merged the list of supported versions in Rust) and \
          this file is vestigial. This tool can remove the unused file for you."
     )]
-    BlessedVersionExtraLocalSpec { spec_file_name: VersionedApiSpecFileName },
+    BlessedVersionExtraLocalSpec { spec_file_name: VersionedApiDocFileName },
 
     #[error(
         "error comparing OpenAPI document generated from current code with \
@@ -346,7 +343,7 @@ pub enum VersionProblem<'a> {
          version: {spec_file_names}.  This tool can remove the files for you."
     )]
     LocalVersionExtra {
-        spec_file_names: DisplayableVec<VersionedApiSpecFileName>,
+        spec_file_names: DisplayableVec<VersionedApiDocFileName>,
     },
 
     #[error(
@@ -447,7 +444,7 @@ pub enum VersionProblem<'a> {
          // <source>".
     )]
     GitStubFirstCommitUnknown {
-        spec_file_name: VersionedApiSpecFileName,
+        spec_file_name: VersionedApiDocFileName,
         #[source]
         source: anyhow::Error,
     },
@@ -681,13 +678,13 @@ impl<'a> VersionProblem<'a> {
 
 pub enum Fix<'a> {
     DeleteFiles {
-        files: DisplayableVec<ApiSpecFileName>,
+        files: DisplayableVec<ApiDocFileName>,
     },
     UpdateLockstepFile {
         generated: &'a GeneratedApiSpecFile,
     },
     UpdateVersionedFiles {
-        old: DisplayableVec<&'a ApiSpecFileName>,
+        old: DisplayableVec<&'a ApiDocFileName>,
         generated: &'a GeneratedApiSpecFile,
     },
     UpdateExtraFile {
@@ -696,7 +693,7 @@ pub enum Fix<'a> {
     },
     UpdateSymlink {
         api_ident: &'a ApiIdent,
-        link: &'a VersionedApiSpecFileName,
+        link: &'a VersionedApiDocFileName,
     },
     /// Convert a full JSON file to a Git stub.
     ConvertToGitStub {
@@ -1437,7 +1434,7 @@ fn resolve_orphaned_local_specs<'a>(
         BTreeSet<&'a semver::Version>,
     >,
     local: &'a LocalFiles,
-) -> impl Iterator<Item = &'a VersionedApiSpecFileName> + 'a {
+) -> impl Iterator<Item = &'a VersionedApiDocFileName> + 'a {
     // Orphaned specs are always versioned: lockstep APIs have exactly one file,
     // so orphans can't exist for them.
     local.iter().flat_map(|(ident, api_files)| {

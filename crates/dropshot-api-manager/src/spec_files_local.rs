@@ -15,7 +15,7 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
-use dropshot_api_manager_types::{ApiIdent, ApiSpecFileName};
+use dropshot_api_manager_types::{ApiDocFileName, ApiIdent};
 use git_stub::{GitCommitHash, GitStub};
 use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
@@ -31,7 +31,7 @@ use std::{collections::BTreeMap, ops::Deref};
 #[derive(Debug)]
 pub struct LocalApiUnparseable {
     /// The parsed filename (contains version and hash info).
-    pub name: ApiSpecFileName,
+    pub name: ApiDocFileName,
     /// The raw file contents that couldn't be parsed.
     pub contents: Vec<u8>,
 }
@@ -60,7 +60,7 @@ pub enum LocalApiSpecFile {
 
 impl LocalApiSpecFile {
     /// Returns the spec file name.
-    pub fn spec_file_name(&self) -> &ApiSpecFileName {
+    pub fn spec_file_name(&self) -> &ApiDocFileName {
         match self {
             Self::Valid { spec, .. } => spec.spec_file_name(),
             Self::Unparseable(u) => &u.name,
@@ -93,7 +93,7 @@ impl LocalApiSpecFile {
 }
 
 impl SpecFileInfo for LocalApiSpecFile {
-    fn spec_file_name(&self) -> &ApiSpecFileName {
+    fn spec_file_name(&self) -> &ApiDocFileName {
         self.spec_file_name()
     }
 
@@ -130,7 +130,7 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
     }
 
     fn make_unparseable(
-        name: ApiSpecFileName,
+        name: ApiDocFileName,
         contents: Vec<u8>,
     ) -> Option<Self::Unparseable> {
         Some(LocalApiUnparseable { name, contents })
@@ -238,22 +238,22 @@ enum LocalDiscoveredEntry {
 enum LocalFileResult {
     // --- Successfully parsed filename + deserialized ---
     LockstepDeserialized {
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
     },
     VersionedDeserialized {
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
     },
     GitStubDeserialized {
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
         commit: GitCommitHash,
     },
 
     // --- Git stub that couldn't be resolved ---
     GitStubUnresolvable {
-        file_name: ApiSpecFileName,
+        file_name: ApiDocFileName,
         original_contents: Vec<u8>,
         reason: anyhow::Error,
     },
@@ -454,7 +454,7 @@ fn process_local_entry(
             let Some(spec_file_name) =
                 parse_lockstep_file_name(apis, &file_name)
                     .ok()
-                    .map(ApiSpecFileName::from)
+                    .map(ApiDocFileName::from)
             else {
                 return LocalFileResult::LockstepParseFailed { file_name };
             };
@@ -482,7 +482,7 @@ fn process_local_entry(
             let Some(spec_file_name) =
                 parse_versioned_file_name(apis, &dir_basename, &file_name)
                     .ok()
-                    .map(ApiSpecFileName::from)
+                    .map(ApiDocFileName::from)
             else {
                 return LocalFileResult::VersionedParseFailed {
                     dir_basename,
@@ -512,7 +512,7 @@ fn process_local_entry(
                 &file_name,
             )
             .ok()
-            .map(ApiSpecFileName::from) else {
+            .map(ApiDocFileName::from) else {
                 return LocalFileResult::GitStubParseFailed {
                     dir_basename,
                     file_name,
