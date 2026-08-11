@@ -946,7 +946,7 @@ pub mod versioned_health_skip_middle {
     };
 }
 
-/// Versioned API with a websocket endpoint, for testing spec format changes
+/// Versioned API with a websocket endpoint, for testing document format changes
 /// across dropshot versions. The websocket response format changed between
 /// dropshot 0.16 and 0.17 (from a `default` response to explicit `101`/`4XX`/
 /// `5XX` responses), and this fixture exercises that scenario.
@@ -1435,7 +1435,7 @@ pub fn create_mixed_test_apis() -> Result<ManagedApis> {
     ManagedApis::new(configs).context("failed to create mixed ManagedApis")
 }
 
-/// Create a versioned websocket API for testing spec format normalization.
+/// Create a versioned websocket API for testing document format normalization.
 pub fn versioned_ws_api() -> ManagedApiConfig {
     ManagedApiConfig {
         ident: "versioned-ws",

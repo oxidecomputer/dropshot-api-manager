@@ -59,9 +59,9 @@ where
 pub enum Note {
     /// A previously-supported API version has been removed locally.
     ///
-    /// This is not an error because we do expect to EOL old API specs. There's
-    /// not currently a way for this tool to know if the EOL'ing is correct or
-    /// not, so we at least highlight it to the user.
+    /// This is not an error because we do expect to EOL old API documents.
+    /// There's not currently a way for this tool to know if the EOL'ing is
+    /// correct or not, so we at least highlight it to the user.
     #[error(
         "API {api_ident} version {version}: formerly blessed version has been \
          removed.  This version will no longer be supported!  This will break \
@@ -72,8 +72,8 @@ pub enum Note {
     BlessedVersionRemoved { api_ident: ApiIdent, version: semver::Version },
 }
 
-/// Describes the result of resolving the blessed spec(s), generated spec(s),
-/// and local spec files for a particular API
+/// Describes the result of resolving the blessed document(s), generated
+/// document(s), and local document files for a particular API
 pub struct Resolution<'a> {
     kind: ResolutionKind,
     problems: Vec<VersionProblem<'a>>,
@@ -213,9 +213,9 @@ impl ProblemSummary {
     }
 }
 
-/// Describes a problem resolving the blessed spec(s), generated spec(s), and
-/// local spec files for an API that is *not* tied to a specific supported
-/// version.
+/// Describes a problem resolving the blessed document(s), generated
+/// document(s), and local document files for an API that is *not* tied to a
+/// specific supported version.
 ///
 /// Per-(api, version) problems live in [`VersionProblem`] instead. Splitting
 /// the two means that we can establish at compile time that, e.g., symlinks can
@@ -1124,8 +1124,8 @@ fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
     fs_err::os::windows::fs::symlink_file(target, path)
 }
 
-/// Resolve differences between blessed spec(s), the generated spec, and any
-/// local spec files for a given API
+/// Resolve differences between blessed document(s), the generated document,
+/// and any local document files for a given API
 pub struct Resolved<'a> {
     notes: Vec<Note>,
     /// Non-version problems that aren't attached to a supported (api, version)
@@ -1149,7 +1149,8 @@ impl<'a> Resolved<'a> {
     ) -> Resolved<'a> {
         // First, assemble a list of supported versions for each API, as defined
         // in the Rust list of supported versions.  We'll use this to identify
-        // any blessed spec files or local spec files that don't belong at all.
+        // any blessed document files or local document files that don't belong
+        // at all.
         let supported_versions_by_api: BTreeMap<
             &ApiIdent,
             BTreeSet<&semver::Version>,
@@ -1178,9 +1179,9 @@ impl<'a> Resolved<'a> {
         })
         .collect();
 
-        // Get the other easy case out of the way: if there are any local spec
-        // files for APIs or API versions that aren't supported any more, that's
-        // a (fixable) problem.
+        // Get the other easy case out of the way: if there are any local
+        // document files for APIs or API versions that aren't supported any
+        // more, that's a (fixable) problem.
         let mut orphaned_and_unparseable: Vec<(
             ApiIdent,
             Option<semver::Version>,
@@ -1435,8 +1436,8 @@ fn resolve_orphaned_local_docs<'a>(
     >,
     local: &'a LocalFiles,
 ) -> impl Iterator<Item = &'a VersionedApiDocFileName> + 'a {
-    // Orphaned specs are always versioned: lockstep APIs have exactly one file,
-    // so orphans can't exist for them.
+    // Orphaned documents are always versioned: lockstep APIs have exactly one
+    // file, so orphans can't exist for them.
     local.iter().flat_map(|(ident, api_files)| {
         let set = supported_versions_by_api.get(ident);
         api_files
@@ -1447,7 +1448,7 @@ fn resolve_orphaned_local_docs<'a>(
                     Some(files.iter().map(|f| {
                         f.doc_file_name()
                             .as_versioned()
-                            .expect("orphaned specs are versioned")
+                            .expect("orphaned documents are versioned")
                     }))
                 }
                 _ => None,
@@ -1892,7 +1893,7 @@ fn resolve_api_version_blessed<'a>(
     // know via `is_blessed`, letting them skip validation where appropriate.
     validate_generated(env, api, validation, version, generated, &mut problems);
 
-    // First off, the blessed spec must be a subset of the generated one.
+    // First off, the blessed document must be a subset of the generated one.
     // If not, someone has made an incompatible change to the API
     // *implementation*, such that the implementation no longer faithfully
     // implements this older, supported version.
@@ -1910,7 +1911,7 @@ fn resolve_api_version_blessed<'a>(
     };
 
     // For the latest version, also require bytewise equality. This ensures that
-    // trivial changes don't accumulate invisibly. If the generated spec is
+    // trivial changes don't accumulate invisibly. If the generated document is
     // semantically equivalent but bytewise different, require a version bump.
     //
     // This check can be disabled via `allow_trivial_changes_for_latest()`.
@@ -1925,8 +1926,8 @@ fn resolve_api_version_blessed<'a>(
         });
     }
 
-    // Now, there should be at least one local spec that exactly matches the
-    // blessed one.
+    // Now, there should be at least one local document that exactly matches
+    // the blessed one.
     //
     // We partition local files into three categories:
     // 1. Valid files with matching hash/contents -> matching
@@ -2190,7 +2191,7 @@ fn resolve_api_version_blessed<'a>(
             doc_file_name: s
                 .doc_file_name()
                 .as_versioned()
-                .expect("blessed extra spec is versioned")
+                .expect("blessed extra document is versioned")
                 .clone(),
         }
     }));
@@ -2216,20 +2217,21 @@ fn resolve_api_version_local<'a>(
         .partition(|local| local.contents() == generated.contents());
 
     if matching.is_empty() {
-        // There was no matching spec.
+        // There was no matching document.
         if non_matching.is_empty() {
-            // There were no non-matching specs, either.
+            // There were no non-matching documents, either.
             problems
                 .push(VersionProblem::LocalVersionMissingLocal { generated });
         } else {
-            // There were non-matching specs.  This is your basic "stale" case.
+            // There were non-matching documents.  This is your basic "stale"
+            // case.
             problems.push(VersionProblem::LocalVersionStale {
                 doc_files: non_matching,
                 generated,
             });
         }
     } else if !non_matching.is_empty() {
-        // There was a matching spec, but also some non-matching ones.
+        // There was a matching document, but also some non-matching ones.
         // These are superfluous.  (It's not clear how this could happen.)
         let doc_file_names = DisplayableVec(
             non_matching
@@ -2237,7 +2239,9 @@ fn resolve_api_version_local<'a>(
                 .map(|s| {
                     s.doc_file_name()
                         .as_versioned()
-                        .expect("local specs in versioned API are versioned")
+                        .expect(
+                            "local documents in versioned API are versioned",
+                        )
                         .clone()
                 })
                 .collect(),

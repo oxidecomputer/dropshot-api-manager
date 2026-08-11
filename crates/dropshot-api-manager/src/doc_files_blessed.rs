@@ -31,7 +31,7 @@ use std::{collections::BTreeMap, ops::Deref};
 /// This type only represents versioned APIs, not lockstep APIs. Lockstep APIs
 /// don't have a meaningful "blessed" source since they're always regenerated.
 /// The type system enforces this invariant: construction will panic if given a
-/// lockstep spec.
+/// lockstep document.
 pub struct BlessedApiDocFile {
     inner: ApiDocFile,
     /// Cached versioned filename, avoiding repeated conversion.
@@ -56,15 +56,15 @@ impl BlessedApiDocFile {
     ///
     /// # Panics
     ///
-    /// Panics if the spec file is for a lockstep API. Blessed files only exist
-    /// for versioned APIs.
+    /// Panics if the document file is for a lockstep API. Blessed files only
+    /// exist for versioned APIs.
     pub fn new(inner: ApiDocFile) -> Self {
         let versioned_name = inner
             .doc_file_name()
             .as_versioned()
             .unwrap_or_else(|| {
                 panic!(
-                    "BlessedApiDocFile requires a versioned API spec, \
+                    "BlessedApiDocFile requires a versioned API document, \
                      got lockstep: {}",
                     inner.doc_file_name()
                 )
@@ -73,7 +73,7 @@ impl BlessedApiDocFile {
         Self { inner, versioned_name }
     }
 
-    /// Returns the versioned spec file name.
+    /// Returns the versioned document file name.
     ///
     /// Unlike `doc_file_name()` which returns `&ApiDocFileName`, this method
     /// returns the more specific `&VersionedApiDocFileName` since blessed

@@ -137,14 +137,14 @@ enum ApiBoundary {
     External,
 }
 
-fn validate(spec: &OpenAPI, mut cx: ValidationContext<'_>) {
+fn validate(doc: &OpenAPI, mut cx: ValidationContext<'_>) {
     // Here, we use Oxide's openapi-lint crate to perform some linting on the
     // OpenAPI document. This kind of validation is optional.
     let extra: ApiExtra =
         serde_json::from_value(cx.metadata().extra.clone()).unwrap();
     let errors = match extra.boundary {
-        ApiBoundary::Internal => openapi_lint::validate(spec),
-        ApiBoundary::External => openapi_lint::validate_external(spec),
+        ApiBoundary::Internal => openapi_lint::validate(doc),
+        ApiBoundary::External => openapi_lint::validate_external(doc),
     };
     for error in errors {
         cx.report_error(anyhow!(error));

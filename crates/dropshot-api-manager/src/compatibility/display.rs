@@ -717,7 +717,7 @@ mod tests {
 
     /// Build a small [`OperationIdMap`] from `(endpoint_base, op_id)` pairs.
     /// Used by synthetic-issue tests that bypass `api_compatible` and so
-    /// don't have a spec to extract op ids from.
+    /// don't have a document to extract op ids from.
     fn op_ids<'a>(entries: &[(&str, &'a str)]) -> OperationIdMap<'a> {
         entries
             .iter()
