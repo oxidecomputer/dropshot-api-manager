@@ -224,7 +224,7 @@ For global validation, set the `validation` function on the `ManagedApis` struct
 For extra validation on some documents, it's recommended that you put them on the trait, within the API crate.
 
 1. In the API crate, add dependencies on `openapiv3` and `dropshot-api-manager-types`.
-2. Define a function with signature `fn validate_api(spec: &openapiv3::OpenAPI, mut cx: dropshot_api_manager_types::ValidationContext<'_>) which performs the extra validation steps.
+2. Define a function with signature `fn validate_api(doc: &openapiv3::OpenAPI, mut cx: dropshot_api_manager_types::ValidationContext<'_>) which performs the extra validation steps.
 3. Convert the `ManagedApiConfig` to a `ManagedApi` and call the `with_extra_validation` builder method with this function.
 
 Currently, the validator can do two things:
@@ -316,7 +316,7 @@ flowchart TD
     HaveSupportedVersion["Have supported version<br/>(explicit list in Rust code)"]
     QIsLockstep{"Is this a lockstep API?"}
     IsLockstep["Make the local OpenAPI document match the generated one."]
-    QHaveBlessedSpec{"Is there an OpenAPI document in the blessed source (upstream)?"}
+    QHaveBlessedDoc{"Is there an OpenAPI document in the blessed source (upstream)?"}
     HaveBlessed["Verify that the generated OpenAPI document is compatible with the blessed document."]
     NoBlessed["Make the local OpenAPI document match the generated one (and remove any others)"]
     IsLatest{"Is it the latest version of this API?"}
@@ -324,9 +324,9 @@ flowchart TD
 
     HaveSupportedVersion --> QIsLockstep
     QIsLockstep -->|"Yes"|IsLockstep
-    QIsLockstep -->|"No, it's versioned"|QHaveBlessedSpec
-    QHaveBlessedSpec -->|"Yes, it's a blessed version"| HaveBlessed
-    QHaveBlessedSpec -->|"No, it's a locally-added version"| NoBlessed
+    QIsLockstep -->|"No, it's versioned"|QHaveBlessedDoc
+    QHaveBlessedDoc -->|"Yes, it's a blessed version"| HaveBlessed
+    QHaveBlessedDoc -->|"No, it's a locally-added version"| NoBlessed
     HaveBlessed --> IsLatest
     NoBlessed --> IsLatest
     IsLatest --> |"Yes"|NeedSymlink

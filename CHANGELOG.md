@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Changed
+
+- Consistently use "OpenAPI document" everywhere instead of "OpenAPI spec". A number of type names have been changed to use this terminology.
+
 ## [0.7.2] - 2026-05-20
 
 ### Changed
