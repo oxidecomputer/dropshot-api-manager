@@ -1,7 +1,7 @@
 // Copyright 2026 Oxide Computer Company
 
 //! Describes the environment the command is running in, and particularly where
-//! different sets of specifications are loaded from
+//! different sets of OpenAPI documents are loaded from.
 
 use crate::{
     apis::ManagedApis,
