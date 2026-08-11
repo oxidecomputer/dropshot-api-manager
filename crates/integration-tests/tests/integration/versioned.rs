@@ -106,30 +106,30 @@ fn test_versioned_content_by_version() -> Result<()> {
     // Parse all version documents.
     let v1_content =
         env.read_versioned_document("versioned-health", "1.0.0")?;
-    let v1_spec: OpenAPI = serde_json::from_str(&v1_content)?;
+    let v1_doc: OpenAPI = serde_json::from_str(&v1_content)?;
 
     let v2_content =
         env.read_versioned_document("versioned-health", "2.0.0")?;
-    let v2_spec: OpenAPI = serde_json::from_str(&v2_content)?;
+    let v2_doc: OpenAPI = serde_json::from_str(&v2_content)?;
 
     let v3_content =
         env.read_versioned_document("versioned-health", "3.0.0")?;
-    let v3_spec: OpenAPI = serde_json::from_str(&v3_content)?;
+    let v3_doc: OpenAPI = serde_json::from_str(&v3_content)?;
 
     // Version 1.0.0 should only have /health endpoint.
-    assert!(v1_spec.paths.paths.contains_key("/health"));
-    assert!(!v1_spec.paths.paths.contains_key("/health/detailed"));
-    assert!(!v1_spec.paths.paths.contains_key("/metrics"));
+    assert!(v1_doc.paths.paths.contains_key("/health"));
+    assert!(!v1_doc.paths.paths.contains_key("/health/detailed"));
+    assert!(!v1_doc.paths.paths.contains_key("/metrics"));
 
     // Version 2.0.0 should have /health and /health/detailed endpoints.
-    assert!(v2_spec.paths.paths.contains_key("/health"));
-    assert!(v2_spec.paths.paths.contains_key("/health/detailed"));
-    assert!(!v2_spec.paths.paths.contains_key("/metrics"));
+    assert!(v2_doc.paths.paths.contains_key("/health"));
+    assert!(v2_doc.paths.paths.contains_key("/health/detailed"));
+    assert!(!v2_doc.paths.paths.contains_key("/metrics"));
 
     // Version 3.0.0 should have all endpoints.
-    assert!(v3_spec.paths.paths.contains_key("/health"));
-    assert!(v3_spec.paths.paths.contains_key("/health/detailed"));
-    assert!(v3_spec.paths.paths.contains_key("/metrics"));
+    assert!(v3_doc.paths.paths.contains_key("/health"));
+    assert!(v3_doc.paths.paths.contains_key("/health/detailed"));
+    assert!(v3_doc.paths.paths.contains_key("/metrics"));
 
     Ok(())
 }
@@ -149,17 +149,17 @@ fn test_versioned_latest_document() -> Result<()> {
     let v3_content =
         env.read_versioned_document("versioned-health", "3.0.0")?;
 
-    let latest_spec: OpenAPI = serde_json::from_str(&latest_content)?;
-    let v3_spec: OpenAPI = serde_json::from_str(&v3_content)?;
+    let latest_doc: OpenAPI = serde_json::from_str(&latest_content)?;
+    let v3_doc: OpenAPI = serde_json::from_str(&v3_content)?;
 
     // Latest should match version 3.0.0 (newest version).
-    assert_eq!(latest_spec.info.version, "3.0.0");
-    assert_eq!(latest_spec.paths.paths.len(), v3_spec.paths.paths.len());
+    assert_eq!(latest_doc.info.version, "3.0.0");
+    assert_eq!(latest_doc.paths.paths.len(), v3_doc.paths.paths.len());
 
     // Both should have all endpoints.
-    assert!(latest_spec.paths.paths.contains_key("/health"));
-    assert!(latest_spec.paths.paths.contains_key("/health/detailed"));
-    assert!(latest_spec.paths.paths.contains_key("/metrics"));
+    assert!(latest_doc.paths.paths.contains_key("/health"));
+    assert!(latest_doc.paths.paths.contains_key("/health/detailed"));
+    assert!(latest_doc.paths.paths.contains_key("/metrics"));
 
     Ok(())
 }
@@ -592,7 +592,7 @@ fn test_removing_api_version_fails_check() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::LocalSpecFileOrphaned,
+                ProblemKind::LocalDocFileOrphaned,
             ),
             ProblemSummary::for_api(
                 "versioned-health",
@@ -704,7 +704,7 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::LocalSpecFileOrphaned,
+                ProblemKind::LocalDocFileOrphaned,
             ),
             ProblemSummary::for_api(
                 "versioned-health",
@@ -746,8 +746,8 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
     // Verify the latest document now points to v2.0.0 (the new highest version).
     let latest_content =
         env.read_versioned_latest_document("versioned-health")?;
-    let latest_spec: OpenAPI = serde_json::from_str(&latest_content)?;
-    assert_eq!(latest_spec.info.version, "2.0.0");
+    let latest_doc: OpenAPI = serde_json::from_str(&latest_content)?;
+    assert_eq!(latest_doc.info.version, "2.0.0");
 
     // Commit the retired version.
     env.commit_documents()?;
@@ -778,8 +778,8 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
     // should be the blessed version, not the generated version.
     let latest_content =
         env.read_versioned_latest_document("versioned-health")?;
-    let latest_spec: OpenAPI = serde_json::from_str(&latest_content)?;
-    assert_eq!(latest_spec.info.version, "2.0.0");
+    let latest_doc: OpenAPI = serde_json::from_str(&latest_content)?;
+    assert_eq!(latest_doc.info.version, "2.0.0");
 
     // Verify we can no longer use the old full API against the new blessed
     // documents.
@@ -856,7 +856,7 @@ fn test_retiring_older_blessed_version() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "2.0.0",
-            ProblemKind::LocalSpecFileOrphaned,
+            ProblemKind::LocalDocFileOrphaned,
         )],
     );
 
@@ -893,8 +893,8 @@ fn test_retiring_older_blessed_version() -> Result<()> {
     // Verify the latest document still points to v3.0.0 (the highest version).
     let latest_content =
         env.read_versioned_latest_document("versioned-health")?;
-    let latest_spec: OpenAPI = serde_json::from_str(&latest_content)?;
-    assert_eq!(latest_spec.info.version, "3.0.0");
+    let latest_doc: OpenAPI = serde_json::from_str(&latest_content)?;
+    assert_eq!(latest_doc.info.version, "3.0.0");
 
     // Commit the retired version.
     env.commit_documents()?;
@@ -925,8 +925,8 @@ fn test_retiring_older_blessed_version() -> Result<()> {
     // should be the blessed version, not the generated version.
     let latest_content =
         env.read_versioned_latest_document("versioned-health")?;
-    let latest_spec: OpenAPI = serde_json::from_str(&latest_content)?;
-    assert_eq!(latest_spec.info.version, "3.0.0");
+    let latest_doc: OpenAPI = serde_json::from_str(&latest_content)?;
+    assert_eq!(latest_doc.info.version, "3.0.0");
 
     // Verify we can no longer use the old full API against the new blessed
     // documents.
@@ -1084,7 +1084,7 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
     Ok(())
 }
 
-/// Test BlessedVersionExtraLocalSpec problems.
+/// Test BlessedVersionExtraLocalDoc problems.
 ///
 /// This test:
 ///
@@ -1092,7 +1092,7 @@ fn test_incompatible_blessed_api_change() -> Result<()> {
 /// * in a separate environment, creates another blessed version
 /// * copies over this extra version
 #[test]
-fn test_blessed_version_extra_local_spec() -> Result<()> {
+fn test_blessed_version_extra_local_doc() -> Result<()> {
     let env = TestEnvironment::new_git()?;
     let apis = versioned_health_apis()?;
 
@@ -1141,7 +1141,7 @@ fn test_blessed_version_extra_local_spec() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "3.0.0",
-            ProblemKind::BlessedVersionExtraLocalSpec,
+            ProblemKind::BlessedVersionExtraLocalDoc,
         )],
     );
 
@@ -1779,7 +1779,7 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -1815,7 +1815,7 @@ fn test_merge_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -1857,7 +1857,7 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -1898,7 +1898,7 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalSpec,
+                ProblemKind::BlessedVersionExtraLocalDoc,
             ),
         ],
     );
@@ -1933,11 +1933,11 @@ fn test_blessed_ws_old_format_fails_without_normalizer() -> Result<()> {
         .expect("v1 doc should exist");
     let new_content = env.read_file(&new_doc_path)?;
 
-    let old_spec: serde_json::Value = serde_json::from_str(&old_content)?;
-    let new_spec: serde_json::Value = serde_json::from_str(&new_content)?;
+    let old_doc: serde_json::Value = serde_json::from_str(&old_content)?;
+    let new_doc: serde_json::Value = serde_json::from_str(&new_content)?;
 
     // Raw drift comparison (no normalizer) should find issues.
-    let changes = drift::compare(&old_spec, &new_spec)?;
+    let changes = drift::compare(&old_doc, &new_doc)?;
     let non_trivial: Vec<_> = changes
         .iter()
         .filter(|c| {

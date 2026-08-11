@@ -1797,7 +1797,7 @@ fn record_validation_call(
     });
 }
 
-fn validate(_spec: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
+fn validate(_doc: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
     // Only used with versioned APIs, so version is always present.
     let version = cx
         .file_name()
@@ -1809,7 +1809,7 @@ fn validate(_spec: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
 }
 
 fn validate_with_extra_file(
-    _spec: &openapiv3::OpenAPI,
+    _doc: &openapiv3::OpenAPI,
     mut cx: ValidationContext<'_>,
 ) {
     // Only used with versioned APIs, so version is always present.

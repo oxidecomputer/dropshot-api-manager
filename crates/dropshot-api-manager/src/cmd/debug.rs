@@ -2,12 +2,12 @@
 
 use crate::{
     apis::ManagedApis,
+    doc_files_generic::{ApiFiles, AsRawFiles},
     environment::{
         BlessedSource, ErrorAccumulator, GeneratedSource, ResolvedEnv,
     },
     output::OutputOpts,
     resolved::Resolved,
-    spec_files_generic::{ApiFiles, AsRawFiles},
 };
 use dropshot_api_manager_types::ApiIdent;
 use std::collections::BTreeMap;
@@ -109,7 +109,7 @@ pub(crate) fn debug_impl(
 }
 
 fn dump_structure<T: AsRawFiles>(
-    spec_files: &BTreeMap<ApiIdent, ApiFiles<T>>,
+    doc_files: &BTreeMap<ApiIdent, ApiFiles<T>>,
     error_accumulator: &ErrorAccumulator,
 ) {
     let warnings: Vec<_> = error_accumulator.iter_warnings().collect();
@@ -124,7 +124,7 @@ fn dump_structure<T: AsRawFiles>(
         println!("    error: {:#}", e);
     }
 
-    for (api_ident, info) in spec_files {
+    for (api_ident, info) in doc_files {
         println!("    API: {}", api_ident);
         println!(
             "        latest: {}",
@@ -135,14 +135,14 @@ fn dump_structure<T: AsRawFiles>(
         );
         for (version, files) in info.versions() {
             println!("        version {}:", version);
-            for api_spec in files.as_raw_files() {
-                let version_str = api_spec
+            for api_doc in files.as_raw_files() {
+                let version_str = api_doc
                     .version()
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "unparseable".to_string());
                 println!(
                     "            file {} (v{})",
-                    api_spec.spec_file_name().path(),
+                    api_doc.doc_file_name().path(),
                     version_str
                 );
             }

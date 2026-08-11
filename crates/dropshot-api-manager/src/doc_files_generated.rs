@@ -5,11 +5,11 @@
 
 use crate::{
     apis::{ManagedApi, ManagedApis},
-    environment::ErrorAccumulator,
-    spec_files_generic::{
-        ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        SpecFileInfo, hash_contents,
+    doc_files_generic::{
+        ApiDocFile, ApiDocFilesBuilder, ApiFiles, ApiLoad, AsRawFiles,
+        DocFileInfo, hash_contents,
     },
+    environment::ErrorAccumulator,
 };
 use anyhow::{anyhow, bail};
 use dropshot_api_manager_types::{
@@ -18,37 +18,37 @@ use dropshot_api_manager_types::{
 use rayon::prelude::*;
 use std::{collections::BTreeMap, ops::Deref};
 
-/// Newtype wrapper around [`ApiSpecFile`] to describe OpenAPI documents
+/// Newtype wrapper around [`ApiDocFile`] to describe OpenAPI documents
 /// generated from API definitions
 ///
 /// This includes documents for lockstep APIs and versioned APIs, for both
 /// blessed and locally-added versions.
-pub struct GeneratedApiSpecFile(ApiSpecFile);
-NewtypeDebug! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
-NewtypeDeref! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
-NewtypeDerefMut! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
-NewtypeFrom! { () pub struct GeneratedApiSpecFile(ApiSpecFile); }
+pub struct GeneratedApiDocFile(ApiDocFile);
+NewtypeDebug! { () pub struct GeneratedApiDocFile(ApiDocFile); }
+NewtypeDeref! { () pub struct GeneratedApiDocFile(ApiDocFile); }
+NewtypeDerefMut! { () pub struct GeneratedApiDocFile(ApiDocFile); }
+NewtypeFrom! { () pub struct GeneratedApiDocFile(ApiDocFile); }
 
-// Trait impls that allow us to use `ApiFiles<GeneratedApiSpecFile>`
+// Trait impls that allow us to use `ApiFiles<GeneratedApiDocFile>`
 //
 // Note that this is NOT a `Vec` because it's NOT allowed to have more than one
-// GeneratedApiSpecFile for a given version.
+// GeneratedApiDocFile for a given version.
 
-impl ApiLoad for GeneratedApiSpecFile {
+impl ApiLoad for GeneratedApiDocFile {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
     type Unparseable = std::convert::Infallible;
 
-    fn make_item(raw: ApiSpecFile) -> Self {
-        GeneratedApiSpecFile(raw)
+    fn make_item(raw: ApiDocFile) -> Self {
+        GeneratedApiDocFile(raw)
     }
 
-    fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
+    fn try_extend(&mut self, item: ApiDocFile) -> anyhow::Result<()> {
         // This should be impossible.
         bail!(
             "found more than one generated OpenAPI document for a given \
              API version: at least {} and {}",
-            self.spec_file_name(),
-            item.spec_file_name()
+            self.doc_file_name(),
+            item.doc_file_name()
         );
     }
 
@@ -68,11 +68,11 @@ impl ApiLoad for GeneratedApiSpecFile {
     }
 }
 
-impl AsRawFiles for GeneratedApiSpecFile {
+impl AsRawFiles for GeneratedApiDocFile {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
-        Box::new(std::iter::once(self.deref() as &dyn SpecFileInfo))
+    ) -> Box<dyn Iterator<Item = &'a dyn DocFileInfo> + 'a> {
+        Box::new(std::iter::once(self.deref() as &dyn DocFileInfo))
     }
 }
 
@@ -82,26 +82,26 @@ impl AsRawFiles for GeneratedApiSpecFile {
 /// structure.**
 ///
 /// For more on what's been validated at this point, see
-/// [`ApiSpecFilesBuilder`].
-pub struct GeneratedFiles(BTreeMap<ApiIdent, ApiFiles<GeneratedApiSpecFile>>);
+/// [`ApiDocFilesBuilder`].
+pub struct GeneratedFiles(BTreeMap<ApiIdent, ApiFiles<GeneratedApiDocFile>>);
 NewtypeDeref! {
     () pub struct GeneratedFiles(
-        BTreeMap<ApiIdent, ApiFiles<GeneratedApiSpecFile>>
+        BTreeMap<ApiIdent, ApiFiles<GeneratedApiDocFile>>
     );
 }
 
 /// Intermediate result from generating all versions for a single API.
 ///
 /// This is produced in parallel (one per API) and then fed sequentially
-/// into `ApiSpecFilesBuilder`. Each version is fully deserialized in the
+/// into `ApiDocFilesBuilder`. Each version is fully deserialized in the
 /// parallel phase so that serde work doesn't bottleneck the reduce phase.
 enum GeneratedApiResult {
     Lockstep {
-        versions: Vec<Result<ApiSpecFile, anyhow::Error>>,
+        versions: Vec<Result<ApiDocFile, anyhow::Error>>,
     },
     Versioned {
         ident: ApiIdent,
-        versions: Vec<Result<ApiSpecFile, anyhow::Error>>,
+        versions: Vec<Result<ApiDocFile, anyhow::Error>>,
         latest: Option<VersionedApiDocFileName>,
     },
 }
@@ -114,11 +114,11 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
         let versions = api
             .iter_versions_semver()
             .map(|version| {
-                api.generate_spec_bytes(version)
+                api.generate_doc_bytes(version)
                     .and_then(|contents| {
                         let file_name =
                             LockstepApiDocFileName::new(api.ident().clone());
-                        ApiSpecFile::for_contents(file_name.into(), contents)
+                        ApiDocFile::for_contents(file_name.into(), contents)
                             .map_err(|(e, _buf)| e)
                     })
                     .map_err(|error| {
@@ -143,14 +143,14 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
             .par_iter()
             .map(|supported_version| {
                 let version = supported_version.semver();
-                api.generate_spec_bytes(version)
+                api.generate_doc_bytes(version)
                     .and_then(|contents| {
                         let file_name = VersionedApiDocFileName::new(
                             api.ident().clone(),
                             version.clone(),
                             hash_contents(&contents),
                         );
-                        ApiSpecFile::for_contents(file_name.into(), contents)
+                        ApiDocFile::for_contents(file_name.into(), contents)
                             .map_err(|(e, _buf)| e)
                     })
                     .map_err(|error| {
@@ -168,7 +168,7 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
         //
         // (Note that ParallelIterator::map does not reorder items.)
         let latest = versions.iter().rev().find_map(|r| {
-            r.as_ref().ok().map(|file| match file.spec_file_name() {
+            r.as_ref().ok().map(|file| match file.doc_file_name() {
                 ApiDocFileName::Versioned(v) => v.clone(),
                 ApiDocFileName::Lockstep(_) => {
                     unreachable!("lockstep file name in versioned API path")
@@ -201,8 +201,8 @@ impl GeneratedFiles {
             .collect();
 
         // Reduce: feed results into the builder sequentially.
-        let mut api_files: ApiSpecFilesBuilder<GeneratedApiSpecFile> =
-            ApiSpecFilesBuilder::new(apis, error_accumulator);
+        let mut api_files: ApiDocFilesBuilder<GeneratedApiDocFile> =
+            ApiDocFilesBuilder::new(apis, error_accumulator);
 
         for result in results {
             let (versions, latest_info) = match result {
@@ -235,10 +235,8 @@ impl GeneratedFiles {
     }
 }
 
-impl<'a> From<ApiSpecFilesBuilder<'a, GeneratedApiSpecFile>>
-    for GeneratedFiles
-{
-    fn from(api_files: ApiSpecFilesBuilder<'a, GeneratedApiSpecFile>) -> Self {
+impl<'a> From<ApiDocFilesBuilder<'a, GeneratedApiDocFile>> for GeneratedFiles {
+    fn from(api_files: ApiDocFilesBuilder<'a, GeneratedApiDocFile>) -> Self {
         GeneratedFiles(api_files.into_map())
     }
 }

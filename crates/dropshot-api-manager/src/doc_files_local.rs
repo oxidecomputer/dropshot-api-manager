@@ -5,12 +5,12 @@
 
 use crate::{
     apis::ManagedApis,
-    environment::ErrorAccumulator,
-    spec_files_generic::{
-        ApiFiles, ApiLoad, ApiSpecFile, ApiSpecFilesBuilder, AsRawFiles,
-        SpecFileInfo, parse_lockstep_file_name, parse_versioned_file_name,
+    doc_files_generic::{
+        ApiDocFile, ApiDocFilesBuilder, ApiFiles, ApiLoad, AsRawFiles,
+        DocFileInfo, parse_lockstep_file_name, parse_versioned_file_name,
         parse_versioned_git_stub_file_name,
     },
+    environment::ErrorAccumulator,
     vcs::RepoVcs,
 };
 use anyhow::{Context, anyhow};
@@ -45,11 +45,11 @@ pub struct LocalApiUnparseable {
 /// to merge conflict markers). Unparseable files are tracked so they can be
 /// regenerated during the generate command.
 #[derive(Debug)]
-pub enum LocalApiSpecFile {
+pub enum LocalApiDocFile {
     /// A valid, successfully parsed OpenAPI document.
     Valid {
         /// The parsed OpenAPI document.
-        spec: Box<ApiSpecFile>,
+        doc: Box<ApiDocFile>,
         /// Commit hash parsed from the `.gitstub` file, if this file was
         /// loaded from one. `None` for regular JSON files.
         git_stub_commit: Option<GitCommitHash>,
@@ -58,11 +58,11 @@ pub enum LocalApiSpecFile {
     Unparseable(LocalApiUnparseable),
 }
 
-impl LocalApiSpecFile {
+impl LocalApiDocFile {
     /// Returns the spec file name.
-    pub fn spec_file_name(&self) -> &ApiDocFileName {
+    pub fn doc_file_name(&self) -> &ApiDocFileName {
         match self {
-            Self::Valid { spec, .. } => spec.spec_file_name(),
+            Self::Valid { doc, .. } => doc.doc_file_name(),
             Self::Unparseable(u) => &u.name,
         }
     }
@@ -72,7 +72,7 @@ impl LocalApiSpecFile {
     /// This works for both valid and unparseable files.
     pub fn contents(&self) -> &[u8] {
         match self {
-            Self::Valid { spec, .. } => spec.contents(),
+            Self::Valid { doc, .. } => doc.contents(),
             Self::Unparseable(u) => &u.contents,
         }
     }
@@ -92,39 +92,39 @@ impl LocalApiSpecFile {
     }
 }
 
-impl SpecFileInfo for LocalApiSpecFile {
-    fn spec_file_name(&self) -> &ApiDocFileName {
-        self.spec_file_name()
+impl DocFileInfo for LocalApiDocFile {
+    fn doc_file_name(&self) -> &ApiDocFileName {
+        self.doc_file_name()
     }
 
     fn version(&self) -> Option<&semver::Version> {
         match self {
-            Self::Valid { spec, .. } => Some(spec.version()),
+            Self::Valid { doc, .. } => Some(doc.version()),
             Self::Unparseable(_) => None,
         }
     }
 }
 
-// Trait impls that allow us to use `ApiFiles<Vec<LocalApiSpecFile>>`
+// Trait impls that allow us to use `ApiFiles<Vec<LocalApiDocFile>>`
 //
 // Note that this is a `Vec` because it's allowed to have more than one
-// LocalApiSpecFile for a given version.
+// LocalApiDocFile for a given version.
 
-impl ApiLoad for Vec<LocalApiSpecFile> {
+impl ApiLoad for Vec<LocalApiDocFile> {
     const MISCONFIGURATIONS_ALLOWED: bool = false;
     type Unparseable = LocalApiUnparseable;
 
-    fn try_extend(&mut self, item: ApiSpecFile) -> anyhow::Result<()> {
-        self.push(LocalApiSpecFile::Valid {
-            spec: Box::new(item),
+    fn try_extend(&mut self, item: ApiDocFile) -> anyhow::Result<()> {
+        self.push(LocalApiDocFile::Valid {
+            doc: Box::new(item),
             git_stub_commit: None,
         });
         Ok(())
     }
 
-    fn make_item(raw: ApiSpecFile) -> Self {
-        vec![LocalApiSpecFile::Valid {
-            spec: Box::new(raw),
+    fn make_item(raw: ApiDocFile) -> Self {
+        vec![LocalApiDocFile::Valid {
+            doc: Box::new(raw),
             git_stub_commit: None,
         }]
     }
@@ -137,15 +137,15 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
     }
 
     fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
-        vec![LocalApiSpecFile::Unparseable(unparseable)]
+        vec![LocalApiDocFile::Unparseable(unparseable)]
     }
 
     fn extend_unparseable(&mut self, unparseable: Self::Unparseable) {
-        self.push(LocalApiSpecFile::Unparseable(unparseable));
+        self.push(LocalApiDocFile::Unparseable(unparseable));
     }
 
     fn set_git_stub_commit(&mut self, commit: GitCommitHash) {
-        if let Some(LocalApiSpecFile::Valid { git_stub_commit, .. }) =
+        if let Some(LocalApiDocFile::Valid { git_stub_commit, .. }) =
             self.last_mut()
         {
             *git_stub_commit = Some(commit);
@@ -153,11 +153,11 @@ impl ApiLoad for Vec<LocalApiSpecFile> {
     }
 }
 
-impl AsRawFiles for Vec<LocalApiSpecFile> {
+impl AsRawFiles for Vec<LocalApiDocFile> {
     fn as_raw_files<'a>(
         &'a self,
-    ) -> Box<dyn Iterator<Item = &'a dyn SpecFileInfo> + 'a> {
-        Box::new(self.iter().map(|f| f as &dyn SpecFileInfo))
+    ) -> Box<dyn Iterator<Item = &'a dyn DocFileInfo> + 'a> {
+        Box::new(self.iter().map(|f| f as &dyn DocFileInfo))
     }
 }
 
@@ -167,15 +167,15 @@ impl AsRawFiles for Vec<LocalApiSpecFile> {
 /// structure.**
 ///
 /// For more on what's been validated at this point, see
-/// [`ApiSpecFilesBuilder`].
+/// [`ApiDocFilesBuilder`].
 #[derive(Debug, Default)]
 pub struct LocalFiles {
     /// The loaded local files.
-    files: BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>,
+    files: BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiDocFile>>>,
 }
 
 impl Deref for LocalFiles {
-    type Target = BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiSpecFile>>>;
+    type Target = BTreeMap<ApiIdent, ApiFiles<Vec<LocalApiDocFile>>>;
 
     fn deref(&self) -> &Self::Target {
         &self.files
@@ -205,8 +205,8 @@ impl LocalFiles {
     }
 }
 
-impl From<ApiSpecFilesBuilder<'_, Vec<LocalApiSpecFile>>> for LocalFiles {
-    fn from(api_files: ApiSpecFilesBuilder<Vec<LocalApiSpecFile>>) -> Self {
+impl From<ApiDocFilesBuilder<'_, Vec<LocalApiDocFile>>> for LocalFiles {
+    fn from(api_files: ApiDocFilesBuilder<Vec<LocalApiDocFile>>) -> Self {
         LocalFiles { files: api_files.into_map() }
     }
 }
@@ -239,15 +239,15 @@ enum LocalFileResult {
     // --- Successfully parsed filename + deserialized ---
     LockstepDeserialized {
         file_name: ApiDocFileName,
-        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
     },
     VersionedDeserialized {
         file_name: ApiDocFileName,
-        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
     },
     GitStubDeserialized {
         file_name: ApiDocFileName,
-        result: Result<ApiSpecFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
         commit: GitCommitHash,
     },
 
@@ -451,7 +451,7 @@ fn process_local_entry(
             // Try to parse as a lockstep filename. If that fails, defer
             // diagnostics to the reduce phase (the builder methods produce
             // the correct warnings/errors depending on T).
-            let Some(spec_file_name) =
+            let Some(doc_file_name) =
                 parse_lockstep_file_name(apis, &file_name)
                     .ok()
                     .map(ApiDocFileName::from)
@@ -467,9 +467,9 @@ fn process_local_entry(
             };
 
             let result =
-                ApiSpecFile::for_contents(spec_file_name.clone(), contents);
+                ApiDocFile::for_contents(doc_file_name.clone(), contents);
             LocalFileResult::LockstepDeserialized {
-                file_name: spec_file_name,
+                file_name: doc_file_name,
                 result,
             }
         }
@@ -479,7 +479,7 @@ fn process_local_entry(
             file_name,
             path,
         } => {
-            let Some(spec_file_name) =
+            let Some(doc_file_name) =
                 parse_versioned_file_name(apis, &dir_basename, &file_name)
                     .ok()
                     .map(ApiDocFileName::from)
@@ -498,15 +498,15 @@ fn process_local_entry(
             };
 
             let result =
-                ApiSpecFile::for_contents(spec_file_name.clone(), contents);
+                ApiDocFile::for_contents(doc_file_name.clone(), contents);
             LocalFileResult::VersionedDeserialized {
-                file_name: spec_file_name,
+                file_name: doc_file_name,
                 result,
             }
         }
 
         LocalDiscoveredEntry::GitStub { dir_basename, file_name, path } => {
-            let Some(spec_file_name) = parse_versioned_git_stub_file_name(
+            let Some(doc_file_name) = parse_versioned_git_stub_file_name(
                 apis,
                 &dir_basename,
                 &file_name,
@@ -533,7 +533,7 @@ fn process_local_entry(
                 Ok(g) => g,
                 Err(error) => {
                     return LocalFileResult::GitStubUnresolvable {
-                        file_name: spec_file_name,
+                        file_name: doc_file_name,
                         original_contents: git_stub_contents.into_bytes(),
                         reason: anyhow!(error).context(format!(
                             "Git stub {:?} could not be parsed",
@@ -546,7 +546,7 @@ fn process_local_entry(
             // Check if the stub needs rewriting to canonical format.
             if git_stub.needs_rewrite() {
                 return LocalFileResult::GitStubUnresolvable {
-                    file_name: spec_file_name,
+                    file_name: doc_file_name,
                     original_contents: git_stub_contents.into_bytes(),
                     reason: anyhow!(
                         "Git stub {:?} needs to be rewritten to \
@@ -563,7 +563,7 @@ fn process_local_entry(
                 Ok(c) => c,
                 Err(error) => {
                     return LocalFileResult::GitStubUnresolvable {
-                        file_name: spec_file_name,
+                        file_name: doc_file_name,
                         original_contents: git_stub_contents.into_bytes(),
                         reason: error.context(format!(
                             "Git stub {:?} could not be resolved",
@@ -576,9 +576,9 @@ fn process_local_entry(
             // Deserialize the resolved contents.
             let commit = git_stub.commit();
             let result =
-                ApiSpecFile::for_contents(spec_file_name.clone(), contents);
+                ApiDocFile::for_contents(doc_file_name.clone(), contents);
             LocalFileResult::GitStubDeserialized {
-                file_name: spec_file_name,
+                file_name: doc_file_name,
                 result,
                 commit,
             }
@@ -632,7 +632,7 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
     error_accumulator: &'a mut ErrorAccumulator,
     repo_root: &Utf8Path,
     vcs: &RepoVcs,
-) -> anyhow::Result<ApiSpecFilesBuilder<'a, T>> {
+) -> anyhow::Result<ApiDocFilesBuilder<'a, T>> {
     // Phase 1: discover entries (sequential, fast).
     let entries = discover_local_entries(dir)?;
 
@@ -643,7 +643,7 @@ pub fn walk_local_directory<'a, T: ApiLoad + AsRawFiles>(
         .collect();
 
     // Phase 3: reduce into builder (sequential).
-    let mut api_files = ApiSpecFilesBuilder::new(apis, error_accumulator);
+    let mut api_files = ApiDocFilesBuilder::new(apis, error_accumulator);
 
     // Cache for `versioned_directory()` results to avoid duplicate
     // warnings for entries from the same directory.

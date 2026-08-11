@@ -5,14 +5,14 @@
 
 use crate::{
     apis::ManagedApis,
+    doc_files_blessed::{BlessedApiDocFile, BlessedFiles},
+    doc_files_generated::GeneratedFiles,
+    doc_files_generic::ApiDocFilesBuilder,
+    doc_files_local::{LocalFiles, walk_local_directory},
     output::{
         Styles,
         headers::{GENERATING, HEADER_WIDTH},
     },
-    spec_files_blessed::{BlessedApiSpecFile, BlessedFiles},
-    spec_files_generated::GeneratedFiles,
-    spec_files_generic::ApiSpecFilesBuilder,
-    spec_files_local::{LocalFiles, walk_local_directory},
     vcs::{RepoVcs, RepoVcsKind, VcsRevision},
 };
 use anyhow::Context;
@@ -305,7 +305,7 @@ impl BlessedSource {
                     "Loading".style(styles.success_header),
                     local_directory,
                 )?;
-                let api_files: ApiSpecFilesBuilder<'_, BlessedApiSpecFile> =
+                let api_files: ApiDocFilesBuilder<'_, BlessedApiDocFile> =
                     walk_local_directory(
                         local_directory,
                         apis,
