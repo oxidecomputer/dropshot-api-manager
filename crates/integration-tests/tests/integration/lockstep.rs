@@ -11,7 +11,7 @@ use dropshot_api_manager::{
     ManagedApiConfig, ManagedApis,
     test_util::{
         CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
-        check_apis_with_summaries,
+        check_apis_with_render,
     },
 };
 use integration_tests::*;
@@ -158,9 +158,14 @@ fn test_unparseable_conflict_markers() -> Result<()> {
 "#;
     env.create_file("documents/health.json", conflict_content)?;
 
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "lockstep_unparseable.txt",
+        &rendered,
+    );
     assert_eq!(
         summaries,
         [ProblemSummary::new(

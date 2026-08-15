@@ -586,9 +586,14 @@ fn test_removing_api_version_fails_check() -> Result<()> {
     let v3_orphan_path = env
         .find_versioned_document_path("versioned-health", "3.0.0")?
         .expect("orphaned v3 document exists");
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &reduced_apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &reduced_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "orphaned_valid_doc.txt",
+        &rendered,
+    );
     assert_eq!(
         summaries,
         [
@@ -1023,21 +1028,7 @@ fn render_blessed_version_broken_snapshot(
         check_apis_with_render(env.environment(), &generated)?;
     assert_eq!(result, CheckResult::Failures);
 
-    // The "Loading local OpenAPI documents from <abs_dir>" line embeds the
-    // tempdir path, which varies per run. The path is rendered with `{:?}`
-    // (Debug), which on Windows escapes backslashes — so we have to match
-    // the Debug-formatted form (which includes surrounding quotes), not
-    // the raw `as_str()` form, otherwise the replacement silently no-ops
-    // on Windows. The placeholder restores the quotes so the line still
-    // reads naturally.
-    let documents_dir_debug = format!("{:?}", env.documents_dir());
-    let normalized =
-        rendered.replace(&documents_dir_debug, "\"<documents dir>\"");
-
-    let snapshot_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/output/integration")
-        .join(snapshot_name);
-    expectorate::assert_contents(snapshot_path, &normalized);
+    crate::snapshot::assert_render_snapshot(&env, snapshot_name, &rendered);
     Ok(())
 }
 

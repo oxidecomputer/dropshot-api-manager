@@ -13,7 +13,7 @@ use dropshot_api_manager::{
     ManagedApis,
     test_util::{
         CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
-        check_apis_with_summaries,
+        check_apis_with_render, check_apis_with_summaries,
     },
 };
 use integration_tests::{
@@ -1869,12 +1869,17 @@ fn test_non_canonical_git_stub_regenerated() -> Result<()> {
     let non_canonical_content = format!("{}:{}", commit, non_canonical_path);
     env.create_file(&v1_git_stub_path, &non_canonical_content)?;
 
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for non-canonical Git stub"
+    );
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "non_canonical_git_stub.txt",
+        &rendered,
     );
     assert_eq!(
         summaries,
@@ -2061,12 +2066,17 @@ fn test_stale_hash_resolvable_git_stub_deleted() -> Result<()> {
         &format!("{v1_v2_commit}:{v2_json_committed_path}\n"),
     )?;
 
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for a stale-hash Git stub"
+    );
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "stale_hash_git_stub.txt",
+        &rendered,
     );
     assert_eq!(
         summaries,

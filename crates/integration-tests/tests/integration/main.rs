@@ -3,4 +3,5 @@
 mod generated_from_dir;
 mod git_stub;
 mod lockstep;
+mod snapshot;
 mod versioned;
