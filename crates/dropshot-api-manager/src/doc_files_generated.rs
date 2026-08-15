@@ -7,7 +7,7 @@ use crate::{
     apis::{ManagedApi, ManagedApis},
     doc_files_generic::{
         ApiDocFile, ApiDocFilesBuilder, ApiFiles, ApiLoad, AsRawFiles,
-        DocFileInfo, hash_contents,
+        DocFileInfo, UnparseableReason, hash_contents,
     },
     environment::ErrorAccumulator,
 };
@@ -55,6 +55,7 @@ impl ApiLoad for GeneratedApiDocFile {
     fn make_unparseable(
         _name: ApiDocFileName,
         _contents: Vec<u8>,
+        _reason: UnparseableReason,
     ) -> Option<Self::Unparseable> {
         None
     }
@@ -119,7 +120,7 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
                         let file_name =
                             LockstepApiDocFileName::new(api.ident().clone());
                         ApiDocFile::for_contents(file_name.into(), contents)
-                            .map_err(|(e, _buf)| e)
+                            .map_err(|(e, _buf)| anyhow::Error::new(e))
                     })
                     .map_err(|error| {
                         error.context(format!(
@@ -151,7 +152,7 @@ fn generate_api(api: &ManagedApi) -> GeneratedApiResult {
                             hash_contents(&contents),
                         );
                         ApiDocFile::for_contents(file_name.into(), contents)
-                            .map_err(|(e, _buf)| e)
+                            .map_err(|(e, _buf)| anyhow::Error::new(e))
                     })
                     .map_err(|error| {
                         error.context(format!(
