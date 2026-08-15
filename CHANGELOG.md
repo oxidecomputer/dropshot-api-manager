@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.8.0] - 2026-08-15
+
 ### Fixed
 
 - Previously, a `.json.gitstub` file whose filename hash didn't match its resolved contents (e.g., leftover from a mismerge) caused the API manager to crash. These files are now detected and cleaned up like other stale files.
@@ -150,6 +152,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.8.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.8.0
 [0.7.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.2
 [0.7.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.1
 [0.7.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.0
