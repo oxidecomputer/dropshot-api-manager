@@ -600,7 +600,12 @@ fn test_duplicates() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::DuplicateLocalFile,
+            ProblemKind::DuplicateLocalFile {
+                basename: json_path
+                    .file_name()
+                    .expect("json_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -1793,7 +1798,12 @@ def456:documents/versioned-health/new.json\n\
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal,
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: v1_git_stub_path
+                    .file_name()
+                    .expect("v1_git_stub_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -1871,7 +1881,12 @@ fn test_non_canonical_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal,
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: v1_git_stub_path
+                    .file_name()
+                    .expect("v1_git_stub_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -1934,7 +1949,12 @@ fn test_empty_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal,
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: v1_git_stub_path
+                    .file_name()
+                    .expect("v1_git_stub_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -1987,7 +2007,12 @@ fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal,
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: v1_git_stub_path
+                    .file_name()
+                    .expect("v1_git_stub_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -2055,7 +2080,12 @@ fn test_unresolvable_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal,
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: v1_git_stub_path
+                    .file_name()
+                    .expect("v1_git_stub_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -2889,7 +2919,12 @@ fn test_stale_git_stub_commit_with_duplicate() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::DuplicateLocalFile,
+                ProblemKind::DuplicateLocalFile {
+                    basename: json_path
+                        .file_name()
+                        .expect("json_path has a file name")
+                        .to_owned()
+                },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3274,6 +3309,9 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
     let rebase_result = env.try_rebase_onto("main")?;
     assert_eq!(rebase_result, RebaseResult::Clean);
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -3288,7 +3326,12 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
@@ -3310,6 +3353,9 @@ fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
     let merge_result = env.try_merge_branch("main")?;
     assert_eq!(merge_result, MergeResult::Clean);
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -3324,7 +3370,12 @@ fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
@@ -3352,6 +3403,9 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
 
     env.jj_new("feature2")?;
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -3366,7 +3420,12 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
@@ -3393,6 +3452,9 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
         env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
     assert_eq!(merge_result, JjMergeResult::Clean);
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -3407,7 +3469,12 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );

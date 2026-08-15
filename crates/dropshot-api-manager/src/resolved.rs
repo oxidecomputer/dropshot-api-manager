@@ -146,13 +146,13 @@ impl Display for ResolutionKind {
 /// enums. Exhaustive matches in `VersionProblem::kind` and
 /// `NonVersionProblem::kind` ensure that adding a new problem variant
 /// without updating this enum causes a compile error.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[expect(missing_docs)]
 pub enum ProblemKind {
-    LocalDocFileOrphaned,
-    UnparseableLocalFile,
+    LocalDocFileOrphaned { basename: String },
+    UnparseableLocalFile { basename: String },
     BlessedVersionMissingLocal,
-    BlessedVersionExtraLocalDoc,
+    BlessedVersionExtraLocalDoc { basename: String },
     BlessedVersionCompareError,
     BlessedVersionBroken,
     BlessedLatestVersionBytewiseMismatch,
@@ -168,8 +168,8 @@ pub enum ProblemKind {
     LatestLinkStale,
     BlessedVersionShouldBeGitStub,
     GitStubShouldBeJson,
-    BlessedVersionCorruptedLocal,
-    DuplicateLocalFile,
+    BlessedVersionCorruptedLocal { basename: String },
+    DuplicateLocalFile { basename: String },
     GitStubCommitStale,
     GitStubFirstCommitUnknown,
 }
@@ -457,11 +457,19 @@ impl<'a> NonVersionProblem<'a> {
     /// variant without updating this method causes a compile error.
     pub fn kind(&self) -> ProblemKind {
         match self {
-            NonVersionProblem::LocalDocFileOrphaned { .. } => {
-                ProblemKind::LocalDocFileOrphaned
+            NonVersionProblem::LocalDocFileOrphaned { doc_file_name } => {
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: doc_file_name.basename(),
+                }
             }
-            NonVersionProblem::UnparseableLocalFile { .. } => {
-                ProblemKind::UnparseableLocalFile
+            NonVersionProblem::UnparseableLocalFile { unparseable_file } => {
+                ProblemKind::UnparseableLocalFile {
+                    basename: unparseable_file
+                        .path
+                        .file_name()
+                        .expect("unparseable file path has a file name")
+                        .to_owned(),
+                }
             }
             NonVersionProblem::LatestLinkMissing { .. } => {
                 ProblemKind::LatestLinkMissing
@@ -507,8 +515,10 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::BlessedVersionMissingLocal { .. } => {
                 ProblemKind::BlessedVersionMissingLocal
             }
-            VersionProblem::BlessedVersionExtraLocalDoc { .. } => {
-                ProblemKind::BlessedVersionExtraLocalDoc
+            VersionProblem::BlessedVersionExtraLocalDoc { doc_file_name } => {
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: doc_file_name.basename(),
+                }
             }
             VersionProblem::BlessedVersionCompareError { .. } => {
                 ProblemKind::BlessedVersionCompareError
@@ -547,11 +557,15 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::GitStubShouldBeJson { .. } => {
                 ProblemKind::GitStubShouldBeJson
             }
-            VersionProblem::BlessedVersionCorruptedLocal { .. } => {
-                ProblemKind::BlessedVersionCorruptedLocal
-            }
-            VersionProblem::DuplicateLocalFile { .. } => {
-                ProblemKind::DuplicateLocalFile
+            VersionProblem::BlessedVersionCorruptedLocal {
+                local_file, ..
+            } => ProblemKind::BlessedVersionCorruptedLocal {
+                basename: local_file.doc_file_name().basename(),
+            },
+            VersionProblem::DuplicateLocalFile { local_file } => {
+                ProblemKind::DuplicateLocalFile {
+                    basename: local_file.doc_file_name().basename(),
+                }
             }
             VersionProblem::GitStubCommitStale { .. } => {
                 ProblemKind::GitStubCommitStale

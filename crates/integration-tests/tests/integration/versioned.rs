@@ -583,6 +583,9 @@ fn test_removing_api_version_fails_check() -> Result<()> {
     let reduced_apis = versioned_health_reduced_apis()?;
 
     // The check should result in NeedsUpdate when versions are removed.
+    let v3_orphan_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("orphaned v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &reduced_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -592,7 +595,12 @@ fn test_removing_api_version_fails_check() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::LocalDocFileOrphaned,
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: v3_orphan_path
+                        .file_name()
+                        .expect("v3_orphan_path has a file name")
+                        .to_owned()
+                },
             ),
             ProblemSummary::for_api(
                 "versioned-health",
@@ -695,6 +703,9 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
 
     // This check should return NeedsUpdate because the v3.0.0 document exists
     // and needs to be removed.
+    let v3_orphan_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("orphaned v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &reduced_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -704,7 +715,12 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::LocalDocFileOrphaned,
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: v3_orphan_path
+                        .file_name()
+                        .expect("v3_orphan_path has a file name")
+                        .to_owned()
+                },
             ),
             ProblemSummary::for_api(
                 "versioned-health",
@@ -848,6 +864,9 @@ fn test_retiring_older_blessed_version() -> Result<()> {
 
     // This check should return NeedsUpdate because the v2.0.0 document exists
     // and needs to be removed.
+    let v2_orphan_path = env
+        .find_versioned_document_path("versioned-health", "2.0.0")?
+        .expect("orphaned v2 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &skip_middle_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -856,7 +875,12 @@ fn test_retiring_older_blessed_version() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "2.0.0",
-            ProblemKind::LocalDocFileOrphaned,
+            ProblemKind::LocalDocFileOrphaned {
+                basename: v2_orphan_path
+                    .file_name()
+                    .expect("v2_orphan_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -1141,7 +1165,12 @@ fn test_blessed_version_extra_local_doc() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "3.0.0",
-            ProblemKind::BlessedVersionExtraLocalDoc,
+            ProblemKind::BlessedVersionExtraLocalDoc {
+                basename: env2_path
+                    .file_name()
+                    .expect("env2_path has a file name")
+                    .to_owned()
+            },
         )],
     );
 
@@ -1765,6 +1794,9 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
     let rebase_result = env.try_rebase_onto("main")?;
     assert_eq!(rebase_result, RebaseResult::Clean);
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -1779,7 +1811,12 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
@@ -1801,6 +1838,9 @@ fn test_merge_blessed_version_missing_local() -> Result<()> {
     let merge_result = env.try_merge_branch("main")?;
     assert_eq!(merge_result, MergeResult::Clean);
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -1815,7 +1855,12 @@ fn test_merge_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
@@ -1843,6 +1888,9 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
 
     env.jj_new("feature2")?;
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -1857,7 +1905,12 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
@@ -1884,6 +1937,9 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
         env.jj_try_merge("feature2", "main", "Merge main into feature2")?;
     assert_eq!(merge_result, JjMergeResult::Clean);
 
+    let v3_extra_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("extra v3 document exists");
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
@@ -1898,7 +1954,12 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionExtraLocalDoc,
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: v3_extra_path
+                        .file_name()
+                        .expect("v3_extra_path has a file name")
+                        .to_owned()
+                },
             ),
         ],
     );
