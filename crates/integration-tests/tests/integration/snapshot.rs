@@ -20,11 +20,13 @@ pub fn assert_render_snapshot(
     let documents_dir_debug = format!("{:?}", env.documents_dir());
     let normalized =
         rendered.replace(&documents_dir_debug, "\"<documents dir>\"");
-    // Diff headers for stale files print the raw (unquoted) absolute path, so
-    // normalize that form as well. (This must run after the Debug-form
-    // replacement above so it isn't half-replaced.)
+    // Diff headers for stale files print the raw (unquoted) absolute path with
+    // forward slashes (see format_diff_path), so normalize that form as well.
+    // (This must run after the Debug-form replacement above so it isn't
+    // half-replaced.)
+    let documents_dir_forward = env.documents_dir().as_str().replace('\\', "/");
     let normalized =
-        normalized.replace(env.documents_dir().as_str(), "<documents dir>");
+        normalized.replace(&documents_dir_forward, "<documents dir>");
 
     let snapshot_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/output/integration")
