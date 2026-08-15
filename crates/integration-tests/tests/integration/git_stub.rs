@@ -12,8 +12,9 @@ use camino::Utf8PathBuf;
 use dropshot_api_manager::{
     ManagedApis,
     test_util::{
-        CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
-        check_apis_with_render, check_apis_with_summaries,
+        CheckResult, FileValidity, ProblemKind, ProblemSummary,
+        check_apis_up_to_date, check_apis_with_render,
+        check_apis_with_summaries,
     },
 };
 use integration_tests::{
@@ -2086,7 +2087,8 @@ fn test_stale_hash_resolvable_git_stub_deleted() -> Result<()> {
             // The unparseable Git stub is treated as an extra document.
             ProblemKind::BlessedVersionExtraLocalDoc {
                 basename: "versioned-health-2.0.0-ffffff.json.gitstub"
-                    .to_owned()
+                    .to_owned(),
+                validity: FileValidity::Unparseable,
             },
         )],
     );
@@ -2173,7 +2175,8 @@ fn test_stale_hash_git_stubs_deleted() -> Result<()> {
                 "9.9.9",
                 ProblemKind::LocalDocFileOrphaned {
                     basename: "versioned-health-9.9.9-aaaaaa.json.gitstub"
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Unparseable,
                 },
             ),
             ProblemSummary::new(
@@ -2181,7 +2184,8 @@ fn test_stale_hash_git_stubs_deleted() -> Result<()> {
                 "9.9.9",
                 ProblemKind::LocalDocFileOrphaned {
                     basename: "versioned-health-9.9.9-bbbbbb.json.gitstub"
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Unparseable,
                 },
             ),
             ProblemSummary::new(
@@ -2189,7 +2193,8 @@ fn test_stale_hash_git_stubs_deleted() -> Result<()> {
                 "2.0.0",
                 ProblemKind::BlessedVersionExtraLocalDoc {
                     basename: "versioned-health-2.0.0-eeeeee.json.gitstub"
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Unparseable,
                 },
             ),
         ],
@@ -3513,7 +3518,8 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],
@@ -3557,7 +3563,8 @@ fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],
@@ -3607,7 +3614,8 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],
@@ -3656,7 +3664,8 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],

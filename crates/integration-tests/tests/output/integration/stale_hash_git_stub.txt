@@ -9,13 +9,15 @@
        Stale versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
      problem: For this blessed version, found an extra OpenAPI document that
               does not match the blessed (upstream) OpenAPI document: versioned-
-              health/versioned-health-2.0.0-ffffff.json.gitstub.  This can
-              happen if you created this version of the API in this branch, then
-              merged with an upstream commit that also added the same version
-              number.  In that case, you likely already bumped your local
-              version number (when you merged the list of supported versions in
-              Rust) and this file is vestigial. This tool can remove the unused
-              file for you.
+              health/versioned-health-2.0.0-ffffff.json.gitstub (could not
+              be parsed: Git stub "versioned-health/versioned-health-2.0.0-
+              ffffff.json.gitstub": resolved contents have hash "511899", but
+              file name has different hash "ffffff").  This can happen if you
+              created this version of the API in this branch, then merged with
+              an upstream commit that also added the same version number.  In
+              that case, you likely already bumped your local version number
+              (when you merged the list of supported versions in Rust) and this
+              file is vestigial. This tool can remove the unused file for you.
          fix: will delete file: versioned-health/versioned-health-2.0.0-
               ffffff.json.gitstub
        Fresh versioned-health (versioned v3.0.0 (blessed)): Versioned Health API

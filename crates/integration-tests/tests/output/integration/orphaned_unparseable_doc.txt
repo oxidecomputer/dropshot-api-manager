@@ -14,13 +14,13 @@
          fix: will update symlink to point to versioned-health-2.0.0-511899.json
 
        Other problems not associated with a specific supported API version:
-     problem: A local OpenAPI document was found that does not correspond to a
-              supported version of this API: versioned-health/versioned-health-
-              3.0.0-05def5.json.  This is unusual, but it could happen if you're
-              either retiring an older version of this API or if you created
-              this version in this branch and later merged with upstream and had
-              to change your local version number.  In either case, this tool
-              can remove the unused file for you.
+     problem: A local file was found that does not correspond to a supported
+              version of this API and could not be parsed: versioned-health/
+              versioned-health-3.0.0-05def5.json (file "versioned-health/
+              versioned-health-3.0.0-05def5.json": parsing as JSON: expected
+              value at line 1 column 1).  This can happen if a merge left
+              conflict markers in a file for a version that was renumbered or
+              retired.  This tool can remove the unused file for you.
          fix: will delete file: versioned-health/versioned-health-3.0.0-
               05def5.json
 

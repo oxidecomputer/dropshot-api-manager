@@ -4,7 +4,7 @@
 
 pub use crate::output::CheckResult;
 #[doc(hidden)]
-pub use crate::resolved::{ProblemKind, ProblemSummary};
+pub use crate::resolved::{FileValidity, ProblemKind, ProblemSummary};
 use crate::{
     apis::ManagedApis,
     cmd::{

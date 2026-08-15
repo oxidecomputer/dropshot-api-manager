@@ -11,7 +11,7 @@ use crate::{
     doc_files_blessed::{BlessedApiDocFile, BlessedFiles, BlessedGitStub},
     doc_files_generated::{GeneratedApiDocFile, GeneratedFiles},
     doc_files_generic::ApiFiles,
-    doc_files_local::{LocalApiDocFile, LocalFiles},
+    doc_files_local::{LocalApiDocFile, LocalApiUnparseable, LocalFiles},
     environment::ResolvedEnv,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
@@ -149,9 +149,9 @@ impl Display for ResolutionKind {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[expect(missing_docs)]
 pub enum ProblemKind {
-    LocalDocFileOrphaned { basename: String },
+    LocalDocFileOrphaned { basename: String, validity: FileValidity },
     BlessedVersionMissingLocal,
-    BlessedVersionExtraLocalDoc { basename: String },
+    BlessedVersionExtraLocalDoc { basename: String, validity: FileValidity },
     BlessedVersionCompareError,
     BlessedVersionBroken,
     BlessedLatestVersionBytewiseMismatch,
@@ -171,6 +171,16 @@ pub enum ProblemKind {
     DuplicateLocalFile { basename: String },
     GitStubCommitStale,
     GitStubFirstCommitUnknown,
+}
+
+/// The validity of a file parsed by the API manager.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum FileValidity {
+    /// The file is valid.
+    Valid,
+
+    /// The file is unparseable.
+    Unparseable,
 }
 
 /// Owned summary of a `VersionProblem` or `NonVersionProblem` for test
@@ -222,15 +232,8 @@ impl ProblemSummary {
 /// version-specific context can require it unconditionally.
 #[derive(Debug, Error)]
 pub enum NonVersionProblem<'a> {
-    #[error(
-        "A local OpenAPI document was found that does not correspond to a \
-         supported version of this API: {doc_file_name}.  This is unusual, \
-         but it could happen if you're either retiring an older version of \
-         this API or if you created this version in this branch and later \
-         merged with upstream and had to change your local version number.  \
-         In either case, this tool can remove the unused file for you."
-    )]
-    LocalDocFileOrphaned { doc_file_name: VersionedApiDocFileName },
+    #[error("{}", orphaned_message(doc_file))]
+    LocalDocFileOrphaned { doc_file: &'a LocalApiDocFile },
 
     #[error("\"Latest\" symlink for versioned API {api_ident:?} is missing")]
     LatestLinkMissing { api_ident: ApiIdent, link: &'a VersionedApiDocFileName },
@@ -266,16 +269,8 @@ pub enum VersionProblem<'a> {
         git_stub: Option<GitStub>,
     },
 
-    #[error(
-        "For this blessed version, found an extra OpenAPI document that does \
-         not match the blessed (upstream) OpenAPI document: {doc_file_name}.  \
-         This can happen if you created this version of the API in this branch, \
-         then merged with an upstream commit that also added the same version \
-         number.  In that case, you likely already bumped your local version \
-         number (when you merged the list of supported versions in Rust) and \
-         this file is vestigial. This tool can remove the unused file for you."
-    )]
-    BlessedVersionExtraLocalDoc { doc_file_name: VersionedApiDocFileName },
+    #[error("{}", extra_local_doc_message(doc_file))]
+    BlessedVersionExtraLocalDoc { doc_file: &'a LocalApiDocFile },
 
     #[error(
         "error comparing OpenAPI document generated from current code with \
@@ -326,19 +321,16 @@ pub enum VersionProblem<'a> {
 
     #[error(
         "Extra (incorrect) OpenAPI documents were found for locally-added \
-         version: {doc_file_names}.  This tool can remove the files for you."
+         version: {}.  This tool can remove the files for you.",
+        DisplayableVec(doc_files.iter().map(|s| file_with_reason(s)).collect())
     )]
-    LocalVersionExtra {
-        doc_file_names: DisplayableVec<VersionedApiDocFileName>,
-    },
+    LocalVersionExtra { doc_files: Vec<&'a LocalApiDocFile> },
 
     #[error(
         "For this locally-added version, the OpenAPI document generated \
          from the current code does not match the local file: {}. \
          This tool can update the local file(s) for you.",
-        DisplayableVec(
-            doc_files.iter().map(|s| s.doc_file_name().to_string()).collect()
-        )
+        DisplayableVec(doc_files.iter().map(|s| file_with_reason(s)).collect())
     )]
     // For versioned APIs, since the filename has its own hash in it, when the
     // local file is stale, it's not that the file contents will be wrong, but
@@ -397,13 +389,9 @@ pub enum VersionProblem<'a> {
         blessed: &'a BlessedApiDocFile,
     },
 
-    #[error(
-        "Local file for this blessed version is corrupted (possibly due to \
-         merge conflict markers). This tool can regenerate the file from the \
-         blessed version for you."
-    )]
+    #[error("{}", corrupted_local_message(local_file))]
     BlessedVersionCorruptedLocal {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiUnparseable,
         blessed: &'a BlessedApiDocFile,
         /// If Some, regenerate as a Git stub instead of JSON.
         git_stub: Option<GitStub>,
@@ -443,9 +431,10 @@ impl<'a> NonVersionProblem<'a> {
     /// variant without updating this method causes a compile error.
     pub fn kind(&self) -> ProblemKind {
         match self {
-            NonVersionProblem::LocalDocFileOrphaned { doc_file_name } => {
+            NonVersionProblem::LocalDocFileOrphaned { doc_file } => {
                 ProblemKind::LocalDocFileOrphaned {
-                    basename: doc_file_name.basename(),
+                    basename: doc_file.doc_file_name().basename(),
+                    validity: file_validity(doc_file),
                 }
             }
             NonVersionProblem::LatestLinkMissing { .. } => {
@@ -463,9 +452,11 @@ impl<'a> NonVersionProblem<'a> {
 
     pub fn fix(&'a self) -> Option<Fix<'a>> {
         match self {
-            NonVersionProblem::LocalDocFileOrphaned { doc_file_name } => {
+            NonVersionProblem::LocalDocFileOrphaned { doc_file } => {
                 Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![doc_file_name.clone().into()]),
+                    files: DisplayableVec(vec![
+                        doc_file.doc_file_name().clone(),
+                    ]),
                 })
             }
             NonVersionProblem::LatestLinkStale { api_ident, link, .. }
@@ -487,9 +478,10 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::BlessedVersionMissingLocal { .. } => {
                 ProblemKind::BlessedVersionMissingLocal
             }
-            VersionProblem::BlessedVersionExtraLocalDoc { doc_file_name } => {
+            VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 ProblemKind::BlessedVersionExtraLocalDoc {
-                    basename: doc_file_name.basename(),
+                    basename: doc_file.doc_file_name().basename(),
+                    validity: file_validity(doc_file),
                 }
             }
             VersionProblem::BlessedVersionCompareError { .. } => {
@@ -532,7 +524,7 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::BlessedVersionCorruptedLocal {
                 local_file, ..
             } => ProblemKind::BlessedVersionCorruptedLocal {
-                basename: local_file.doc_file_name().basename(),
+                basename: local_file.name.basename(),
             },
             VersionProblem::DuplicateLocalFile { local_file } => {
                 ProblemKind::DuplicateLocalFile {
@@ -588,9 +580,11 @@ impl<'a> VersionProblem<'a> {
                 blessed,
                 git_stub: git_stub.as_ref(),
             }),
-            VersionProblem::BlessedVersionExtraLocalDoc { doc_file_name } => {
+            VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 Some(Fix::DeleteFiles {
-                    files: DisplayableVec(vec![doc_file_name.clone().into()]),
+                    files: DisplayableVec(vec![
+                        doc_file.doc_file_name().clone(),
+                    ]),
                 })
             }
             VersionProblem::BlessedVersionCompareError { .. } => None,
@@ -606,14 +600,12 @@ impl<'a> VersionProblem<'a> {
                     generated,
                 })
             }
-            VersionProblem::LocalVersionExtra { doc_file_names } => {
+            VersionProblem::LocalVersionExtra { doc_files } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(
-                        doc_file_names
-                            .0
+                        doc_files
                             .iter()
-                            .cloned()
-                            .map(Into::into)
+                            .map(|f| f.doc_file_name().clone())
                             .collect(),
                     ),
                 })
@@ -693,7 +685,7 @@ pub enum Fix<'a> {
     },
     /// Regenerate a corrupted local file from the blessed content.
     RegenerateFromBlessed {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiUnparseable,
         blessed: &'a BlessedApiDocFile,
         /// If Some, regenerate as a Git stub instead of JSON.
         git_stub: Option<&'a GitStub>,
@@ -781,13 +773,13 @@ impl Display for Fix<'_> {
                     writeln!(
                         f,
                         "regenerate {} from blessed content as Git stub",
-                        local_file.doc_file_name().path()
+                        local_file.name.path()
                     )?;
                 } else {
                     writeln!(
                         f,
                         "regenerate {} from blessed content",
-                        local_file.doc_file_name().path()
+                        local_file.name.path()
                     )?;
                 }
             }
@@ -944,7 +936,7 @@ impl Fix<'_> {
                 ])
             }
             Fix::RegenerateFromBlessed { local_file, blessed, git_stub } => {
-                let local_path = root.join(local_file.doc_file_name().path());
+                let local_path = root.join(local_file.name.path());
 
                 // Remove the corrupted file.
                 match fs_err::remove_file(&local_path) {
@@ -955,8 +947,7 @@ impl Fix<'_> {
 
                 if let Some(git_stub) = git_stub {
                     // Write as a Git stub.
-                    let git_stub_basename =
-                        local_file.doc_file_name().git_stub_basename();
+                    let git_stub_basename = local_file.name.git_stub_basename();
                     let git_stub_path = local_path
                         .parent()
                         .ok_or_else(|| anyhow!("cannot get parent directory"))?
@@ -1094,15 +1085,17 @@ impl<'a> Resolved<'a> {
         // more, that's a (fixable) problem.
         let orphaned: Vec<(ApiIdent, semver::Version, NonVersionProblem<'_>)> =
             resolve_orphaned_local_docs(&supported_versions_by_api, local)
-                .map(|doc_file_name| {
+                .map(|doc_file| {
+                    let doc_file_name = doc_file
+                        .doc_file_name()
+                        .as_versioned()
+                        .expect("orphaned documents are versioned");
                     let ident = doc_file_name.ident().clone();
                     let version = doc_file_name.version().clone();
                     (
                         ident,
                         version,
-                        NonVersionProblem::LocalDocFileOrphaned {
-                            doc_file_name: doc_file_name.clone(),
-                        },
+                        NonVersionProblem::LocalDocFileOrphaned { doc_file },
                     )
                 })
                 .collect();
@@ -1298,6 +1291,73 @@ fn resolve_removed_blessed_versions<'a>(
     })
 }
 
+fn file_validity(doc_file: &LocalApiDocFile) -> FileValidity {
+    match doc_file {
+        LocalApiDocFile::Valid { .. } => FileValidity::Valid,
+        LocalApiDocFile::Unparseable(_) => FileValidity::Unparseable,
+    }
+}
+
+fn file_with_reason(doc_file: &LocalApiDocFile) -> String {
+    match doc_file {
+        LocalApiDocFile::Unparseable(unparseable) => format!(
+            "{} (could not be parsed: {})",
+            unparseable.name,
+            InlineErrorChain::new(&unparseable.reason),
+        ),
+        LocalApiDocFile::Valid { .. } => doc_file.doc_file_name().to_string(),
+    }
+}
+
+fn orphaned_message(doc_file: &LocalApiDocFile) -> String {
+    match doc_file {
+        LocalApiDocFile::Unparseable(unparseable) => format!(
+            "A local file was found that does not correspond to a supported \
+             version of this API and could not be parsed: {} ({}).  This can \
+             happen if a merge left conflict markers in a file for a version \
+             that was renumbered or retired.  This tool can remove the \
+             unused file for you.",
+            unparseable.name,
+            InlineErrorChain::new(&unparseable.reason),
+        ),
+        // Orphaned valid files get a hint about whether the list of supported
+        // versions has changed.
+        LocalApiDocFile::Valid { .. } => format!(
+            "A local OpenAPI document was found that does not correspond to \
+             a supported version of this API: {}.  This is unusual, but it \
+             could happen if you're either retiring an older version of this \
+             API or if you created this version in this branch and later \
+             merged with upstream and had to change your local version \
+             number.  If this is unexpected, check the list of supported \
+             versions in Rust for a possible mismerge.  In either case, this \
+             tool can remove the unused file for you.",
+            doc_file.doc_file_name(),
+        ),
+    }
+}
+
+fn extra_local_doc_message(doc_file: &LocalApiDocFile) -> String {
+    format!(
+        "For this blessed version, found an extra OpenAPI document that \
+         does not match the blessed (upstream) OpenAPI document: {}.  This \
+         can happen if you created this version of the API in this branch, \
+         then merged with an upstream commit that also added the same \
+         version number.  In that case, you likely already bumped your local \
+         version number (when you merged the list of supported versions in \
+         Rust) and this file is vestigial. This tool can remove the unused \
+         file for you.",
+        file_with_reason(doc_file),
+    )
+}
+
+fn corrupted_local_message(local_file: &LocalApiUnparseable) -> String {
+    format!(
+        "Local file for this blessed version is corrupted: {}.  This tool \
+         can regenerate the file from the blessed version for you.",
+        InlineErrorChain::new(&local_file.reason),
+    )
+}
+
 fn lockstep_stale_message(
     found: &LocalApiDocFile,
     generated: &GeneratedApiDocFile,
@@ -1320,12 +1380,9 @@ fn lockstep_stale_message(
 }
 
 fn resolve_orphaned_local_docs<'a>(
-    supported_versions_by_api: &'a BTreeMap<
-        &'a ApiIdent,
-        BTreeSet<&'a semver::Version>,
-    >,
+    supported_versions_by_api: &BTreeMap<&ApiIdent, BTreeSet<&semver::Version>>,
     local: &'a LocalFiles,
-) -> impl Iterator<Item = &'a VersionedApiDocFileName> + 'a {
+) -> impl Iterator<Item = &'a LocalApiDocFile> {
     // Orphaned documents are always versioned: lockstep APIs have exactly one
     // file, so orphans can't exist for them.
     local.iter().flat_map(|(ident, api_files)| {
@@ -1334,13 +1391,7 @@ fn resolve_orphaned_local_docs<'a>(
             .versions()
             .iter()
             .filter_map(move |(version, files)| match set {
-                Some(set) if !set.contains(version) => {
-                    Some(files.iter().map(|f| {
-                        f.doc_file_name()
-                            .as_versioned()
-                            .expect("orphaned documents are versioned")
-                    }))
-                }
+                Some(set) if !set.contains(version) => Some(files.iter()),
                 _ => None,
             })
             .flatten()
@@ -1839,28 +1890,32 @@ fn resolve_api_version_blessed<'a>(
             .expect("this should be a versioned file so it should have a hash");
         let hashes_match = local_hash == blessed_hash;
 
-        if local_file.is_unparseable() {
-            // Unparseable files can't have their contents compared, so we rely
-            // solely on the hash. If the hash matches, the file is corrupted
-            // and needs regeneration.
-            if hashes_match {
-                corrupted.push(local_file);
-            } else {
-                non_matching.push(local_file);
+        match local_file {
+            LocalApiDocFile::Unparseable(unparseable) => {
+                // Unparseable files can't have their contents compared, so we
+                // rely solely on the hash. If the hash matches, the file is
+                // corrupted and needs regeneration.
+                if hashes_match {
+                    corrupted.push(unparseable);
+                } else {
+                    non_matching.push(local_file);
+                }
             }
-        } else {
-            // For valid files, verify that hash matching implies content
-            // matching (and vice versa).
-            let contents_match = local_file.contents() == blessed.contents();
-            assert_eq!(
-                hashes_match, contents_match,
-                "hash and contents should match for valid files"
-            );
+            LocalApiDocFile::Valid { .. } => {
+                // For valid files, verify that hash matching implies content
+                // matching (and vice versa).
+                let contents_match =
+                    local_file.contents() == blessed.contents();
+                assert_eq!(
+                    hashes_match, contents_match,
+                    "hash and contents should match for valid files"
+                );
 
-            if hashes_match {
-                matching.push(local_file);
-            } else {
-                non_matching.push(local_file);
+                if hashes_match {
+                    matching.push(local_file);
+                } else {
+                    non_matching.push(local_file);
+                }
             }
         }
     }
@@ -2076,14 +2131,8 @@ fn resolve_api_version_blessed<'a>(
     }
 
     // Report non-matching local files as extra.
-    problems.extend(non_matching.into_iter().map(|s| {
-        VersionProblem::BlessedVersionExtraLocalDoc {
-            doc_file_name: s
-                .doc_file_name()
-                .as_versioned()
-                .expect("blessed extra document is versioned")
-                .clone(),
-        }
+    problems.extend(non_matching.into_iter().map(|doc_file| {
+        VersionProblem::BlessedVersionExtraLocalDoc { doc_file }
     }));
 
     Resolution::new_blessed(problems)
@@ -2123,20 +2172,9 @@ fn resolve_api_version_local<'a>(
     } else if !non_matching.is_empty() {
         // There was a matching document, but also some non-matching ones.
         // These are superfluous.  (It's not clear how this could happen.)
-        let doc_file_names = DisplayableVec(
-            non_matching
-                .iter()
-                .map(|s| {
-                    s.doc_file_name()
-                        .as_versioned()
-                        .expect(
-                            "local documents in versioned API are versioned",
-                        )
-                        .clone()
-                })
-                .collect(),
-        );
-        problems.push(VersionProblem::LocalVersionExtra { doc_file_names });
+        problems.push(VersionProblem::LocalVersionExtra {
+            doc_files: non_matching,
+        });
     }
 
     Resolution::new_new_locally(problems)
