@@ -7,7 +7,7 @@ use crate::{
     apis::ManagedApis, environment::ErrorAccumulator, output::InlineErrorChain,
 };
 use anyhow::anyhow;
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use debug_ignore::DebugIgnore;
 use dropshot_api_manager_types::{
     ApiDocFileName, ApiIdent, LockstepApiDocFileName, VersionedApiDocFileName,
@@ -186,33 +186,39 @@ pub(crate) enum BadVersionedFileName {
 }
 
 /// Errors that can occur when parsing an API document file.
+///
+/// The error variants do not carry the file name. Callers are expected to know
+/// the file name and include it while rendering the error.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ApiDocFileParseError {
-    #[error("file {path:?}: parsing as JSON")]
-    JsonParse { path: Utf8PathBuf, source: serde_json::Error },
-    #[error("file {path:?}: parsing OpenAPI document")]
-    OpenApiParse { path: Utf8PathBuf, source: serde_json::Error },
-    #[error("file {path:?}: parsing version from generated document")]
-    VersionParse { path: Utf8PathBuf, source: semver::Error },
+    #[error("parsing as JSON")]
+    JsonParse { source: serde_json::Error },
+    #[error("parsing OpenAPI document")]
+    OpenApiParse { source: serde_json::Error },
+    #[error("parsing version from generated document")]
+    VersionParse { source: semver::Error },
     #[error(
-        "file {path:?}: version in the file ({file_version}) differs from \
-         the one in the filename"
+        "version in the file ({file_version}) differs from the one in the \
+         filename"
     )]
-    VersionMismatch { path: Utf8PathBuf, file_version: semver::Version },
+    VersionMismatch { file_version: semver::Version },
     #[error(
-        "file {path:?}: computed hash {expected:?}, but file name has \
+        "computed hash {expected:?}, but file name has different hash \
+         {actual:?}"
+    )]
+    HashMismatch { expected: String, actual: String },
+    #[error(
+        "resolved contents have hash {expected:?}, but file name has \
          different hash {actual:?}"
     )]
-    HashMismatch { path: Utf8PathBuf, expected: String, actual: String },
-    #[error(
-        "Git stub {path:?}: resolved contents have hash {expected:?}, but \
-         file name has different hash {actual:?}"
-    )]
-    GitStubHashMismatch { path: Utf8PathBuf, expected: String, actual: String },
+    GitStubHashMismatch { expected: String, actual: String },
 }
 
 /// The reason a local file couldn't be parsed or loaded.
+///
+/// The error variants do not carry the file name. Callers are expected to know
+/// the file name and include it while rendering the error.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum UnparseableReason {
@@ -221,24 +227,22 @@ pub enum UnparseableReason {
     Parse(#[from] ApiDocFileParseError),
 
     /// The Git stub could not be parsed.
-    #[error("Git stub {path:?} could not be parsed")]
+    #[error("parsing as a Git stub")]
     GitStubInvalid {
-        path: Utf8PathBuf,
         #[source]
         source: GitStubParseError,
     },
 
     /// The Git stub needs to be rewritten to the canonical format.
     #[error(
-        "Git stub {path:?} needs to be rewritten to canonical format \
-         (forward slashes, trailing newline)"
+        "needs to be rewritten to canonical Git stub format with forward \
+         slashes and a trailing newline"
     )]
-    GitStubNonCanonical { path: Utf8PathBuf },
+    GitStubNonCanonical,
 
     /// The Git stub could not be resolved.
-    #[error("Git stub {path:?} could not be resolved")]
+    #[error("resolving Git stub contents")]
     GitStubUnresolvable {
-        path: Utf8PathBuf,
         #[source]
         source: anyhow::Error,
     },
@@ -275,10 +279,7 @@ impl ApiDocFile {
                 Ok(v) => v,
                 Err(e) => {
                     return Err((
-                        ApiDocFileParseError::JsonParse {
-                            path: doc_file_name.path(),
-                            source: e,
-                        },
+                        ApiDocFileParseError::JsonParse { source: e },
                         contents_buf,
                     ));
                 }
@@ -290,10 +291,7 @@ impl ApiDocFile {
             Ok(o) => o,
             Err(e) => {
                 return Err((
-                    ApiDocFileParseError::OpenApiParse {
-                        path: doc_file_name.path(),
-                        source: e,
-                    },
+                    ApiDocFileParseError::OpenApiParse { source: e },
                     contents_buf,
                 ));
             }
@@ -304,10 +302,7 @@ impl ApiDocFile {
             Ok(v) => v,
             Err(e) => {
                 return Err((
-                    ApiDocFileParseError::VersionParse {
-                        path: doc_file_name.path(),
-                        source: e,
-                    },
+                    ApiDocFileParseError::VersionParse { source: e },
                     contents_buf,
                 ));
             }
@@ -318,7 +313,6 @@ impl ApiDocFile {
                 if *v.version() != parsed_version {
                     return Err((
                         ApiDocFileParseError::VersionMismatch {
-                            path: doc_file_name.path(),
                             file_version: parsed_version,
                         },
                         contents_buf,
@@ -335,14 +329,12 @@ impl ApiDocFile {
                     let error = match v.kind() {
                         VersionedApiDocKind::Json => {
                             ApiDocFileParseError::HashMismatch {
-                                path: doc_file_name.path(),
                                 expected: expected_hash,
                                 actual: v.hash().to_owned(),
                             }
                         }
                         VersionedApiDocKind::GitStub => {
                             ApiDocFileParseError::GitStubHashMismatch {
-                                path: doc_file_name.path(),
                                 expected: expected_hash,
                                 actual: v.hash().to_owned(),
                             }
@@ -740,13 +732,14 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
         reason: UnparseableReason,
     ) {
         let rendered = InlineErrorChain::new(&reason).to_string();
+        let path = file_name.path();
         match T::make_unparseable(file_name.clone(), contents, reason) {
             Some(unparseable) => {
                 // For local files, track the unparseable file so it can be
                 // cleaned up during generate. Record a warning so the user
                 // knows about it.
                 self.load_warning(anyhow!(
-                    "skipping unparseable file: {rendered}"
+                    "skipping unparseable file {path:?}: {rendered}"
                 ));
 
                 let version = match file_name.version() {
@@ -785,7 +778,9 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
                 }
             }
             None => {
-                self.load_error(anyhow!("{rendered}"));
+                self.load_error(anyhow!(
+                    "unparseable file {path:?}: {rendered}"
+                ));
             }
         }
     }

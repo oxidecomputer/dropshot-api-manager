@@ -389,7 +389,9 @@ fn process_blessed_entry(
                 .map_err(|(err, _bytes)| {
                     // BlessedApiDocFile doesn't track unparseable
                     // files, so drop the raw bytes (as _bytes).
-                    anyhow::Error::new(err)
+                    anyhow::Error::new(err).context(format!(
+                        "parsing blessed OpenAPI document {git_path:?}"
+                    ))
                 });
 
             BlessedFileResult::VersionedDeserialized { result, git_path }
@@ -449,7 +451,11 @@ fn process_blessed_entry(
 
             // Deserialize.
             let result = ApiDocFile::for_contents(doc_file_name, json_contents)
-                .map_err(|(err, _bytes)| anyhow::Error::new(err));
+                .map_err(|(err, _bytes)| {
+                    anyhow::Error::new(err).context(format!(
+                        "parsing content of blessed Git stub {git_path:?}"
+                    ))
+                });
 
             BlessedFileResult::GitStubDeserialized { result, git_stub }
         }

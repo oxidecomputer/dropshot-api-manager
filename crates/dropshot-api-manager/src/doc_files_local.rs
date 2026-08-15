@@ -519,8 +519,6 @@ fn process_local_entry(
                 };
             };
 
-            let relative_path = doc_file_name.path();
-
             let git_stub_contents = match fs_err::read_to_string(&path) {
                 Ok(c) => c,
                 Err(error) => {
@@ -538,7 +536,6 @@ fn process_local_entry(
                         file_name: doc_file_name,
                         original_contents: git_stub_contents.into_bytes(),
                         reason: UnparseableReason::GitStubInvalid {
-                            path: relative_path,
                             source: error,
                         },
                     };
@@ -550,9 +547,7 @@ fn process_local_entry(
                 return LocalFileResult::GitStubUnresolvable {
                     file_name: doc_file_name,
                     original_contents: git_stub_contents.into_bytes(),
-                    reason: UnparseableReason::GitStubNonCanonical {
-                        path: relative_path,
-                    },
+                    reason: UnparseableReason::GitStubNonCanonical,
                 };
             }
 
@@ -565,7 +560,6 @@ fn process_local_entry(
                         file_name: doc_file_name,
                         original_contents: git_stub_contents.into_bytes(),
                         reason: UnparseableReason::GitStubUnresolvable {
-                            path: relative_path,
                             source: error,
                         },
                     };
