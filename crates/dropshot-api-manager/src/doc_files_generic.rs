@@ -204,6 +204,14 @@ pub enum ApiDocFileParseError {
     )]
     VersionMismatch { file_version: semver::Version },
     #[error(
+        "version in the file ({file_version}) differs from the declared \
+         lockstep version ({declared_version})"
+    )]
+    LockstepVersionMismatch {
+        file_version: semver::Version,
+        declared_version: semver::Version,
+    },
+    #[error(
         "computed hash {expected:?}, but file name has different hash \
          {actual:?}"
     )]
@@ -378,6 +386,11 @@ impl ApiDocFile {
     /// Returns the raw (byte) representation of the document itself
     pub fn contents(&self) -> &[u8] {
         &self.contents_buf
+    }
+
+    /// Consumes self, returning the name and raw contents.
+    pub(crate) fn into_name_and_contents(self) -> (ApiDocFileName, Vec<u8>) {
+        (self.name, self.contents_buf.0)
     }
 }
 
@@ -659,26 +672,63 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
 
     /// Load an already-parsed API document.
     pub fn load_parsed(&mut self, file: ApiDocFile) {
-        let ident = file.doc_file_name().ident();
-        let api_version = file.version();
-        let entry = self
-            .doc_files
-            .entry(ident.clone())
-            .or_insert_with(ApiFiles::new)
-            .doc_files
-            .entry(api_version.clone());
-
-        match entry {
-            Entry::Vacant(vacant_entry) => {
-                vacant_entry.insert(T::make_item(file));
+        let version_mismatch = match file.doc_file_name() {
+            ApiDocFileName::Lockstep(_) => {
+                // Lockstep file names don't carry a version, so check against
+                // the version specified in Rust.
+                let api = self
+                    .apis
+                    .api(file.doc_file_name().ident())
+                    .expect("parsed lockstep file name implies a known API");
+                let declared_version = api
+                    .iter_versions_semver()
+                    .next()
+                    .expect("lockstep API has exactly one version");
+                if file.version() != declared_version {
+                    Some(ApiDocFileParseError::LockstepVersionMismatch {
+                        file_version: file.version().clone(),
+                        declared_version: declared_version.clone(),
+                    })
+                } else {
+                    None
+                }
             }
-            Entry::Occupied(mut occupied_entry) => {
-                match occupied_entry.get_mut().try_extend(file) {
-                    Ok(()) => (),
-                    Err(error) => self.load_error(error),
+            // For versioned files, the version inside the document
+            // (info.version) is known to match the version in the file name,
+            // since ApiDocFile::for_contents rejects documents where the two
+            // aren't the same. So we don't need to do any additional checks
+            // here.
+            ApiDocFileName::Versioned(_) => None,
+        };
+
+        match version_mismatch {
+            Some(reason) => {
+                let (name, contents) = file.into_name_and_contents();
+                self.insert_unparseable(name, contents, reason.into());
+            }
+            None => {
+                let ident = file.doc_file_name().ident();
+                let api_version = file.version();
+                let entry = self
+                    .doc_files
+                    .entry(ident.clone())
+                    .or_insert_with(ApiFiles::new)
+                    .doc_files
+                    .entry(api_version.clone());
+
+                match entry {
+                    Entry::Vacant(vacant_entry) => {
+                        vacant_entry.insert(T::make_item(file));
+                    }
+                    Entry::Occupied(mut occupied_entry) => {
+                        match occupied_entry.get_mut().try_extend(file) {
+                            Ok(()) => (),
+                            Err(error) => self.load_error(error),
+                        };
+                    }
                 };
             }
-        };
+        }
     }
 
     /// Load an API document that may or may not have parsed successfully.

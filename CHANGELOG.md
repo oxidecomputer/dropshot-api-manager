@@ -6,6 +6,7 @@
 ### Fixed
 
 - Previously, a `.json.gitstub` file whose filename hash didn't match its resolved contents (e.g. leftover from a mismerge) crashed `generate` and `check`. These files are now detected and cleaned up like other stale files.
+- Previously, a valid lockstep document whose `info.version` didn't match the version declared in Rust (e.g. from bumping the version in Rust) crashed the API manager. The document is now reported as stale, and `generate` regenerates it.
 
 ### Changed
 
