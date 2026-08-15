@@ -38,6 +38,23 @@ pub struct LocalApiUnparseable {
     pub reason: UnparseableReason,
 }
 
+/// A local file that exists and was successfully parsed.
+#[derive(Debug)]
+pub struct LocalApiValid {
+    /// The parsed OpenAPI document.
+    pub doc: Box<ApiDocFile>,
+    /// Commit hash parsed from the `.gitstub` file, if this file was
+    /// loaded from one. `None` for regular JSON files.
+    pub git_stub_commit: Option<GitCommitHash>,
+}
+
+impl LocalApiValid {
+    /// Returns the document file name.
+    pub fn doc_file_name(&self) -> &ApiDocFileName {
+        self.doc.doc_file_name()
+    }
+}
+
 /// Represents an OpenAPI document found in this working tree.
 ///
 /// This includes documents for lockstep APIs and versioned APIs, for both
@@ -49,13 +66,7 @@ pub struct LocalApiUnparseable {
 #[derive(Debug)]
 pub enum LocalApiDocFile {
     /// A valid, successfully parsed OpenAPI document.
-    Valid {
-        /// The parsed OpenAPI document.
-        doc: Box<ApiDocFile>,
-        /// Commit hash parsed from the `.gitstub` file, if this file was
-        /// loaded from one. `None` for regular JSON files.
-        git_stub_commit: Option<GitCommitHash>,
-    },
+    Valid(LocalApiValid),
     /// A file that exists but couldn't be parsed.
     Unparseable(LocalApiUnparseable),
 }
@@ -64,7 +75,7 @@ impl LocalApiDocFile {
     /// Returns the document file name.
     pub fn doc_file_name(&self) -> &ApiDocFileName {
         match self {
-            Self::Valid { doc, .. } => doc.doc_file_name(),
+            Self::Valid(v) => v.doc_file_name(),
             Self::Unparseable(u) => &u.name,
         }
     }
@@ -74,17 +85,8 @@ impl LocalApiDocFile {
     /// This works for both valid and unparseable files.
     pub fn contents(&self) -> &[u8] {
         match self {
-            Self::Valid { doc, .. } => doc.contents(),
+            Self::Valid(v) => v.doc.contents(),
             Self::Unparseable(u) => &u.contents,
-        }
-    }
-
-    /// Returns the commit hash from a `.gitstub` file, if this file was
-    /// loaded from one.
-    pub fn git_stub_commit(&self) -> Option<&GitCommitHash> {
-        match self {
-            Self::Valid { git_stub_commit, .. } => git_stub_commit.as_ref(),
-            Self::Unparseable(_) => None,
         }
     }
 }
@@ -96,7 +98,7 @@ impl DocFileInfo for LocalApiDocFile {
 
     fn version(&self) -> Option<&semver::Version> {
         match self {
-            Self::Valid { doc, .. } => Some(doc.version()),
+            Self::Valid(v) => Some(v.doc.version()),
             Self::Unparseable(_) => None,
         }
     }
@@ -112,18 +114,18 @@ impl ApiLoad for Vec<LocalApiDocFile> {
     type Unparseable = LocalApiUnparseable;
 
     fn try_extend(&mut self, item: ApiDocFile) -> anyhow::Result<()> {
-        self.push(LocalApiDocFile::Valid {
+        self.push(LocalApiDocFile::Valid(LocalApiValid {
             doc: Box::new(item),
             git_stub_commit: None,
-        });
+        }));
         Ok(())
     }
 
     fn make_item(raw: ApiDocFile) -> Self {
-        vec![LocalApiDocFile::Valid {
+        vec![LocalApiDocFile::Valid(LocalApiValid {
             doc: Box::new(raw),
             git_stub_commit: None,
-        }]
+        })]
     }
 
     fn make_unparseable(
@@ -143,10 +145,8 @@ impl ApiLoad for Vec<LocalApiDocFile> {
     }
 
     fn set_git_stub_commit(&mut self, commit: GitCommitHash) {
-        if let Some(LocalApiDocFile::Valid { git_stub_commit, .. }) =
-            self.last_mut()
-        {
-            *git_stub_commit = Some(commit);
+        if let Some(LocalApiDocFile::Valid(valid)) = self.last_mut() {
+            valid.git_stub_commit = Some(commit);
         }
     }
 }

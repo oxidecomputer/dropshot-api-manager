@@ -11,7 +11,9 @@ use crate::{
     doc_files_blessed::{BlessedApiDocFile, BlessedFiles, BlessedGitStub},
     doc_files_generated::{GeneratedApiDocFile, GeneratedFiles},
     doc_files_generic::ApiFiles,
-    doc_files_local::{LocalApiDocFile, LocalApiUnparseable, LocalFiles},
+    doc_files_local::{
+        LocalApiDocFile, LocalApiUnparseable, LocalApiValid, LocalFiles,
+    },
     environment::ResolvedEnv,
     iter_only::iter_only,
     output::{InlineErrorChain, plural},
@@ -376,7 +378,7 @@ pub enum VersionProblem<'a> {
          you."
     )]
     BlessedVersionShouldBeGitStub {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiValid,
         git_stub: GitStub,
     },
 
@@ -385,7 +387,7 @@ pub enum VersionProblem<'a> {
          JSON. This tool can perform the conversion for you."
     )]
     GitStubShouldBeJson {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiValid,
         blessed: &'a BlessedApiDocFile,
     },
 
@@ -401,14 +403,14 @@ pub enum VersionProblem<'a> {
         "Duplicate local file found: both JSON and Git stub versions exist for \
          this API version. This tool can remove the redundant file for you."
     )]
-    DuplicateLocalFile { local_file: &'a LocalApiDocFile },
+    DuplicateLocalFile { local_file: &'a LocalApiValid },
 
     #[error(
         "Git stub has an outdated commit reference that is no longer \
          an ancestor of the merge base. This can happen after a rebase or \
          force-push. This tool can update the Git stub for you."
     )]
-    GitStubCommitStale { local_file: &'a LocalApiDocFile, git_stub: GitStub },
+    GitStubCommitStale { local_file: &'a LocalApiValid, git_stub: GitStub },
 
     #[error(
         "The first commit for this blessed version could not be determined. This \
@@ -675,12 +677,12 @@ pub enum Fix<'a> {
     },
     /// Convert a full JSON file to a Git stub.
     ConvertToGitStub {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiValid,
         git_stub: &'a GitStub,
     },
     /// Convert a Git stub back to a full JSON file.
     ConvertToJson {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiValid,
         blessed: &'a BlessedApiDocFile,
     },
     /// Regenerate a corrupted local file from the blessed content.
@@ -704,7 +706,7 @@ pub enum Fix<'a> {
     /// Update a Git stub whose commit hash has become stale (e.g.,
     /// after a rebase).
     UpdateGitStub {
-        local_file: &'a LocalApiDocFile,
+        local_file: &'a LocalApiValid,
         git_stub: &'a GitStub,
     },
 }
@@ -1293,7 +1295,7 @@ fn resolve_removed_blessed_versions<'a>(
 
 fn file_validity(doc_file: &LocalApiDocFile) -> FileValidity {
     match doc_file {
-        LocalApiDocFile::Valid { .. } => FileValidity::Valid,
+        LocalApiDocFile::Valid(_) => FileValidity::Valid,
         LocalApiDocFile::Unparseable(_) => FileValidity::Unparseable,
     }
 }
@@ -1305,7 +1307,7 @@ fn file_with_reason(doc_file: &LocalApiDocFile) -> String {
             unparseable.name,
             InlineErrorChain::new(&unparseable.reason),
         ),
-        LocalApiDocFile::Valid { .. } => doc_file.doc_file_name().to_string(),
+        LocalApiDocFile::Valid(_) => doc_file.doc_file_name().to_string(),
     }
 }
 
@@ -1322,7 +1324,7 @@ fn orphaned_message(doc_file: &LocalApiDocFile) -> String {
         ),
         // Orphaned valid files get a hint about whether the list of supported
         // versions has changed.
-        LocalApiDocFile::Valid { .. } => format!(
+        LocalApiDocFile::Valid(_) => format!(
             "A local OpenAPI document was found that does not correspond to \
              a supported version of this API: {}.  This is unusual, but it \
              could happen if you're either retiring an older version of this \
@@ -1372,7 +1374,7 @@ fn lockstep_stale_message(
             InlineErrorChain::new(&unparseable.reason),
         ),
         // A valid file that needs to be updated.
-        LocalApiDocFile::Valid { .. } => format!(
+        LocalApiDocFile::Valid(_) => format!(
             "For this lockstep API, OpenAPI document generated from the \
              current code does not match the local file: {:?}.  This tool \
              can update the local file for you.",
@@ -1904,7 +1906,7 @@ fn resolve_api_version_blessed<'a>(
                     non_matching.push(local_file);
                 }
             }
-            LocalApiDocFile::Valid { .. } => {
+            LocalApiDocFile::Valid(valid) => {
                 // For valid files, verify that hash matching implies content
                 // matching (and vice versa).
                 let contents_match =
@@ -1915,7 +1917,7 @@ fn resolve_api_version_blessed<'a>(
                 );
 
                 if hashes_match {
-                    matching.push(local_file);
+                    matching.push(valid);
                 } else {
                     non_matching.push(local_file);
                 }
@@ -2043,11 +2045,11 @@ fn resolve_api_version_blessed<'a>(
         // compared to what the blessed source expects. This is shared
         // between the single-match and duplicate-files branches below.
         let check_git_stub_staleness =
-            |local_file: &'a LocalApiDocFile,
+            |local_file: &'a LocalApiValid,
              expected_git_stub: &GitStub,
              problems: &mut Vec<VersionProblem<'a>>| {
                 // Non-gitstub files (JSON) don't have a commit to check.
-                let Some(local_commit) = local_file.git_stub_commit() else {
+                let Some(local_commit) = &local_file.git_stub_commit else {
                     return;
                 };
                 if *local_commit != expected_git_stub.commit() {
