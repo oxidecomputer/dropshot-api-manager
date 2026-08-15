@@ -32,18 +32,6 @@ pub(crate) struct GitStubKey {
     pub(crate) version: semver::Version,
 }
 
-/// Represents a local file that exists on disk but couldn't be parsed.
-///
-/// Used to track files that need to be deleted/overwritten during generate.
-/// This allows the tool to clean up corrupted files (e.g., files with merge
-/// conflict markers) rather than leaving them orphaned.
-#[derive(Clone, Debug)]
-pub struct UnparseableFile {
-    /// The path to the file on disk, relative to the OpenAPI documents
-    /// directory.
-    pub path: Utf8PathBuf,
-}
-
 /// Attempts to parse the given file basename as a `VersionedApiDocFileName`.
 ///
 /// These look like: `ident-SEMVER-HASH.json`.
@@ -761,52 +749,45 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
                     "skipping unparseable file: {rendered}"
                 ));
 
-                // Can the file be associated with a version?
-                if let Some(version) = file_name.version() {
-                    let ident = file_name.ident().clone();
-                    let entry = self
-                        .doc_files
-                        .entry(ident)
-                        .or_insert_with(ApiFiles::new)
-                        .doc_files
-                        .entry(version.clone());
-
-                    match entry {
-                        Entry::Vacant(vacant_entry) => {
-                            vacant_entry
-                                .insert(T::unparseable_into_self(unparseable));
-                        }
-                        Entry::Occupied(mut occupied_entry) => {
-                            occupied_entry
-                                .get_mut()
-                                .extend_unparseable(unparseable);
-                        }
+                let version = match file_name.version() {
+                    Some(version) => version.clone(),
+                    None => {
+                        // This is a lockstep file, and the file name doesn't
+                        // carry the version. Figure out the version using
+                        // `iter_versions_semver`.
+                        let api = self.apis.api(file_name.ident()).expect(
+                            "parsed lockstep file name implies a known API",
+                        );
+                        api.iter_versions_semver()
+                            .next()
+                            .expect("lockstep API has exactly one version")
+                            .clone()
                     }
-                } else {
-                    // No version info, fall back to old behavior.
-                    self.record_unparseable_file(
-                        file_name.ident().clone(),
-                        UnparseableFile { path: file_name.path() },
-                    );
+                };
+                let ident = file_name.ident().clone();
+                let entry = self
+                    .doc_files
+                    .entry(ident)
+                    .or_insert_with(ApiFiles::new)
+                    .doc_files
+                    .entry(version);
+
+                match entry {
+                    Entry::Vacant(vacant_entry) => {
+                        vacant_entry
+                            .insert(T::unparseable_into_self(unparseable));
+                    }
+                    Entry::Occupied(mut occupied_entry) => {
+                        occupied_entry
+                            .get_mut()
+                            .extend_unparseable(unparseable);
+                    }
                 }
             }
             None => {
                 self.load_error(anyhow!("{rendered}"));
             }
         }
-    }
-
-    /// Record an unparseable file for later cleanup.
-    fn record_unparseable_file(
-        &mut self,
-        ident: ApiIdent,
-        unparseable: UnparseableFile,
-    ) {
-        self.doc_files
-            .entry(ident)
-            .or_insert_with(ApiFiles::new)
-            .unparseable_files
-            .push(unparseable);
     }
 
     /// Load the "latest" symlink for a versioned API
@@ -905,18 +886,11 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
 pub struct ApiFiles<T> {
     doc_files: BTreeMap<semver::Version, T>,
     latest_link: Option<VersionedApiDocFileName>,
-    /// Files that exist on disk but couldn't be parsed. These are tracked so
-    /// that generate can delete them and create correct files in their place.
-    unparseable_files: Vec<UnparseableFile>,
 }
 
 impl<T: AsRawFiles> ApiFiles<T> {
     fn new() -> ApiFiles<T> {
-        ApiFiles {
-            doc_files: BTreeMap::new(),
-            latest_link: None,
-            unparseable_files: Vec::new(),
-        }
+        ApiFiles { doc_files: BTreeMap::new(), latest_link: None }
     }
 
     pub fn versions(&self) -> &BTreeMap<semver::Version, T> {
@@ -925,11 +899,6 @@ impl<T: AsRawFiles> ApiFiles<T> {
 
     pub fn latest_link(&self) -> Option<&VersionedApiDocFileName> {
         self.latest_link.as_ref()
-    }
-
-    /// Returns files that couldn't be parsed but should be tracked for cleanup.
-    pub fn unparseable_files(&self) -> &[UnparseableFile] {
-        &self.unparseable_files
     }
 }
 

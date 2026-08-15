@@ -376,9 +376,8 @@ pub fn display_resolution(
     }
 
     // Print problems not associated with any supported version, if any.
-    let orphaned_and_unparseable: Vec<_> =
-        resolved.orphaned_and_unparseable().collect();
-    num_non_version_problems += if !orphaned_and_unparseable.is_empty() {
+    let orphaned: Vec<_> = resolved.orphaned().collect();
+    num_non_version_problems += if !orphaned.is_empty() {
         writeln!(
             writer,
             "\n{:>HEADER_WIDTH$} problems not associated with a specific \
@@ -389,9 +388,9 @@ pub fn display_resolution(
         let (fixable, unfixable): (
             Vec<&NonVersionProblem>,
             Vec<&NonVersionProblem>,
-        ) = orphaned_and_unparseable.iter().partition(|p| p.is_fixable());
+        ) = orphaned.iter().partition(|p| p.is_fixable());
         num_failed += unfixable.len();
-        display_non_version_problems(writer, orphaned_and_unparseable, styles)?;
+        display_non_version_problems(writer, orphaned, styles)?;
         fixable.len()
     } else {
         0

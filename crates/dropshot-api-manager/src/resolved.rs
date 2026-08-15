@@ -10,7 +10,7 @@ use crate::{
     },
     doc_files_blessed::{BlessedApiDocFile, BlessedFiles, BlessedGitStub},
     doc_files_generated::{GeneratedApiDocFile, GeneratedFiles},
-    doc_files_generic::{ApiFiles, UnparseableFile},
+    doc_files_generic::ApiFiles,
     doc_files_local::{LocalApiDocFile, LocalFiles},
     environment::ResolvedEnv,
     iter_only::iter_only,
@@ -27,7 +27,7 @@ use dropshot_api_manager_types::{
 use git_stub::{GitCommitHash, GitStub};
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     fmt::{Debug, Display},
 };
 use thiserror::Error;
@@ -150,7 +150,6 @@ impl Display for ResolutionKind {
 #[expect(missing_docs)]
 pub enum ProblemKind {
     LocalDocFileOrphaned { basename: String },
-    UnparseableLocalFile { basename: String },
     BlessedVersionMissingLocal,
     BlessedVersionExtraLocalDoc { basename: String },
     BlessedVersionCompareError,
@@ -233,15 +232,6 @@ pub enum NonVersionProblem<'a> {
     )]
     LocalDocFileOrphaned { doc_file_name: VersionedApiDocFileName },
 
-    #[error(
-        "A local OpenAPI document could not be parsed: {}. \
-         This may happen if the file has merge conflict markers or is \
-         otherwise corrupted. This tool can delete this file and regenerate \
-         the correct one for you.",
-         unparseable_file.path,
-    )]
-    UnparseableLocalFile { unparseable_file: UnparseableFile },
-
     #[error("\"Latest\" symlink for versioned API {api_ident:?} is missing")]
     LatestLinkMissing { api_ident: ApiIdent, link: &'a VersionedApiDocFileName },
 
@@ -321,11 +311,7 @@ pub enum VersionProblem<'a> {
     )]
     LockstepMissingLocal { generated: &'a GeneratedApiDocFile },
 
-    #[error(
-        "For this lockstep API, OpenAPI document generated from the current \
-         code does not match the local file: {:?}.  This tool can update the \
-         local file for you.", generated.doc_file_name().path()
-    )]
+    #[error("{}", lockstep_stale_message(found, generated))]
     LockstepStale {
         found: &'a LocalApiDocFile,
         generated: &'a GeneratedApiDocFile,
@@ -462,15 +448,6 @@ impl<'a> NonVersionProblem<'a> {
                     basename: doc_file_name.basename(),
                 }
             }
-            NonVersionProblem::UnparseableLocalFile { unparseable_file } => {
-                ProblemKind::UnparseableLocalFile {
-                    basename: unparseable_file
-                        .path
-                        .file_name()
-                        .expect("unparseable file path has a file name")
-                        .to_owned(),
-                }
-            }
             NonVersionProblem::LatestLinkMissing { .. } => {
                 ProblemKind::LatestLinkMissing
             }
@@ -489,11 +466,6 @@ impl<'a> NonVersionProblem<'a> {
             NonVersionProblem::LocalDocFileOrphaned { doc_file_name } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![doc_file_name.clone().into()]),
-                })
-            }
-            NonVersionProblem::UnparseableLocalFile { unparseable_file } => {
-                Some(Fix::DeleteUnparseableFile {
-                    path: unparseable_file.path.clone(),
                 })
             }
             NonVersionProblem::LatestLinkStale { api_ident, link, .. }
@@ -743,10 +715,6 @@ pub enum Fix<'a> {
         local_file: &'a LocalApiDocFile,
         git_stub: &'a GitStub,
     },
-    /// Delete an unparseable file (e.g., one with merge conflict markers).
-    DeleteUnparseableFile {
-        path: Utf8PathBuf,
-    },
 }
 
 impl Display for Fix<'_> {
@@ -846,78 +814,12 @@ impl Display for Fix<'_> {
                     git_stub.commit(),
                 )?;
             }
-            Fix::DeleteUnparseableFile { path } => {
-                writeln!(f, "delete unparseable file {path}")?;
-            }
         };
         Ok(())
     }
 }
 
 impl Fix<'_> {
-    /// Adds the paths (relative to the OpenAPI documents directory) that this
-    /// fix will write to. Used to determine if an unparseable file will be
-    /// overwritten.
-    pub fn add_paths_written(&self, paths: &mut HashSet<Utf8PathBuf>) {
-        match self {
-            Fix::DeleteFiles { .. } => {}
-            Fix::UpdateLockstepFile { generated } => {
-                paths.insert(generated.doc_file_name().path().to_owned());
-            }
-            Fix::UpdateVersionedFiles { generated, .. } => {
-                paths.insert(generated.doc_file_name().path().to_owned());
-            }
-            Fix::UpdateExtraFile { path, .. } => {
-                paths.insert((*path).to_owned());
-            }
-            Fix::UpdateSymlink { .. } => {}
-            Fix::ConvertToGitStub { local_file, .. } => {
-                // Writes to the .gitstub path, not the JSON path.
-                paths.insert(
-                    local_file.doc_file_name().to_git_stub_filename().path(),
-                );
-            }
-            Fix::ConvertToJson { local_file, .. } => {
-                // Writes to the JSON path.
-                paths.insert(
-                    local_file.doc_file_name().to_json_filename().path(),
-                );
-            }
-            Fix::RegenerateFromBlessed { local_file, git_stub, .. } => {
-                if git_stub.is_some() {
-                    // Writes to a .gitstub file.
-                    paths.insert(
-                        local_file
-                            .doc_file_name()
-                            .to_git_stub_filename()
-                            .path(),
-                    );
-                } else {
-                    // Overwrites the corrupted local file.
-                    paths.insert(local_file.doc_file_name().path().to_owned());
-                }
-            }
-            Fix::RestoreFromBlessed { blessed, git_stub } => {
-                if git_stub.is_some() {
-                    paths.insert(
-                        blessed.versioned_doc_file_name().to_git_stub().path(),
-                    );
-                } else {
-                    paths.insert(
-                        blessed.versioned_doc_file_name().path().to_owned(),
-                    );
-                }
-            }
-            Fix::UpdateGitStub { local_file, .. } => {
-                // Overwrites the existing .gitstub file in place.
-                paths.insert(local_file.doc_file_name().path().to_owned());
-            }
-            Fix::DeleteUnparseableFile { .. } => {}
-        }
-        // No wildcard match: adding a new Fix variant should cause a compile
-        // error here, forcing consideration of what paths it writes.
-    }
-
     pub fn execute(&self, env: &ResolvedEnv) -> anyhow::Result<Vec<String>> {
         let root = env.openapi_abs_dir();
         match self {
@@ -1119,11 +1021,6 @@ impl Fix<'_> {
                     git_stub_path, overwrite_status
                 )])
             }
-            Fix::DeleteUnparseableFile { path } => {
-                let full_path = root.join(path);
-                fs_err::remove_file(&full_path)?;
-                Ok(vec![format!("removed unparseable file {}", full_path)])
-            }
         }
     }
 }
@@ -1143,12 +1040,11 @@ fn symlink_file(target: &str, path: &Utf8Path) -> std::io::Result<()> {
 pub struct Resolved<'a> {
     notes: Vec<Note>,
     /// Non-version problems that aren't attached to a supported (api, version)
-    /// pair: local files for unsupported versions and unparseable local
-    /// files. The "latest" symlink problems are *also* non-version problems,
-    /// but they live on [`ApiResolved::symlink`] and are reached via
+    /// pair: local files for unsupported versions. The "latest" symlink
+    /// problems are *also* non-version problems, but they live on
+    /// [`ApiResolved::symlink`] and are reached via
     /// [`Resolved::symlink_problem`].
-    orphaned_and_unparseable:
-        Vec<(ApiIdent, Option<semver::Version>, NonVersionProblem<'a>)>,
+    orphaned: Vec<(ApiIdent, semver::Version, NonVersionProblem<'a>)>,
     api_results: BTreeMap<ApiIdent, ApiResolved<'a>>,
     nexpected_documents: usize,
 }
@@ -1196,23 +1092,20 @@ impl<'a> Resolved<'a> {
         // Get the other easy case out of the way: if there are any local
         // document files for APIs or API versions that aren't supported any
         // more, that's a (fixable) problem.
-        let mut orphaned_and_unparseable: Vec<(
-            ApiIdent,
-            Option<semver::Version>,
-            NonVersionProblem<'_>,
-        )> = resolve_orphaned_local_docs(&supported_versions_by_api, local)
-            .map(|doc_file_name| {
-                let ident = doc_file_name.ident().clone();
-                let version = Some(doc_file_name.version().clone());
-                (
-                    ident,
-                    version,
-                    NonVersionProblem::LocalDocFileOrphaned {
-                        doc_file_name: doc_file_name.clone(),
-                    },
-                )
-            })
-            .collect();
+        let orphaned: Vec<(ApiIdent, semver::Version, NonVersionProblem<'_>)> =
+            resolve_orphaned_local_docs(&supported_versions_by_api, local)
+                .map(|doc_file_name| {
+                    let ident = doc_file_name.ident().clone();
+                    let version = doc_file_name.version().clone();
+                    (
+                        ident,
+                        version,
+                        NonVersionProblem::LocalDocFileOrphaned {
+                            doc_file_name: doc_file_name.clone(),
+                        },
+                    )
+                })
+                .collect();
 
         // Resolve each of the supported API versions first, so we know what
         // paths will be written. (Do this in parallel across each API version.)
@@ -1268,44 +1161,7 @@ impl<'a> Resolved<'a> {
             })
             .collect();
 
-        // Now collect any unparseable files. These are local files that exist
-        // but couldn't be parsed (e.g., due to merge conflict markers).
-        //
-        // Only report unparseable files whose paths won't be overwritten by a
-        // fix. We check the actual fixes (not just generated paths) because
-        // some fixes write Git stubs instead of JSON files.
-        let mut paths_written: HashSet<Utf8PathBuf> = HashSet::new();
-        for api_resolved in api_results.values() {
-            for resolution in api_resolved.by_version.values() {
-                for problem in &resolution.problems {
-                    if let Some(fix) = problem.fix() {
-                        fix.add_paths_written(&mut paths_written);
-                    }
-                }
-            }
-        }
-
-        for (ident, api_files) in local.iter() {
-            for unparseable in api_files.unparseable_files() {
-                // Only report if no fix will overwrite this path.
-                if !paths_written.contains(&unparseable.path) {
-                    orphaned_and_unparseable.push((
-                        ident.clone(),
-                        None,
-                        NonVersionProblem::UnparseableLocalFile {
-                            unparseable_file: unparseable.clone(),
-                        },
-                    ));
-                }
-            }
-        }
-
-        Resolved {
-            notes,
-            orphaned_and_unparseable,
-            api_results,
-            nexpected_documents,
-        }
+        Resolved { notes, orphaned, api_results, nexpected_documents }
     }
 
     pub fn nexpected_documents(&self) -> usize {
@@ -1317,16 +1173,15 @@ impl<'a> Resolved<'a> {
     }
 
     /// Iterate over non-version problems that aren't attached to a specific
-    /// supported (api, version) pair: local files for unsupported versions
-    /// and unparseable local files.
+    /// supported (api, version) pair: local files for unsupported versions.
     ///
     /// Does *not* include "latest" symlink problems, which are also
     /// [`NonVersionProblem`]s but are reached via
     /// [`Resolved::symlink_problem`].
-    pub fn orphaned_and_unparseable(
+    pub fn orphaned(
         &self,
     ) -> impl Iterator<Item = &NonVersionProblem<'a>> + '_ {
-        self.orphaned_and_unparseable.iter().map(|(_, _, problem)| problem)
+        self.orphaned.iter().map(|(_, _, problem)| problem)
     }
 
     pub fn resolution_for_api_version(
@@ -1361,8 +1216,8 @@ impl<'a> Resolved<'a> {
     /// Returns the "latest" symlink problem for an API, if any.
     ///
     /// Symlink problems are [`NonVersionProblem`]s but live separately from
-    /// [`Resolved::orphaned_and_unparseable`] because they're scoped to an
-    /// API rather than a (file, version) pair.
+    /// [`Resolved::orphaned`] because they're scoped to an API rather than a
+    /// (file, version) pair.
     pub fn symlink_problem(
         &self,
         ident: &ApiIdent,
@@ -1371,22 +1226,22 @@ impl<'a> Resolved<'a> {
     }
 
     pub fn has_unfixable_problems(&self) -> bool {
-        self.orphaned_and_unparseable().any(|p| !p.is_fixable())
+        self.orphaned().any(|p| !p.is_fixable())
             || self.api_results.values().any(|a| a.has_unfixable_problems())
     }
 
     /// Returns an owned, ordered list of all problems as summaries.
     ///
-    /// Order: orphaned/unparseable problems first, then per-API (sorted by
-    /// ident), per-version (sorted by semver), then symlink problems.
+    /// Order: orphaned problems first, then per-API (sorted by ident),
+    /// per-version (sorted by semver), then symlink problems.
     pub fn problem_summaries(&self) -> Vec<ProblemSummary> {
         let mut summaries = Vec::new();
 
-        // Orphaned and unparseable problems.
-        for (ident, version, problem) in &self.orphaned_and_unparseable {
+        // Orphaned problems.
+        for (ident, version, problem) in &self.orphaned {
             summaries.push(ProblemSummary {
                 api_ident: ident.clone(),
-                version: version.clone(),
+                version: Some(version.clone()),
                 kind: problem.kind(),
             });
         }
@@ -1441,6 +1296,27 @@ fn resolve_removed_blessed_versions<'a>(
             _ => Some((ident, version)),
         })
     })
+}
+
+fn lockstep_stale_message(
+    found: &LocalApiDocFile,
+    generated: &GeneratedApiDocFile,
+) -> String {
+    match found {
+        // A file that couldn't be parsed.
+        LocalApiDocFile::Unparseable(unparseable) => format!(
+            "For this lockstep API, the local file exists but could not be \
+             parsed: {}.  This tool can regenerate the file for you.",
+            InlineErrorChain::new(&unparseable.reason),
+        ),
+        // A valid file that needs to be updated.
+        LocalApiDocFile::Valid { .. } => format!(
+            "For this lockstep API, OpenAPI document generated from the \
+             current code does not match the local file: {:?}.  This tool \
+             can update the local file for you.",
+            generated.doc_file_name().path(),
+        ),
+    }
 }
 
 fn resolve_orphaned_local_docs<'a>(
