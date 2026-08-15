@@ -6,6 +6,7 @@
 ### Changed
 
 - Consistently use "OpenAPI document" everywhere instead of "OpenAPI spec". A number of type names have been changed to use this terminology.
+- `VersionedApiDocFileName::path` now always returns paths with a forward slash, including on Windows, matching the `Display` implementation.
 
 ## [0.7.2] - 2026-05-20
 

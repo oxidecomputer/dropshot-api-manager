@@ -198,8 +198,10 @@ impl VersionedApiDocFileName {
 
     /// Returns the path of this file relative to the root of the OpenAPI
     /// documents.
+    ///
+    /// The path is always joined with a forward slash, including on Windows.
     pub fn path(&self) -> Utf8PathBuf {
-        Utf8PathBuf::from_iter([self.ident.as_str(), &self.basename()])
+        Utf8PathBuf::from(format!("{}/{}", self.ident, self.basename()))
     }
 
     /// Returns the base name of this file path.
