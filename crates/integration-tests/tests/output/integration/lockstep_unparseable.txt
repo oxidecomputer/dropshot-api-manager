@@ -1,0 +1,15 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Warning skipping unparseable file: file "health.json": parsing as JSON: expected value at line 1 column 1
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 1 OpenAPI document...
+       Stale health (lockstep v1.0.0): Health API
+     problem: No local OpenAPI document was found for this lockstep API.  This
+              is only expected if you're adding a new lockstep API.  This tool
+              can generate the file for you.
+         fix: will rewrite lockstep file health.json from generated
+     -------
+       Stale 1 document checked: 0 fresh, 1 stale, 0 failed, 0 other problems
+             (run test-openapi-manager generate to update)

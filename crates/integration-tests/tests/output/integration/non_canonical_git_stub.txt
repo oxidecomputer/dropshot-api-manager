@@ -1,0 +1,19 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Warning skipping unparseable file: Git stub "versioned-health/versioned-health-1.0.0-da85d6.json.gitstub" needs to be rewritten to canonical format (forward slashes, trailing newline)
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 3 OpenAPI documents...
+       Stale versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+     problem: Local file for this blessed version is corrupted (possibly due to
+              merge conflict markers). This tool can regenerate the file from
+              the blessed version for you.
+         fix: will regenerate versioned-health/versioned-health-1.0.0-
+              da85d6.json.gitstub from blessed content as Git stub
+       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health "latest" symlink
+     -------
+       Stale 3 documents checked: 3 fresh, 1 stale, 0 failed, 0 other problems
+             (run test-openapi-manager generate to update)
