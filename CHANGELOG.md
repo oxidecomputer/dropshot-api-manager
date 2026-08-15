@@ -3,10 +3,16 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Fixed
+
+- Previously, a `.json.gitstub` file whose filename hash didn't match its resolved contents (e.g. leftover from a mismerge) crashed `generate` and `check`. These files are now detected and cleaned up like other stale files.
+
 ### Changed
 
 - Consistently use "OpenAPI document" everywhere instead of "OpenAPI spec". A number of type names have been changed to use this terminology.
 - `VersionedApiDocFileName::path` now always returns paths with a forward slash, including on Windows, matching the `Display` implementation.
+- Unparseable local files (e.g. files with merge conflict markers) are now reported inline, within the problem whose fix handles them. The message also includes more information about why the file couldn't be parsed. Previously, the reason appeared only in a separate load-time warning (this warning has been removed).
+- A lockstep document that exists but can't be parsed is now reported as stale rather than missing.
 
 ## [0.7.2] - 2026-05-20
 
