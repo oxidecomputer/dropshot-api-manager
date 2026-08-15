@@ -7,8 +7,8 @@ use crate::{
     apis::ManagedApis,
     doc_files_generic::{
         ApiDocFile, ApiDocFilesBuilder, ApiFiles, ApiLoad, AsRawFiles,
-        DocFileInfo, parse_lockstep_file_name, parse_versioned_file_name,
-        parse_versioned_git_stub_file_name,
+        DocFileInfo, UnparseableReason, parse_lockstep_file_name,
+        parse_versioned_file_name, parse_versioned_git_stub_file_name,
     },
     environment::ErrorAccumulator,
     vcs::RepoVcs,
@@ -34,6 +34,9 @@ pub struct LocalApiUnparseable {
     pub name: ApiDocFileName,
     /// The raw file contents that couldn't be parsed.
     pub contents: Vec<u8>,
+    /// The reason the file couldn't be parsed.
+    #[expect(dead_code)] // will be removed by a future commit
+    pub reason: UnparseableReason,
 }
 
 /// Represents an OpenAPI document found in this working tree.
@@ -132,8 +135,9 @@ impl ApiLoad for Vec<LocalApiDocFile> {
     fn make_unparseable(
         name: ApiDocFileName,
         contents: Vec<u8>,
+        reason: UnparseableReason,
     ) -> Option<Self::Unparseable> {
-        Some(LocalApiUnparseable { name, contents })
+        Some(LocalApiUnparseable { name, contents, reason })
     }
 
     fn unparseable_into_self(unparseable: Self::Unparseable) -> Self {
@@ -239,15 +243,15 @@ enum LocalFileResult {
     // --- Successfully parsed filename + deserialized ---
     LockstepDeserialized {
         file_name: ApiDocFileName,
-        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (UnparseableReason, Vec<u8>)>,
     },
     VersionedDeserialized {
         file_name: ApiDocFileName,
-        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (UnparseableReason, Vec<u8>)>,
     },
     GitStubDeserialized {
         file_name: ApiDocFileName,
-        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (UnparseableReason, Vec<u8>)>,
         commit: GitCommitHash,
     },
 
@@ -255,7 +259,7 @@ enum LocalFileResult {
     GitStubUnresolvable {
         file_name: ApiDocFileName,
         original_contents: Vec<u8>,
-        reason: anyhow::Error,
+        reason: UnparseableReason,
     },
 
     // --- Filename parse failures (diagnostics happen at the reduce phase) ---
@@ -467,7 +471,8 @@ fn process_local_entry(
             };
 
             let result =
-                ApiDocFile::for_contents(doc_file_name.clone(), contents);
+                ApiDocFile::for_contents(doc_file_name.clone(), contents)
+                    .map_err(|(e, buf)| (e.into(), buf));
             LocalFileResult::LockstepDeserialized {
                 file_name: doc_file_name,
                 result,
@@ -498,7 +503,8 @@ fn process_local_entry(
             };
 
             let result =
-                ApiDocFile::for_contents(doc_file_name.clone(), contents);
+                ApiDocFile::for_contents(doc_file_name.clone(), contents)
+                    .map_err(|(e, buf)| (e.into(), buf));
             LocalFileResult::VersionedDeserialized {
                 file_name: doc_file_name,
                 result,
@@ -535,10 +541,10 @@ fn process_local_entry(
                     return LocalFileResult::GitStubUnresolvable {
                         file_name: doc_file_name,
                         original_contents: git_stub_contents.into_bytes(),
-                        reason: anyhow!(error).context(format!(
-                            "Git stub {:?} could not be parsed",
-                            path,
-                        )),
+                        reason: UnparseableReason::GitStubInvalid {
+                            path: path.clone(),
+                            source: error,
+                        },
                     };
                 }
             };
@@ -548,12 +554,9 @@ fn process_local_entry(
                 return LocalFileResult::GitStubUnresolvable {
                     file_name: doc_file_name,
                     original_contents: git_stub_contents.into_bytes(),
-                    reason: anyhow!(
-                        "Git stub {:?} needs to be rewritten to \
-                         canonical format (forward slashes, trailing \
-                         newline)",
-                        path,
-                    ),
+                    reason: UnparseableReason::GitStubNonCanonical {
+                        path: path.clone(),
+                    },
                 };
             }
 
@@ -565,10 +568,10 @@ fn process_local_entry(
                     return LocalFileResult::GitStubUnresolvable {
                         file_name: doc_file_name,
                         original_contents: git_stub_contents.into_bytes(),
-                        reason: error.context(format!(
-                            "Git stub {:?} could not be resolved",
-                            path,
-                        )),
+                        reason: UnparseableReason::GitStubUnresolvable {
+                            path: path.clone(),
+                            source: error,
+                        },
                     };
                 }
             };
@@ -576,7 +579,8 @@ fn process_local_entry(
             // Deserialize the resolved contents.
             let commit = git_stub.commit();
             let result =
-                ApiDocFile::for_contents(doc_file_name.clone(), contents);
+                ApiDocFile::for_contents(doc_file_name.clone(), contents)
+                    .map_err(|(e, buf)| (e.into(), buf));
             LocalFileResult::GitStubDeserialized {
                 file_name: doc_file_name,
                 result,

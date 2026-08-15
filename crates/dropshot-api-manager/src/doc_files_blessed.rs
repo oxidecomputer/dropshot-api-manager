@@ -7,7 +7,7 @@ use crate::{
     apis::ManagedApis,
     doc_files_generic::{
         ApiDocFile, ApiDocFilesBuilder, ApiFiles, ApiLoad, AsRawFiles,
-        DocFileInfo, GitStubKey, parse_versioned_file_name,
+        DocFileInfo, GitStubKey, UnparseableReason, parse_versioned_file_name,
         parse_versioned_git_stub_file_name,
     },
     environment::ErrorAccumulator,
@@ -109,6 +109,7 @@ impl ApiLoad for BlessedApiDocFile {
     fn make_unparseable(
         _name: ApiDocFileName,
         _contents: Vec<u8>,
+        _reason: UnparseableReason,
     ) -> Option<Self::Unparseable> {
         None
     }
@@ -388,7 +389,7 @@ fn process_blessed_entry(
                 .map_err(|(err, _bytes)| {
                     // BlessedApiDocFile doesn't track unparseable
                     // files, so drop the raw bytes (as _bytes).
-                    err
+                    anyhow::Error::new(err)
                 });
 
             BlessedFileResult::VersionedDeserialized { result, git_path }
@@ -448,7 +449,7 @@ fn process_blessed_entry(
 
             // Deserialize.
             let result = ApiDocFile::for_contents(doc_file_name, json_contents)
-                .map_err(|(err, _bytes)| err);
+                .map_err(|(err, _bytes)| anyhow::Error::new(err));
 
             BlessedFileResult::GitStubDeserialized { result, git_stub }
         }

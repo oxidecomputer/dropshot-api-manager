@@ -3,7 +3,9 @@
 //! Working with OpenAPI documents, whether generated, blessed, or local to this
 //! repository
 
-use crate::{apis::ManagedApis, environment::ErrorAccumulator};
+use crate::{
+    apis::ManagedApis, environment::ErrorAccumulator, output::InlineErrorChain,
+};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use debug_ignore::DebugIgnore;
@@ -11,7 +13,7 @@ use dropshot_api_manager_types::{
     ApiDocFileName, ApiIdent, LockstepApiDocFileName, VersionedApiDocFileName,
     VersionedApiDocKind,
 };
-use git_stub::GitCommitHash;
+use git_stub::{GitCommitHash, GitStubParseError};
 use openapiv3::OpenAPI;
 use sha2::{Digest, Sha256};
 use std::{
@@ -197,7 +199,8 @@ pub(crate) enum BadVersionedFileName {
 
 /// Errors that can occur when parsing an API document file.
 #[derive(Debug, Error)]
-enum ApiDocFileParseError {
+#[non_exhaustive]
+pub enum ApiDocFileParseError {
     #[error("file {path:?}: parsing as JSON")]
     JsonParse { path: Utf8PathBuf, source: serde_json::Error },
     #[error("file {path:?}: parsing OpenAPI document")]
@@ -219,6 +222,38 @@ enum ApiDocFileParseError {
          file name has different hash {actual:?}"
     )]
     GitStubHashMismatch { path: Utf8PathBuf, expected: String, actual: String },
+}
+
+/// The reason a local file couldn't be parsed or loaded.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum UnparseableReason {
+    /// The API document could not be parsed.
+    #[error(transparent)]
+    Parse(#[from] ApiDocFileParseError),
+
+    /// The Git stub could not be parsed.
+    #[error("Git stub {path:?} could not be parsed")]
+    GitStubInvalid {
+        path: Utf8PathBuf,
+        #[source]
+        source: GitStubParseError,
+    },
+
+    /// The Git stub needs to be rewritten to the canonical format.
+    #[error(
+        "Git stub {path:?} needs to be rewritten to canonical format \
+         (forward slashes, trailing newline)"
+    )]
+    GitStubNonCanonical { path: Utf8PathBuf },
+
+    /// The Git stub could not be resolved.
+    #[error("Git stub {path:?} could not be resolved")]
+    GitStubUnresolvable {
+        path: Utf8PathBuf,
+        #[source]
+        source: anyhow::Error,
+    },
 }
 
 /// Describes an OpenAPI document
@@ -243,14 +278,6 @@ impl ApiDocFile {
     /// that callers can still use the contents (e.g., for unparseable file
     /// tracking).
     pub fn for_contents(
-        doc_file_name: ApiDocFileName,
-        contents_buf: Vec<u8>,
-    ) -> Result<ApiDocFile, (anyhow::Error, Vec<u8>)> {
-        Self::for_contents_inner(doc_file_name, contents_buf)
-            .map_err(|(e, buf)| (e.into(), buf))
-    }
-
-    fn for_contents_inner(
         doc_file_name: ApiDocFileName,
         contents_buf: Vec<u8>,
     ) -> Result<ApiDocFile, (ApiDocFileParseError, Vec<u8>)> {
@@ -683,7 +710,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
     pub fn load_maybe_unparseable(
         &mut self,
         file_name: ApiDocFileName,
-        result: Result<ApiDocFile, (anyhow::Error, Vec<u8>)>,
+        result: Result<ApiDocFile, (UnparseableReason, Vec<u8>)>,
     ) {
         match result {
             Ok(file) => {
@@ -708,7 +735,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
         &mut self,
         file_name: ApiDocFileName,
         contents: Vec<u8>,
-        reason: anyhow::Error,
+        reason: UnparseableReason,
     ) {
         self.insert_unparseable(file_name, contents, reason);
     }
@@ -722,14 +749,17 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
         &mut self,
         file_name: ApiDocFileName,
         contents: Vec<u8>,
-        reason: anyhow::Error,
+        reason: UnparseableReason,
     ) {
-        match T::make_unparseable(file_name.clone(), contents) {
+        let rendered = InlineErrorChain::new(&reason).to_string();
+        match T::make_unparseable(file_name.clone(), contents, reason) {
             Some(unparseable) => {
                 // For local files, track the unparseable file so it can be
                 // cleaned up during generate. Record a warning so the user
                 // knows about it.
-                self.load_warning(reason.context("skipping unparseable file"));
+                self.load_warning(anyhow!(
+                    "skipping unparseable file: {rendered}"
+                ));
 
                 // Can the file be associated with a version?
                 if let Some(version) = file_name.version() {
@@ -761,7 +791,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
                 }
             }
             None => {
-                self.load_error(reason);
+                self.load_error(anyhow!("{rendered}"));
             }
         }
     }
@@ -995,6 +1025,7 @@ pub trait ApiLoad {
     fn make_unparseable(
         name: ApiDocFileName,
         contents: Vec<u8>,
+        reason: UnparseableReason,
     ) -> Option<Self::Unparseable>;
 
     /// Convert unparseable file data into a `Self` for insertion.
