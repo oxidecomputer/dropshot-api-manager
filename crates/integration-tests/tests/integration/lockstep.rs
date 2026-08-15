@@ -168,11 +168,7 @@ fn test_unparseable_conflict_markers() -> Result<()> {
     );
     assert_eq!(
         summaries,
-        [ProblemSummary::new(
-            "health",
-            "1.0.0",
-            ProblemKind::LockstepMissingLocal,
-        )],
+        [ProblemSummary::new("health", "1.0.0", ProblemKind::LockstepStale)],
     );
 
     env.generate_documents(&apis)?;

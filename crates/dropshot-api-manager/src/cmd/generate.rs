@@ -178,7 +178,7 @@ fn generate_impl_inner(
     apply_fixes(
         writer,
         env,
-        resolved.orphaned_and_unparseable().map(|p| expect_fix(p.fix())),
+        resolved.orphaned().map(|p| expect_fix(p.fix())),
         styles,
         &mut num_updated,
         &mut num_errors,
@@ -220,11 +220,10 @@ fn generate_impl_inner(
         Resolved::new(env, apis, &blessed, &generated, &local_files_recheck);
     let dedup = resolved.build_compat_dedup_map();
 
-    let orphaned_and_unparseable: Vec<_> =
-        resolved.orphaned_and_unparseable().collect();
-    nproblems += orphaned_and_unparseable.len();
-    if !orphaned_and_unparseable.is_empty() {
-        display_non_version_problems(writer, orphaned_and_unparseable, styles)?;
+    let orphaned: Vec<_> = resolved.orphaned().collect();
+    nproblems += orphaned.len();
+    if !orphaned.is_empty() {
+        display_non_version_problems(writer, orphaned, styles)?;
     }
     for api in apis.iter_apis() {
         let ident = api.ident();

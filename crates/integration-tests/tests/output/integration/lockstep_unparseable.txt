@@ -6,10 +6,110 @@
      -------
     Checking 1 OpenAPI document...
        Stale health (lockstep v1.0.0): Health API
-     problem: No local OpenAPI document was found for this lockstep API.  This
-              is only expected if you're adding a new lockstep API.  This tool
-              can generate the file for you.
+     problem: For this lockstep API, the local file exists but could not be
+              parsed: file "health.json": parsing as JSON: expected value at
+              line 1 column 1.  This tool can regenerate the file for you.
          fix: will rewrite lockstep file health.json from generated
+             --- a/<documents dir>/health.json
+             +++ b/<documents dir>/health.json
+             @@ -1,17 +1,86 @@
+             -<<<<<<< HEAD
+              {
+                "openapi": "3.0.3",
+                "info": {
+                  "title": "Health API",
+             +    "description": "A health API for testing schema evolution",
+                  "version": "1.0.0"
+             -  }
+             -}
+             -=======
+             -{
+             -  "openapi": "3.0.3",
+             -  "info": {
+             -    "title": "Health API Modified",
+             -    "version": "1.0.0"
+             +  },
+             +  "paths": {
+             +    "/health": {
+             +      "get": {
+             +        "summary": "Check if the service is healthy.",
+             +        "operationId": "health_check",
+             +        "responses": {
+             +          "200": {
+             +            "description": "successful operation",
+             +            "content": {
+             +              "application/json": {
+             +                "schema": {
+             +                  "$ref": "#/components/schemas/HealthStatus"
+             +                }
+             +              }
+             +            }
+             +          },
+             +          "4XX": {
+             +            "$ref": "#/components/responses/Error"
+             +          },
+             +          "5XX": {
+             +            "$ref": "#/components/responses/Error"
+             +          }
+             +        }
+             +      }
+             +    }
+             +  },
+             +  "components": {
+             +    "schemas": {
+             +      "Error": {
+             +        "description": "Error information from a response.",
+             +        "type": "object",
+             +        "properties": {
+             +          "error_code": {
+             +            "type": "string"
+             +          },
+             +          "message": {
+             +            "type": "string"
+             +          },
+             +          "request_id": {
+             +            "type": "string"
+             +          }
+             +        },
+             +        "required": [
+             +          "message",
+             +          "request_id"
+             +        ]
+             +      },
+             +      "HealthStatus": {
+             +        "description": "Health status response.",
+             +        "type": "object",
+             +        "properties": {
+             +          "status": {
+             +            "type": "string"
+             +          },
+             +          "timestamp": {
+             +            "type": "string",
+             +            "format": "date-time"
+             +          }
+             +        },
+             +        "required": [
+             +          "status",
+             +          "timestamp"
+             +        ]
+             +      }
+             +    },
+             +    "responses": {
+             +      "Error": {
+             +        "description": "Error",
+             +        "content": {
+             +          "application/json": {
+             +            "schema": {
+             +              "$ref": "#/components/schemas/Error"
+             +            }
+             +          }
+             +        }
+             +      }
+             +    }
+                }
+              }
+             ->>>>>>> branch
+
      -------
        Stale 1 document checked: 0 fresh, 1 stale, 0 failed, 0 other problems
              (run test-openapi-manager generate to update)

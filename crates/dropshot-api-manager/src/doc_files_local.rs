@@ -35,7 +35,6 @@ pub struct LocalApiUnparseable {
     /// The raw file contents that couldn't be parsed.
     pub contents: Vec<u8>,
     /// The reason the file couldn't be parsed.
-    #[expect(dead_code)] // will be removed by a future commit
     pub reason: UnparseableReason,
 }
 
