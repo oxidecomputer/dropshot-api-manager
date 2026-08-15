@@ -2033,6 +2033,179 @@ fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
     Ok(())
 }
 
+// A Git stub whose filename hash is stale is treated as unparseable at load
+// time, and treated as an extra document to be deleted.
+#[test]
+fn test_stale_hash_resolvable_git_stub_deleted() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
+
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    let v2_json_committed_path = env
+        .read_versioned_git_stub("versioned-health", "2.0.0")?
+        .path()
+        .to_owned();
+
+    let stale_resolvable =
+        "documents/versioned-health/versioned-health-2.0.0-ffffff.json.gitstub"
+            .to_owned();
+    env.create_file(
+        Utf8PathBuf::from(&stale_resolvable),
+        &format!("{v1_v2_commit}:{v2_json_committed_path}\n"),
+    )?;
+
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for a stale-hash Git stub"
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "2.0.0",
+            // The unparseable Git stub is treated as an extra document.
+            ProblemKind::BlessedVersionExtraLocalDoc {
+                basename: "versioned-health-2.0.0-ffffff.json.gitstub"
+                    .to_owned()
+            },
+        )],
+    );
+
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    assert!(
+        !env.file_exists(&stale_resolvable),
+        "stale-hash resolvable Git stub should have been deleted"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+// Test leftover Git stubs whose filename hash no longer matches the blessed
+// version.
+#[test]
+fn test_stale_hash_git_stubs_deleted() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+
+    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
+    env.generate_documents(&v1_v2_apis)?;
+    env.commit_documents()?;
+    let v1_v2_commit = env.get_current_commit_hash()?;
+
+    // v3 will trigger Git stub conversion.
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+
+    // Read the v2 Git stub that was just converted over.
+    let v2_json_committed_path = env
+        .read_versioned_git_stub("versioned-health", "2.0.0")?
+        .path()
+        .to_owned();
+
+    // Plant three stale Git stub files:
+    //
+    // 1. A blessed version with the wrong hash, pointing at a nonexistent
+    //    commit. This is treated as unparseable.
+    let stale_bogus =
+        "documents/versioned-health/versioned-health-2.0.0-eeeeee.json.gitstub"
+            .to_owned();
+    env.create_file(
+        Utf8PathBuf::from(&stale_bogus),
+        "0123456789012345678901234567890123456789:documents/nonexistent.json\n",
+    )?;
+
+    // 2. An unsupported version with real contents, though with a different
+    //    version (the document says 2.0.0 while the file name says 9.9.9).
+    let orphan_resolvable =
+        "documents/versioned-health/versioned-health-9.9.9-aaaaaa.json.gitstub"
+            .to_owned();
+    env.create_file(
+        Utf8PathBuf::from(&orphan_resolvable),
+        &format!("{v1_v2_commit}:{v2_json_committed_path}\n"),
+    )?;
+
+    // 3. An unsupported version with bogus contents, pointing at a nonexistent
+    //    commit.
+    let orphan_bogus =
+        "documents/versioned-health/versioned-health-9.9.9-bbbbbb.json.gitstub"
+            .to_owned();
+    env.create_file(
+        Utf8PathBuf::from(&orphan_bogus),
+        "0123456789012345678901234567890123456789:documents/nonexistent.json\n",
+    )?;
+
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(
+        result,
+        CheckResult::NeedsUpdate,
+        "check should report needs update for stale and orphaned Git stubs"
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "9.9.9",
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: "versioned-health-9.9.9-aaaaaa.json.gitstub"
+                        .to_owned()
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "9.9.9",
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: "versioned-health-9.9.9-bbbbbb.json.gitstub"
+                        .to_owned()
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: "versioned-health-2.0.0-eeeeee.json.gitstub"
+                        .to_owned()
+                },
+            ),
+        ],
+    );
+
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    assert!(
+        !env.file_exists(&stale_bogus),
+        "stale-hash bogus Git stub should have been deleted"
+    );
+    assert!(
+        !env.file_exists(&orphan_resolvable),
+        "orphaned resolvable Git stub should have been deleted"
+    );
+    assert!(
+        !env.file_exists(&orphan_bogus),
+        "orphaned bogus Git stub should have been deleted"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
 /// Test that a Git stub pointing to a nonexistent commit/path is
 /// regenerated. This covers the case where a gitstub is syntactically valid but
 /// semantically invalid (the commit or path no longer exists in git, e.g.,

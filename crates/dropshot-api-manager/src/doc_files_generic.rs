@@ -214,6 +214,11 @@ enum ApiDocFileParseError {
          different hash {actual:?}"
     )]
     HashMismatch { path: Utf8PathBuf, expected: String, actual: String },
+    #[error(
+        "Git stub {path:?}: resolved contents have hash {expected:?}, but \
+         file name has different hash {actual:?}"
+    )]
+    GitStubHashMismatch { path: Utf8PathBuf, expected: String, actual: String },
 }
 
 /// Describes an OpenAPI document
@@ -305,20 +310,30 @@ impl ApiDocFile {
                     ));
                 }
 
-                // Only check hash for JSON files. Git stubs use the Git
-                // stub itself as the source of truth.
-                if v.kind() == VersionedApiDocKind::Json {
-                    let expected_hash = hash_contents(&contents_buf);
-                    if expected_hash != v.hash() {
-                        return Err((
+                // Check hashes for both JSON and Git stub files.
+                //
+                // For Git stubs, contents_buf is the resolved document, and
+                // validating it here upholds the "valid implies hash matches
+                // contents" invariant that resolved.rs asserts on.
+                let expected_hash = hash_contents(&contents_buf);
+                if expected_hash != v.hash() {
+                    let error = match v.kind() {
+                        VersionedApiDocKind::Json => {
                             ApiDocFileParseError::HashMismatch {
                                 path: doc_file_name.path(),
                                 expected: expected_hash,
                                 actual: v.hash().to_owned(),
-                            },
-                            contents_buf,
-                        ));
-                    }
+                            }
+                        }
+                        VersionedApiDocKind::GitStub => {
+                            ApiDocFileParseError::GitStubHashMismatch {
+                                path: doc_file_name.path(),
+                                expected: expected_hash,
+                                actual: v.hash().to_owned(),
+                            }
+                        }
+                    };
+                    return Err((error, contents_buf));
                 }
             }
             ApiDocFileName::Lockstep(_) => {}
