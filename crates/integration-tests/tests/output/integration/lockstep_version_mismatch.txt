@@ -1,0 +1,27 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 1 OpenAPI document...
+       Stale health (lockstep v1.0.0): Health API
+     problem: For this lockstep API, the local file could not be loaded:
+              health.json (version in the file (9.9.9) differs from the declared
+              lockstep version (1.0.0)).  This tool can regenerate the file
+              for you.
+         fix: will rewrite lockstep file health.json from generated
+             --- a/<documents dir>/health.json
+             +++ b/<documents dir>/health.json
+             @@ -3,7 +3,7 @@
+                "info": {
+                  "title": "Health API",
+                  "description": "A health API for testing schema evolution",
+             -    "version": "9.9.9"
+             +    "version": "1.0.0"
+                },
+                "paths": {
+                  "/health": {
+
+     -------
+       Stale 1 document checked: 0 fresh, 1 stale, 0 failed, 0 other problems
+             (run test-openapi-manager generate to update)

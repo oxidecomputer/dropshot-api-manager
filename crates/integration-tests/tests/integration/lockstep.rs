@@ -184,3 +184,53 @@ fn test_unparseable_conflict_markers() -> Result<()> {
 
     Ok(())
 }
+
+// Test version mismatches in lockstep files.
+#[test]
+fn test_lockstep_version_mismatch() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = lockstep_health_apis()?;
+
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    let document_content = env.read_lockstep_document("health")?;
+    let modified_content = document_content.replacen(
+        "\"version\": \"1.0.0\"",
+        "\"version\": \"9.9.9\"",
+        1,
+    );
+    assert_ne!(
+        document_content, modified_content,
+        "replaced the version string in the document"
+    );
+    env.create_file("documents/health.json", &modified_content)?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "lockstep_version_mismatch.txt",
+        &rendered,
+    );
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new("health", "1.0.0", ProblemKind::LockstepStale)],
+    );
+
+    env.generate_documents(&apis)?;
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    let document_content = env.read_lockstep_document("health")?;
+    let parsed: OpenAPI = serde_json::from_str(&document_content)
+        .expect("regenerated document is valid JSON");
+    assert_eq!(parsed.info.version, "1.0.0");
+
+    Ok(())
+}

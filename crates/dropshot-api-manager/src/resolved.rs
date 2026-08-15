@@ -1385,8 +1385,9 @@ fn resolve_orphaned_local_docs<'a>(
     supported_versions_by_api: &BTreeMap<&ApiIdent, BTreeSet<&semver::Version>>,
     local: &'a LocalFiles,
 ) -> impl Iterator<Item = &'a LocalApiDocFile> {
-    // Orphaned documents are always versioned: lockstep APIs have exactly one
-    // file, so orphans can't exist for them.
+    // Orphaned documents are always versioned, because lockstep APIs are always
+    // keyed under the API's declared version. This is enforced by load_parsed
+    // in doc_files_generic.rs.
     local.iter().flat_map(|(ident, api_files)| {
         let set = supported_versions_by_api.get(ident);
         api_files
