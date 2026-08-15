@@ -1301,7 +1301,7 @@ fn file_validity(doc_file: &LocalApiDocFile) -> FileValidity {
 fn file_with_reason(doc_file: &LocalApiDocFile) -> String {
     match doc_file {
         LocalApiDocFile::Unparseable(unparseable) => format!(
-            "{} (could not be parsed: {})",
+            "{} ({})",
             unparseable.name,
             InlineErrorChain::new(&unparseable.reason),
         ),
@@ -1313,7 +1313,7 @@ fn orphaned_message(doc_file: &LocalApiDocFile) -> String {
     match doc_file {
         LocalApiDocFile::Unparseable(unparseable) => format!(
             "A local file was found that does not correspond to a supported \
-             version of this API and could not be parsed: {} ({}).  This can \
+             version of this API and could not be loaded: {} ({}).  This can \
              happen if a merge left conflict markers in a file for a version \
              that was renumbered or retired.  This tool can remove the \
              unused file for you.",
@@ -1352,8 +1352,9 @@ fn extra_local_doc_message(doc_file: &LocalApiDocFile) -> String {
 
 fn corrupted_local_message(local_file: &LocalApiUnparseable) -> String {
     format!(
-        "Local file for this blessed version is corrupted: {}.  This tool \
-         can regenerate the file from the blessed version for you.",
+        "Local file for this blessed version could not be loaded: {} ({}).  \
+         This tool can regenerate the file from the blessed version for you.",
+        local_file.name,
         InlineErrorChain::new(&local_file.reason),
     )
 }
@@ -1365,8 +1366,9 @@ fn lockstep_stale_message(
     match found {
         // A file that couldn't be parsed.
         LocalApiDocFile::Unparseable(unparseable) => format!(
-            "For this lockstep API, the local file exists but could not be \
-             parsed: {}.  This tool can regenerate the file for you.",
+            "For this lockstep API, the local file could not be loaded: \
+             {} ({}).  This tool can regenerate the file for you.",
+            unparseable.name,
             InlineErrorChain::new(&unparseable.reason),
         ),
         // A valid file that needs to be updated.

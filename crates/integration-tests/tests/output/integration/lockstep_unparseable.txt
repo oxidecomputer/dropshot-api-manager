@@ -1,14 +1,14 @@
      -------
   Generating OpenAPI documents from API definitions ... 
      Loading local OpenAPI documents from "<documents dir>" ... 
-     Warning skipping unparseable file: file "health.json": parsing as JSON: expected value at line 1 column 1
+     Warning skipping unparseable file "health.json": parsing as JSON: expected value at line 1 column 1
      Loading blessed OpenAPI documents from VCS revision "main" path "documents"
      -------
     Checking 1 OpenAPI document...
        Stale health (lockstep v1.0.0): Health API
-     problem: For this lockstep API, the local file exists but could not be
-              parsed: file "health.json": parsing as JSON: expected value at
-              line 1 column 1.  This tool can regenerate the file for you.
+     problem: For this lockstep API, the local file could not be loaded:
+              health.json (parsing as JSON: expected value at line 1 column 1).
+              This tool can regenerate the file for you.
          fix: will rewrite lockstep file health.json from generated
              --- a/<documents dir>/health.json
              +++ b/<documents dir>/health.json
