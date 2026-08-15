@@ -705,8 +705,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
     /// Record a file as unparseable without attempting to parse it.
     ///
     /// This is used for files that are known to be invalid before attempting
-    /// JSON parsing (e.g., Git stubs with invalid format). The `reason`
-    /// error is recorded as a warning.
+    /// JSON parsing (e.g., Git stubs with invalid format).
     ///
     /// For contexts where unparseable files are allowed (local files), this
     /// tracks the file so it can be cleaned up during generate. For other
@@ -736,12 +735,7 @@ impl<'a, T: ApiLoad + AsRawFiles> ApiDocFilesBuilder<'a, T> {
         match T::make_unparseable(file_name.clone(), contents, reason) {
             Some(unparseable) => {
                 // For local files, track the unparseable file so it can be
-                // cleaned up during generate. Record a warning so the user
-                // knows about it.
-                self.load_warning(anyhow!(
-                    "skipping unparseable file {path:?}: {rendered}"
-                ));
-
+                // cleaned up during generate.
                 let version = match file_name.version() {
                     Some(version) => version.clone(),
                     None => {
