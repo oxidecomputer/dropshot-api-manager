@@ -18,8 +18,9 @@
               3.0.0-05def5.json.  This is unusual, but it could happen if you're
               either retiring an older version of this API or if you created
               this version in this branch and later merged with upstream and had
-              to change your local version number.  In either case, this tool
-              can remove the unused file for you.
+              to change your local version number.  If this is unexpected, check
+              the list of supported versions in Rust for a possible mismerge.
+              In either case, this tool can remove the unused file for you.
          fix: will delete file: versioned-health/versioned-health-3.0.0-
               05def5.json
 

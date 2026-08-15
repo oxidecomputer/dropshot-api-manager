@@ -11,8 +11,9 @@ use camino::Utf8PathBuf;
 use dropshot_api_manager::{
     ManagedApi, ManagedApis,
     test_util::{
-        CheckResult, ProblemKind, ProblemSummary, check_apis_up_to_date,
-        check_apis_with_render, check_apis_with_summaries,
+        CheckResult, FileValidity, ProblemKind, ProblemSummary,
+        check_apis_up_to_date, check_apis_with_render,
+        check_apis_with_summaries,
     },
 };
 use integration_tests::*;
@@ -604,7 +605,8 @@ fn test_removing_api_version_fails_check() -> Result<()> {
                     basename: v3_orphan_path
                         .file_name()
                         .expect("v3_orphan_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
             ProblemSummary::for_api(
@@ -724,7 +726,8 @@ fn test_retiring_latest_blessed_version() -> Result<()> {
                     basename: v3_orphan_path
                         .file_name()
                         .expect("v3_orphan_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
             ProblemSummary::for_api(
@@ -884,7 +887,8 @@ fn test_retiring_older_blessed_version() -> Result<()> {
                 basename: v2_orphan_path
                     .file_name()
                     .expect("v2_orphan_path has a file name")
-                    .to_owned()
+                    .to_owned(),
+                validity: FileValidity::Valid,
             },
         )],
     );
@@ -1160,7 +1164,8 @@ fn test_blessed_version_extra_local_doc() -> Result<()> {
                 basename: env2_path
                     .file_name()
                     .expect("env2_path has a file name")
-                    .to_owned()
+                    .to_owned(),
+                validity: FileValidity::Valid,
             },
         )],
     );
@@ -1806,7 +1811,8 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],
@@ -1850,7 +1856,8 @@ fn test_merge_blessed_version_missing_local() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],
@@ -1900,7 +1907,8 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],
@@ -1949,7 +1957,8 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
                     basename: v3_extra_path
                         .file_name()
                         .expect("v3_extra_path has a file name")
-                        .to_owned()
+                        .to_owned(),
+                    validity: FileValidity::Valid,
                 },
             ),
         ],

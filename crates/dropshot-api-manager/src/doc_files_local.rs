@@ -87,11 +87,6 @@ impl LocalApiDocFile {
             Self::Unparseable(_) => None,
         }
     }
-
-    /// Returns true if this file is unparseable.
-    pub fn is_unparseable(&self) -> bool {
-        matches!(self, Self::Unparseable(_))
-    }
 }
 
 impl DocFileInfo for LocalApiDocFile {
