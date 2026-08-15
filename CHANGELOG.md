@@ -5,14 +5,14 @@
 
 ### Fixed
 
-- Previously, a `.json.gitstub` file whose filename hash didn't match its resolved contents (e.g. leftover from a mismerge) crashed `generate` and `check`. These files are now detected and cleaned up like other stale files.
+- Previously, a `.json.gitstub` file whose filename hash didn't match its resolved contents (e.g., leftover from a mismerge) caused the API manager to crash. These files are now detected and cleaned up like other stale files.
 - Previously, a valid lockstep document whose `info.version` didn't match the version declared in Rust (e.g. from bumping the version in Rust) crashed the API manager. The document is now reported as stale, and `generate` regenerates it.
 
 ### Changed
 
 - Consistently use "OpenAPI document" everywhere instead of "OpenAPI spec". A number of type names have been changed to use this terminology.
 - `VersionedApiDocFileName::path` now always returns paths with a forward slash, including on Windows, matching the `Display` implementation.
-- Unparseable local files (e.g. files with merge conflict markers) are now reported inline, within the problem whose fix handles them. The message also includes more information about why the file couldn't be parsed. Previously, the reason appeared only in a separate load-time warning (this warning has been removed).
+- Unparseable local files (e.g., files with merge conflict markers) are now reported inline, within the problem whose fix handles them. The message also includes more information about why the file couldn't be parsed. Previously, the reason appeared only in a separate load-time warning.
 - A lockstep document that exists but can't be parsed is now reported as stale rather than missing.
 
 ## [0.7.2] - 2026-05-20
