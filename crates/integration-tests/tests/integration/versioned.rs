@@ -617,6 +617,85 @@ fn test_removing_api_version_fails_check() -> Result<()> {
     Ok(())
 }
 
+/// Test that removing an API version whose document is unparseable fails
+/// the check.
+#[test]
+fn test_removing_api_version_unparseable_doc_fails_check() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_apis()?;
+
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    // Conflict markers make the v3 document unparseable.
+    let v3_orphan_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .expect("v3 document exists");
+    let conflict_content = r#"<<<<<<< HEAD
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Versioned Health API",
+    "version": "3.0.0"
+  }
+}
+=======
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Versioned Health API Modified",
+    "version": "3.0.0"
+  }
+}
+>>>>>>> branch
+"#;
+    env.create_file(&v3_orphan_path, conflict_content)?;
+
+    // With the reduced set of API versions, v3 is both orphaned and
+    // unparseable.
+    let reduced_apis = versioned_health_reduced_apis()?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "orphaned_unparseable_doc.txt",
+        &rendered,
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: v3_orphan_path
+                        .file_name()
+                        .expect("v3_orphan_path has a file name")
+                        .to_owned()
+                },
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
+
+    // The fix deletes the unparseable orphaned document.
+    env.generate_documents(&reduced_apis)?;
+    assert!(
+        !env.file_exists(&v3_orphan_path),
+        "unparseable orphaned document should have been deleted"
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &reduced_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
 /// Test that adding new API versions passes the check.
 #[test]
 fn test_adding_new_api_version_passes_check() -> Result<()> {
