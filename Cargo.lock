@@ -500,7 +500,7 @@ dependencies = [
  "rustls-pemfile",
  "schemars",
  "scopeguard",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -545,7 +545,7 @@ dependencies = [
  "owo-colors",
  "paste",
  "rayon",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde_json",
  "sha2",
  "similar",
@@ -561,7 +561,7 @@ dependencies = [
  "anyhow",
  "camino",
  "paste",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde_json",
 ]
 
@@ -574,7 +574,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
  "serde_tokenstream",
  "syn",
@@ -593,7 +593,7 @@ dependencies = [
  "dropshot",
  "dropshot-api-manager-types",
  "schemars",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
 ]
 
@@ -1282,7 +1282,7 @@ dependencies = [
  "http",
  "openapiv3",
  "schemars",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
  "serde_json",
 ]
@@ -1957,9 +1957,9 @@ checksum = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
 
 [[package]]
 name = "semver"
-version = "1.0.27"
+version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 dependencies = [
  "serde",
  "serde_core",
@@ -2614,7 +2614,7 @@ dependencies = [
  "quote",
  "regress",
  "schemars",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "syn",
@@ -2631,7 +2631,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "schemars",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "serde_tokenstream",
@@ -2887,7 +2887,7 @@ dependencies = [
  "bitflags",
  "hashbrown 0.15.5",
  "indexmap",
- "semver 1.0.27",
+ "semver 1.0.28",
 ]
 
 [[package]]
@@ -3282,7 +3282,7 @@ dependencies = [
  "id-arena",
  "indexmap",
  "log",
- "semver 1.0.27",
+ "semver 1.0.28",
  "serde",
  "serde_derive",
  "serde_json",
