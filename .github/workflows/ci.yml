@@ -21,10 +21,10 @@ jobs:
           # We need to fetch the entire history so clippy can run the
           # e2e-example/client build script.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: rustfmt, clippy
-      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@6b65014c06e2adee0cc956076c200ca3432af678 # just
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           key: partition-${{ matrix.partition }}
@@ -54,14 +54,14 @@ jobs:
           # We need to fetch the entire history so the tests can run merge-base
           # operations.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: ${{ matrix.rust-version }}
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           key: partition-${{ matrix.partition }}
-      - uses: taiki-e/install-action@nextest
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@b1351b86cd80d01fa50a500e2c3e435ce4e1dd60 # nextest
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
           tool: jj-cli
       - name: Build
