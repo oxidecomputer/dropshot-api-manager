@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.9.0] - 2026-10-30
+
 ### Added
 
 - The `api_versions!` macro now generates an `oldest_version` function, which returns the oldest supported version (the last version in the list). Servers that have retired older API versions can use this to reject requests for versions they no longer support.
@@ -160,6 +162,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.9.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.9.0
 [0.8.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.8.0
 [0.7.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.2
 [0.7.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.1
