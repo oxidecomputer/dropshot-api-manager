@@ -352,26 +352,16 @@ macro_rules! api_versions_picky {
             }
 
             pub const fn oldest_version() -> $crate::semver::Version {
-                $crate::api_versions_last!(
-                    [<VERSION_ $latest_name>] $(, [<VERSION_ $name>])*
-                )
+                // The oldest version is the last one in the list.
+                // `macro_rules!` cannot directly select the last element of a
+                // repetition, so we build an array of all the versions and use
+                // a slice pattern to pick out the last one.
+                let [.., (major, minor, patch)] = [
+                    ($latest_major, $latest_minor, $latest_patch)
+                    $(, ($major, $minor, $patch))*
+                ];
+                $crate::semver::Version::new(major, minor, patch)
             }
         }
-    };
-}
-
-/// Helper macro that expands to the last identifier in a comma-separated list
-///
-/// `api_versions_picky!` uses this to find the oldest version, which is the
-/// last one in the list.  `macro_rules!` cannot directly select the last
-/// element of a repetition, so this macro walks the list recursively.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! api_versions_last {
-    ($last:ident) => {
-        $last
-    };
-    ($first:ident, $($rest:ident),+) => {
-        $crate::api_versions_last!($($rest),+)
     };
 }
