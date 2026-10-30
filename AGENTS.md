@@ -166,7 +166,7 @@ api_versions!([
 ]);
 ```
 
-This defines constants `VERSION_WITH_METRICS`, `VERSION_WITH_DETAILED_STATUS`, `VERSION_INITIAL` and functions `supported_versions()`, `latest_version()`.
+This defines constants `VERSION_WITH_METRICS`, `VERSION_WITH_DETAILED_STATUS`, `VERSION_INITIAL` and functions `supported_versions()`, `latest_version()`, `oldest_version()`.
 
 #### Resolution and problems
 

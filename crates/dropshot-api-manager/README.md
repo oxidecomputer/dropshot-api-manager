@@ -150,9 +150,9 @@ api_versions!([
 2. Add the crate to the list of APIs managed by the OpenAPI manager. For versioned APIs, the `api_versions` macro defines a `supported_versions()` function, which you'll need to use.
 
 > [!NOTE]
-> The `api_versions!` macro also generates a `latest_version` function which returns the latest version (the first version on the list).
+> The `api_versions!` macro also generates a `latest_version` function which returns the latest version (the first version on the list), and an `oldest_version` function which returns the oldest version (the last version on the list).
 >
-> When creating the server, you must configure a [`version_policy`](https://docs.rs/dropshot/latest/dropshot/struct.ServerBuilder.html#method.version_policy) to indicate that the API is versioned. If you use the [`ClientSpecifiesVersionInHeader`](https://docs.rs/dropshot/latest/dropshot/struct.ClientSpecifiesVersionInHeader.html) policy, set the `max_version` to the output of `latest_version()`.
+> When creating the server, you must configure a [`version_policy`](https://docs.rs/dropshot/latest/dropshot/struct.ServerBuilder.html#method.version_policy) to indicate that the API is versioned. If you use the [`ClientSpecifiesVersionInHeader`](https://docs.rs/dropshot/latest/dropshot/struct.ClientSpecifiesVersionInHeader.html) policy, set the `max_version` to the output of `latest_version()`. If your server has retired older versions and your version of Dropshot supports a minimum version, set it to the output of `oldest_version()` so that requests for retired versions are rejected.
 
 To ensure everything works well, run `cargo openapi generate`. Your OpenAPI document should be generated on disk and listed in the output.
 
