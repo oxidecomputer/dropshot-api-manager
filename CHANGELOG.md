@@ -7,6 +7,10 @@
 
 - The `api_versions!` macro now generates an `oldest_version` function, which returns the oldest supported version (the last version in the list). Servers that have retired older API versions can use this to reject requests for versions they no longer support.
 
+### Changed
+
+- Updated Dropshot to 0.18.
+
 ## [0.8.0] - 2026-08-15
 
 ### Fixed
