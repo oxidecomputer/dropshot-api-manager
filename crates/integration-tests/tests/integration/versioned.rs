@@ -20,6 +20,28 @@ use integration_tests::*;
 use openapiv3::OpenAPI;
 use semver::Version;
 
+/// Test that `oldest_version` returns the last version in the list.
+#[test]
+fn test_versioned_oldest_version() {
+    // The oldest version is not version 1.
+    assert_eq!(versioned_health_no_v1::latest_version(), Version::new(3, 0, 0));
+    assert_eq!(versioned_health_no_v1::oldest_version(), Version::new(2, 0, 0));
+
+    // With only one version, the oldest version is also the latest version.
+    assert_eq!(
+        versioned_health_v1_only::latest_version(),
+        Version::new(1, 0, 0)
+    );
+    assert_eq!(
+        versioned_health_v1_only::oldest_version(),
+        Version::new(1, 0, 0)
+    );
+
+    // The function can be used in a const context, like `latest_version`.
+    const OLDEST: Version = versioned_health::oldest_version();
+    assert_eq!(OLDEST, Version::new(1, 0, 0));
+}
+
 /// Test basic versioned API document generation.
 #[test]
 fn test_versioned_generate_basic() -> Result<()> {
@@ -40,8 +62,9 @@ fn test_pure_jj_versioned_generate_basic() -> Result<()> {
 fn versioned_generate_basic_impl(env: &TestEnvironment) -> Result<()> {
     let apis = versioned_health_apis()?;
 
-    // Check that latest_version exists.
-    assert_eq!(versioned_health::latest_version(), Version::new(3, 0, 0),);
+    // Check that latest_version and oldest_version exist.
+    assert_eq!(versioned_health::latest_version(), Version::new(3, 0, 0));
+    assert_eq!(versioned_health::oldest_version(), Version::new(1, 0, 0));
 
     // Initially, no documents should exist.
     assert!(

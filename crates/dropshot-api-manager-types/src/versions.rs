@@ -1,4 +1,4 @@
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Types used by trait-based API definitions to define the versions that they
 //! support.
@@ -245,7 +245,7 @@ impl<'a> DoubleEndedIterator for IterVersionsSemversInner<'a> {
 /// pub const VERSION_INITIAL: semver::Version = semver::Version::new(1, 0, 0);
 /// ```
 ///
-/// It also defines two functions:
+/// It also defines three functions:
 ///
 /// * `pub fn supported_versions() -> SupportedVersions` that,
 ///   as the name suggests, returns a [`SupportedVersions`] that describes these
@@ -254,6 +254,11 @@ impl<'a> DoubleEndedIterator for IterVersionsSemversInner<'a> {
 /// * `pub fn latest_version() -> semver::Version` that returns the latest
 ///   supported API version. The latest supported version is the first version
 ///   in the list (hence versions must be in descending order).
+///
+/// * `pub fn oldest_version() -> semver::Version` that returns the oldest
+///   supported API version. The oldest supported version is the last version
+///   in the list. A server that has retired older API versions can use this
+///   to reject requests for versions that it no longer supports.
 // Design constraints:
 // - For each new API version, we need a developer-chosen semver and label that
 //   can be used to construct an identifier.
@@ -345,6 +350,28 @@ macro_rules! api_versions_picky {
             pub const fn latest_version() -> $crate::semver::Version {
                 [<VERSION_ $latest_name>]
             }
+
+            pub const fn oldest_version() -> $crate::semver::Version {
+                $crate::api_versions_last!(
+                    [<VERSION_ $latest_name>] $(, [<VERSION_ $name>])*
+                )
+            }
         }
+    };
+}
+
+/// Helper macro that expands to the last identifier in a comma-separated list
+///
+/// `api_versions_picky!` uses this to find the oldest version, which is the
+/// last one in the list.  `macro_rules!` cannot directly select the last
+/// element of a repetition, so this macro walks the list recursively.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! api_versions_last {
+    ($last:ident) => {
+        $last
+    };
+    ($first:ident, $($rest:ident),+) => {
+        $crate::api_versions_last!($($rest),+)
     };
 }
