@@ -1800,7 +1800,6 @@ fn record_validation_call(
 fn validate(_doc: &openapiv3::OpenAPI, cx: ValidationContext<'_>) {
     // Only used with versioned APIs, so version is always present.
     let version = cx
-        .file_name()
         .version()
         .cloned()
         .expect("version should be present for versioned APIs");
@@ -1814,7 +1813,6 @@ fn validate_with_extra_file(
 ) {
     // Only used with versioned APIs, so version is always present.
     let version = cx
-        .file_name()
         .version()
         .cloned()
         .expect("version should be present for versioned APIs");
