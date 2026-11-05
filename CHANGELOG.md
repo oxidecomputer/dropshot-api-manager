@@ -3,6 +3,10 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+### Fixed
+
+- Previously, a locally-added API version whose document file name didn't match its contents was reported as up to date. (This can happen when Git rename detection during a rebase moves a regenerated document's contents under its old file name, leaving the `latest` symlink pointing at a file that doesn't exist.) Such files are now reported as stale, and `generate` replaces them with correctly named documents. Similarly, Git stubs for locally-added versions are reported and converted to JSON.
+
 ## [0.9.0] - 2026-10-30
 
 ### Added
