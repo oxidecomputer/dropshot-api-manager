@@ -24,7 +24,7 @@ use crate::{
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use dropshot_api_manager_types::{
-    ApiDocFileName, ApiIdent, VersionedApiDocFileName,
+    ApiDocFileName, ApiIdent, VersionedApiDocFileName, VersionedApiDocKind,
 };
 use git_stub::{GitCommitHash, GitStub};
 use rayon::prelude::*;
@@ -1820,17 +1820,17 @@ fn resolve_api_version_blessed<'a>(
     // Now, there should be at least one local document that exactly matches
     // the blessed one.
     //
-    // We partition local files into three categories:
-    // 1. Valid files with matching hash/contents -> matching
-    // 2. Unparseable files with matching hash -> corrupted (need regeneration)
-    // 3. Everything else -> non-matching
+    // A local copy of this version (same hash as the blessed document) can
+    // only be at one of two paths: the JSON file or the Git stub. Each slot is
+    // empty, holds a valid copy, or holds a corrupted (unparseable) one.
+    // Everything else is non-matching.
     let blessed_hash = blessed
         .doc_file_name()
         .hash()
         .expect("this should be a versioned file so it should have a hash");
 
-    let mut matching = Vec::new();
-    let mut corrupted = Vec::new();
+    let mut json_copy: Option<&'a LocalApiDocFile> = None;
+    let mut git_stub_copy: Option<&'a LocalApiDocFile> = None;
     let mut non_matching = Vec::new();
 
     for local_file in local {
@@ -1841,17 +1841,12 @@ fn resolve_api_version_blessed<'a>(
         let hashes_match = local_hash == blessed_hash;
 
         match local_file {
-            LocalApiDocFile::Unparseable(unparseable) => {
+            LocalApiDocFile::Unparseable(_) => {
                 // Unparseable files can't have their contents compared, so we
-                // rely solely on the hash. If the hash matches, the file is
-                // corrupted and needs regeneration.
-                if hashes_match {
-                    corrupted.push(unparseable);
-                } else {
-                    non_matching.push(local_file);
-                }
+                // rely solely on the hash. If the hash matches, the file is a
+                // corrupted copy of this version.
             }
-            LocalApiDocFile::Valid(valid) => {
+            LocalApiDocFile::Valid(_) => {
                 // For valid files, verify that hash matching implies content
                 // matching (and vice versa).
                 let contents_match =
@@ -1860,13 +1855,26 @@ fn resolve_api_version_blessed<'a>(
                     hashes_match, contents_match,
                     "hash and contents should match for valid files"
                 );
-
-                if hashes_match {
-                    matching.push(valid);
-                } else {
-                    non_matching.push(local_file);
-                }
             }
+        }
+
+        if hashes_match {
+            let kind = local_file
+                .doc_file_name()
+                .versioned_kind()
+                .expect("blessed local files should be versioned");
+            let slot = match kind {
+                VersionedApiDocKind::Json => &mut json_copy,
+                VersionedApiDocKind::GitStub => &mut git_stub_copy,
+            };
+            let previous = slot.replace(local_file);
+            assert!(
+                previous.is_none(),
+                "only one local file should be named {}",
+                local_file.doc_file_name(),
+            );
+        } else {
+            non_matching.push(local_file);
         }
     }
 
@@ -1901,162 +1909,105 @@ fn resolve_api_version_blessed<'a>(
         VersionStorageFormat::Known(BlessedStorage::Json)
     };
 
-    if matching.is_empty() && corrupted.is_empty() {
-        // No valid or corrupted local files match the blessed version.
-        match &storage_format {
-            VersionStorageFormat::Known(storage) => {
-                problems.push(VersionProblem::BlessedVersionMissingLocal {
-                    blessed,
-                    storage: storage.clone(),
-                });
-            }
-            VersionStorageFormat::Unknown => {
-                // Already pushed an unfixable
-                // GitStubFirstCommitUnknown problem. Skip
-                // BlessedVersionMissingLocal: we can't determine
-                // the correct storage format to restore as.
-            }
+    let local_state = match (json_copy, git_stub_copy) {
+        (
+            Some(LocalApiDocFile::Valid(json)),
+            Some(LocalApiDocFile::Valid(git_stub)),
+        ) => BlessedLocalState::Both { json, git_stub },
+        (
+            Some(LocalApiDocFile::Valid(usable)),
+            Some(LocalApiDocFile::Unparseable(leftover)),
+        )
+        | (
+            Some(LocalApiDocFile::Unparseable(leftover)),
+            Some(LocalApiDocFile::Valid(usable)),
+        ) => BlessedLocalState::One { usable, leftover: Some(leftover) },
+        (Some(LocalApiDocFile::Valid(usable)), None)
+        | (None, Some(LocalApiDocFile::Valid(usable))) => {
+            BlessedLocalState::One { usable, leftover: None }
         }
-    }
-
-    // Report corrupted local files that need regeneration from blessed
-    // versions.
-    for local_file in &corrupted {
-        let problem = match &storage_format {
-            VersionStorageFormat::Known(storage) => {
-                VersionProblem::BlessedVersionCorruptedLocal {
-                    local_file,
-                    blessed,
-                    storage: storage.clone(),
-                }
-            }
-            // BUG: the storage format is unknown, so regenerating as JSON is a
-            // guess. (A missing file in the same state isn't reported at all.)
-            VersionStorageFormat::Unknown => {
-                VersionProblem::BlessedVersionCorruptedLocal {
-                    local_file,
-                    blessed,
-                    storage: BlessedStorage::Json,
-                }
-            }
-        };
-        problems.push(problem);
-    }
-
-    // Check whether a local Git stub has a stale commit hash
-    // compared to what the blessed source expects. This is shared
-    // between the single-match and duplicate-files branches below.
-    let check_git_stub_staleness =
-        |local_file: &'a LocalApiValid,
-         expected_git_stub: &GitStub,
-         problems: &mut Vec<VersionProblem<'a>>| {
-            // Non-gitstub files (JSON) don't have a commit to check.
-            let Some(local_commit) = &local_file.git_stub_commit else {
-                return;
-            };
-            if *local_commit != expected_git_stub.commit() {
-                problems.push(VersionProblem::GitStubCommitStale {
-                    local_file,
-                    git_stub: expected_git_stub.clone(),
-                });
-            }
-        };
-
-    match matching.as_slice() {
-        [] => {
-            // Only corrupted files match (or none at all), and they're
-            // handled above.
+        (
+            Some(LocalApiDocFile::Unparseable(json)),
+            Some(LocalApiDocFile::Unparseable(git_stub)),
+        ) => BlessedLocalState::Absent { corrupted: vec![json, git_stub] },
+        (Some(LocalApiDocFile::Unparseable(corrupted)), None)
+        | (None, Some(LocalApiDocFile::Unparseable(corrupted))) => {
+            BlessedLocalState::Absent { corrupted: vec![corrupted] }
         }
-        [local_file] => {
-            let local_file = *local_file;
-            match (&storage_format, local_file.doc_file_name().is_git_stub()) {
-                (
-                    VersionStorageFormat::Known(BlessedStorage::GitStub(
-                        git_stub,
-                    )),
-                    false,
-                ) => {
-                    // Should be Git stub but is JSON: convert to Git stub.
-                    problems.push(
-                        VersionProblem::BlessedVersionShouldBeGitStub {
-                            local_file,
-                            git_stub: git_stub.clone(),
-                        },
-                    );
-                }
-                (VersionStorageFormat::Known(BlessedStorage::Json), true) => {
-                    // Should be JSON but is Git stub: convert to JSON.
-                    problems.push(VersionProblem::GitStubShouldBeJson {
-                        local_file,
+        (None, None) => BlessedLocalState::Absent { corrupted: Vec::new() },
+    };
+
+    match local_state {
+        BlessedLocalState::Absent { corrupted } => {
+            match (&storage_format, corrupted.as_slice()) {
+                (VersionStorageFormat::Known(storage), []) => {
+                    problems.push(VersionProblem::BlessedVersionMissingLocal {
                         blessed,
+                        storage: storage.clone(),
                     });
                 }
-                (
-                    VersionStorageFormat::Known(BlessedStorage::GitStub(
-                        expected_git_stub,
-                    )),
-                    true,
-                ) => {
-                    // Format is correct (Git stub). Check if the commit
-                    // hash inside the local gitstub file still matches.
-                    check_git_stub_staleness(
-                        local_file,
-                        expected_git_stub,
-                        &mut problems,
-                    );
+                (VersionStorageFormat::Known(storage), corrupted) => {
+                    for &local_file in corrupted {
+                        problems.push(
+                            VersionProblem::BlessedVersionCorruptedLocal {
+                                local_file,
+                                blessed,
+                                storage: storage.clone(),
+                            },
+                        );
+                    }
                 }
-                (VersionStorageFormat::Known(BlessedStorage::Json), false) => {
-                    // Format matches preference: no conversion needed.
+                (VersionStorageFormat::Unknown, []) => {
+                    // Already pushed an unfixable
+                    // GitStubFirstCommitUnknown problem. Skip
+                    // BlessedVersionMissingLocal: we can't determine
+                    // the correct storage format to restore as.
+                    // BUG: the missing file itself isn't reported.
                 }
-                (VersionStorageFormat::Unknown, _) => {
-                    // Error determining format: don't suggest any changes.
+                (VersionStorageFormat::Unknown, corrupted) => {
+                    // BUG: the storage format is unknown, so regenerating as
+                    // JSON is a guess.
+                    for &local_file in corrupted {
+                        problems.push(
+                            VersionProblem::BlessedVersionCorruptedLocal {
+                                local_file,
+                                blessed,
+                                storage: BlessedStorage::Json,
+                            },
+                        );
+                    }
                 }
             }
         }
-        many => {
-            // We might have both api.json and api.json.gitstub for the same
-            // version. Mark the redundant file for deletion, and check the
-            // non-redundant file for staleness.
-            for &local_file in many {
-                match (
-                    &storage_format,
-                    local_file.doc_file_name().is_git_stub(),
-                ) {
-                    // Should be Git stub but have JSON, or should be JSON but
-                    // have Git stub: this file is redundant.
-                    (
-                        VersionStorageFormat::Known(BlessedStorage::GitStub(_)),
-                        false,
-                    )
-                    | (
-                        VersionStorageFormat::Known(BlessedStorage::Json),
-                        true,
-                    ) => {
-                        problems.push(VersionProblem::DuplicateLocalFile {
-                            local_file,
-                        });
-                    }
-                    // Format matches and is a Git stub: check for staleness.
-                    (
-                        VersionStorageFormat::Known(BlessedStorage::GitStub(
-                            expected_git_stub,
-                        )),
-                        true,
-                    ) => {
-                        check_git_stub_staleness(
-                            local_file,
-                            expected_git_stub,
-                            &mut problems,
-                        );
-                    }
-                    // Format matches and is JSON, or error: nothing to do.
-                    (
-                        VersionStorageFormat::Known(BlessedStorage::Json),
-                        false,
-                    )
-                    | (VersionStorageFormat::Unknown, _) => {}
+        BlessedLocalState::One { usable, leftover } => {
+            // BUG: we offer to regenerate a corrupted leftover even though a
+            // usable copy exists, and as JSON if the storage format is unknown.
+            // We should offer to delete it instead.
+            problems.extend(leftover.map(|local_file| {
+                let storage = match &storage_format {
+                    VersionStorageFormat::Known(storage) => storage.clone(),
+                    VersionStorageFormat::Unknown => BlessedStorage::Json,
+                };
+                VersionProblem::BlessedVersionCorruptedLocal {
+                    local_file,
+                    blessed,
+                    storage,
                 }
-            }
+            }));
+            single_copy_storage_problems(
+                usable,
+                blessed,
+                &storage_format,
+                &mut problems,
+            );
+        }
+        BlessedLocalState::Both { json, git_stub } => {
+            both_copies_storage_problems(
+                json,
+                git_stub,
+                &storage_format,
+                &mut problems,
+            );
         }
     }
 
@@ -2066,6 +2017,106 @@ fn resolve_api_version_blessed<'a>(
     }));
 
     Resolution::new_blessed(problems)
+}
+
+/// Checks whether a local Git stub has a stale commit hash compared to what
+/// the blessed source expects.
+fn check_git_stub_staleness<'a>(
+    local_file: &'a LocalApiValid,
+    expected_git_stub: &GitStub,
+    problems: &mut Vec<VersionProblem<'a>>,
+) {
+    // Non-gitstub files (JSON) don't have a commit to check.
+    if let Some(local_commit) = &local_file.git_stub_commit
+        && *local_commit != expected_git_stub.commit()
+    {
+        problems.push(VersionProblem::GitStubCommitStale {
+            local_file,
+            git_stub: expected_git_stub.clone(),
+        });
+    }
+}
+
+/// Checks for storage problems with a single usable copy of a blessed version.
+fn single_copy_storage_problems<'a>(
+    usable: &'a LocalApiValid,
+    blessed: &'a BlessedApiDocFile,
+    storage_format: &VersionStorageFormat,
+    problems: &mut Vec<VersionProblem<'a>>,
+) {
+    let kind = usable
+        .doc_file_name()
+        .versioned_kind()
+        .expect("blessed local files should be versioned");
+    match (storage_format, kind) {
+        (
+            VersionStorageFormat::Known(BlessedStorage::GitStub(git_stub)),
+            VersionedApiDocKind::Json,
+        ) => {
+            // Should be Git stub but is JSON: convert to Git stub.
+            problems.push(VersionProblem::BlessedVersionShouldBeGitStub {
+                local_file: usable,
+                git_stub: git_stub.clone(),
+            });
+        }
+        (
+            VersionStorageFormat::Known(BlessedStorage::Json),
+            VersionedApiDocKind::GitStub,
+        ) => {
+            // Should be JSON but is Git stub: convert to JSON.
+            problems.push(VersionProblem::GitStubShouldBeJson {
+                local_file: usable,
+                blessed,
+            });
+        }
+        (
+            VersionStorageFormat::Known(BlessedStorage::GitStub(
+                expected_git_stub,
+            )),
+            VersionedApiDocKind::GitStub,
+        ) => {
+            // Format is correct (Git stub). Check if the commit
+            // hash inside the local gitstub file still matches.
+            check_git_stub_staleness(usable, expected_git_stub, problems);
+        }
+        (
+            VersionStorageFormat::Known(BlessedStorage::Json),
+            VersionedApiDocKind::Json,
+        )
+        | (VersionStorageFormat::Unknown, _) => {
+            // Format matches preference, or it couldn't be determined: no
+            // conversion.
+        }
+    }
+}
+
+/// Checks for storage problems when both a valid JSON file and a valid Git stub
+/// are present for the same blessed version.
+fn both_copies_storage_problems<'a>(
+    json: &'a LocalApiValid,
+    git_stub: &'a LocalApiValid,
+    storage_format: &VersionStorageFormat,
+    problems: &mut Vec<VersionProblem<'a>>,
+) {
+    match storage_format {
+        VersionStorageFormat::Known(BlessedStorage::GitStub(
+            expected_git_stub,
+        )) => {
+            // The JSON file is redundant; check the Git stub for staleness.
+            problems
+                .push(VersionProblem::DuplicateLocalFile { local_file: json });
+            check_git_stub_staleness(git_stub, expected_git_stub, problems);
+        }
+        VersionStorageFormat::Known(BlessedStorage::Json) => {
+            // The Git stub is redundant.
+            problems.push(VersionProblem::DuplicateLocalFile {
+                local_file: git_stub,
+            });
+        }
+        VersionStorageFormat::Unknown => {
+            // Error determining format: don't suggest any changes.
+        }
+    }
 }
 
 fn resolve_api_version_local<'a>(
@@ -2185,6 +2236,16 @@ enum LatestFirstCommit {
     NotBlessed,
     Blessed(GitCommitHash),
     BlessedError,
+}
+
+/// Data stored on disk for a blessed version.
+enum BlessedLocalState<'a> {
+    /// No usable copy; empty `corrupted` means nothing on disk.
+    Absent { corrupted: Vec<&'a LocalApiUnparseable> },
+    /// One usable copy; `leftover` is a corrupted file at the other path.
+    One { usable: &'a LocalApiValid, leftover: Option<&'a LocalApiUnparseable> },
+    /// Both JSON and Git stub are present.
+    Both { json: &'a LocalApiValid, git_stub: &'a LocalApiValid },
 }
 
 /// Describes what storage format a blessed version should use.
