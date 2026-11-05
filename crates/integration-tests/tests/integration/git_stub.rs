@@ -312,6 +312,33 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
     Ok(())
 }
 
+/// Sets up the following scenario:
+///
+/// ```text
+/// main: [v1,v2] = first_commit ── [intermediate] ── [v1,v2,v3] = HEAD
+///                                                    (v1,v2 become Git stubs)
+/// ```
+struct V1GitStub {
+    /// The commit that added v1 and v2 (their Git stubs will point at it).
+    first_commit: String,
+    git_stub_path: Utf8PathBuf,
+}
+
+fn v1_git_stub_setup(env: &TestEnvironment) -> Result<V1GitStub> {
+    env.generate_documents(&versioned_health_reduced_git_stub_apis()?)?;
+    env.commit_documents()?;
+    let first_commit = env.get_current_commit_hash()?;
+    // Make an unrelated intermediate commit so we ensure that the Git stubs
+    // point at the commit which introduced v1/v2, not this unrelated one.
+    env.make_unrelated_commit("intermediate")?;
+    env.generate_documents(&versioned_health_git_stub_apis()?)?;
+    env.commit_documents()?;
+    let git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
+        .context("v1 should be a Git stub once v3 is added")?;
+    Ok(V1GitStub { first_commit, git_stub_path })
+}
+
 /// Test that Git stubs work correctly after reloading from a different state.
 ///
 /// This also tests that versions introduced in different commits have Git stubs
@@ -320,16 +347,7 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
 fn test_git_stub_check_after_conversion() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash()?;
-
-    env.make_unrelated_commit("between v2 and v3")?;
-
-    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub { first_commit: v1_v2_commit, .. } = v1_git_stub_setup(&env)?;
     let v3_commit = env.get_current_commit_hash()?;
     assert_ne!(v1_v2_commit, v3_commit, "v1/v2 and v3 in different commits");
 
@@ -1761,25 +1779,13 @@ fn rename_conflict_blessed_verify(
 fn test_unparseable_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash()?;
-
-    env.make_unrelated_commit("intermediate")?;
-
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub {
+        first_commit: v1_v2_commit,
+        git_stub_path: v1_git_stub_path,
+        ..
+    } = v1_git_stub_setup(&env)?;
 
-    assert!(
-        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
-        "v1 should be a Git stub"
-    );
-
-    let v1_git_stub_path = env
-        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
-        .expect("v1 Git stub should exist");
     let corrupted_content = "<<<<<<< HEAD\n\
 abc123:documents/versioned-health/old.json\n\
 =======\n\
@@ -1841,25 +1847,13 @@ def456:documents/versioned-health/new.json\n\
 fn test_non_canonical_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash()?;
-
-    env.make_unrelated_commit("intermediate")?;
-
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub {
+        first_commit: v1_v2_commit,
+        git_stub_path: v1_git_stub_path,
+        ..
+    } = v1_git_stub_setup(&env)?;
 
-    assert!(
-        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
-        "v1 should be a Git stub"
-    );
-
-    let v1_git_stub_path = env
-        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
-        .expect("v1 Git stub should exist");
     let original_content = env.read_file(&v1_git_stub_path)?;
     let original_content = original_content.trim();
 
@@ -1928,19 +1922,10 @@ fn test_non_canonical_git_stub_regenerated() -> Result<()> {
 fn test_empty_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-
-    env.make_unrelated_commit("intermediate")?;
-
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub { git_stub_path: v1_git_stub_path, .. } =
+        v1_git_stub_setup(&env)?;
 
-    let v1_git_stub_path = env
-        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
-        .expect("v1 Git stub should exist");
     env.create_file(&v1_git_stub_path, "")?;
 
     let (result, summaries) =
@@ -1984,19 +1969,10 @@ fn test_empty_git_stub_regenerated() -> Result<()> {
 fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-
-    env.make_unrelated_commit("intermediate")?;
-
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub { git_stub_path: v1_git_stub_path, .. } =
+        v1_git_stub_setup(&env)?;
 
-    let v1_git_stub_path = env
-        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
-        .expect("v1 Git stub should exist");
     let invalid_content =
         "not-a-valid-hash:documents/versioned-health/file.json\n";
     env.create_file(&v1_git_stub_path, invalid_content)?;
@@ -2045,14 +2021,8 @@ fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
 fn test_stale_hash_resolvable_git_stub_deleted() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash()?;
-
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub { first_commit: v1_v2_commit, .. } = v1_git_stub_setup(&env)?;
 
     let v2_json_committed_path = env
         .read_versioned_git_stub("versioned-health", "2.0.0")?
@@ -2112,15 +2082,8 @@ fn test_stale_hash_resolvable_git_stub_deleted() -> Result<()> {
 fn test_stale_hash_git_stubs_deleted() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash()?;
-
-    // v3 will trigger Git stub conversion.
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
+    let V1GitStub { first_commit: v1_v2_commit, .. } = v1_git_stub_setup(&env)?;
 
     // Read the v2 Git stub that was just converted over.
     let v2_json_committed_path = env
@@ -2229,26 +2192,14 @@ fn test_stale_hash_git_stubs_deleted() -> Result<()> {
 fn test_unresolvable_git_stub_regenerated() -> Result<()> {
     let env = TestEnvironment::new_git()?;
 
-    let v1_v2_apis = versioned_health_reduced_git_stub_apis()?;
-    env.generate_documents(&v1_v2_apis)?;
-    env.commit_documents()?;
-    let v1_v2_commit = env.get_current_commit_hash()?;
-
-    env.make_unrelated_commit("intermediate")?;
-
     let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
-    env.generate_documents(&v1_v2_v3_apis)?;
-    env.commit_documents()?;
-
-    assert!(
-        env.versioned_git_stub_exists("versioned-health", "1.0.0")?,
-        "v1 should be a Git stub"
-    );
+    let V1GitStub {
+        first_commit: v1_v2_commit,
+        git_stub_path: v1_git_stub_path,
+        ..
+    } = v1_git_stub_setup(&env)?;
 
     // Write a syntactically valid but semantically invalid gitstub.
-    let v1_git_stub_path = env
-        .find_versioned_git_stub_path("versioned-health", "1.0.0")?
-        .expect("v1 Git stub should exist");
     let nonexistent_commit = "aa".repeat(20);
     let unresolvable_content =
         format!("{nonexistent_commit}:documents/versioned-health/fake.json\n");
