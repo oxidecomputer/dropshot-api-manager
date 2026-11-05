@@ -1,0 +1,44 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 3 OpenAPI documents...
+       Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+       Stale versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+     problem: Local file for this blessed version could not be loaded:
+              versioned-health/versioned-health-3.0.0-05def5.json.gitstub
+              (parsing as a Git stub: invalid commit hash in git stub: invalid
+              length: expected 40 (SHA-1) or 64 (SHA-256) hex characters, got
+              19).  This tool can regenerate the file from the blessed version
+              for you.
+         fix: will regenerate versioned-health/versioned-health-3.0.0-
+              05def5.json.gitstub from blessed content
+       Stale versioned-health "latest" symlink
+     problem: "Latest" symlink for versioned API "versioned-health" is stale:
+              points to versioned-health-4.0.0-601ed7.json, but should be
+              versioned-health-3.0.0-05def5.json
+         fix: will update symlink to point to versioned-health-3.0.0-05def5.json
+
+       Other problems not associated with a specific supported API version:
+     problem: A local OpenAPI document was found that does not correspond to a
+              supported version of this API: versioned-health/versioned-health-
+              4.0.0-601ed7.json.  This is unusual, but it could happen if you're
+              either retiring an older version of this API or if you created
+              this version in this branch and later merged with upstream and had
+              to change your local version number.  If this is unexpected, check
+              the list of supported versions in Rust for a possible mismerge.
+              In either case, this tool can remove the unused file for you.
+         fix: will delete file: versioned-health/versioned-health-4.0.0-
+              601ed7.json
+
+        Note API versioned-health version 4.0.0: formerly blessed version has
+             been removed.  This version will no longer be supported!  This will
+             break upgrade from software that still uses this version.  If this
+             is unexpected, check the list of supported versions in Rust for a
+             possible mismerge.
+
+     -------
+       Stale 3 documents checked: 2 fresh, 1 stale, 0 failed, 2 other problems
+             (run test-openapi-manager generate to update)

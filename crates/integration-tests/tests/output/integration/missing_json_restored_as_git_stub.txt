@@ -1,0 +1,30 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 4 OpenAPI documents...
+       Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+       Stale versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+     problem: This version is blessed, and it's a supported version, but it's
+              missing a local OpenAPI document. This can happen with dependent
+              commits or PRs. This tool can restore the file from the blessed
+              version for you: versioned-health/versioned-health-3.0.0-
+              05def5.json
+         fix: will restore versioned-health/versioned-health-3.0.0-
+              05def5.json.gitstub from blessed content as Git stub
+       Stale versioned-health (versioned v4.0.0 (added locally)): Versioned Health API
+     problem: No OpenAPI document was found for this locally-added API version.
+              This is normal if you have added or changed this API version.
+              This tool can generate the file for you.
+         fix: will write new file versioned-health/versioned-health-4.0.0-
+              35e8d8.json from generated
+       Stale versioned-health "latest" symlink
+     problem: "Latest" symlink for versioned API "versioned-health" is stale:
+              points to versioned-health-3.0.0-05def5.json, but should be
+              versioned-health-4.0.0-35e8d8.json
+         fix: will update symlink to point to versioned-health-4.0.0-35e8d8.json
+     -------
+       Stale 4 documents checked: 2 fresh, 2 stale, 0 failed, 1 other problem
+             (run test-openapi-manager generate to update)
