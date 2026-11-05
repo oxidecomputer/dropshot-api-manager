@@ -1782,7 +1782,8 @@ fn resolve_api_lockstep<'a>(
     );
 
     match local {
-        Some(local_file) if local_file.contents() == generated.contents() => (),
+        Some(LocalApiDocFile::Valid(valid))
+            if valid.doc.contents() == generated.contents() => {}
         Some(found) => {
             problems.push(VersionProblem::LockstepStale { found, generated })
         }
