@@ -1,0 +1,29 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 3 OpenAPI documents...
+       Fresh versioned-health (versioned v1.0.0 (added locally)): Versioned Health API
+       Stale versioned-health (versioned v2.0.0 (added locally)): Versioned Health API
+     problem: This locally-added version is stored as a Git stub (versioned-
+              health/versioned-health-2.0.0-511899.json.gitstub), but Git stubs
+              are only used for blessed versions. This tool can convert it to
+              JSON for you.
+         fix: will remove old file: versioned-health/versioned-health-2.0.0-
+              511899.json.gitstub
+         fix: will write new file versioned-health/versioned-health-2.0.0-
+              511899.json from generated
+       Stale versioned-health (versioned v3.0.0 (added locally)): Versioned Health API
+     problem: This locally-added version is stored as a Git stub (versioned-
+              health/versioned-health-3.0.0-05def5.json.gitstub), but Git stubs
+              are only used for blessed versions. This tool can convert it to
+              JSON for you.
+         fix: will remove old file: versioned-health/versioned-health-3.0.0-
+              05def5.json.gitstub
+         fix: will write new file versioned-health/versioned-health-3.0.0-
+              05def5.json from generated
+       Fresh versioned-health "latest" symlink
+     -------
+       Stale 3 documents checked: 2 fresh, 2 stale, 0 failed, 0 other problems
+             (run test-openapi-manager generate to update)

@@ -162,6 +162,7 @@ pub enum ProblemKind {
     LocalVersionMissingLocal,
     LocalVersionExtra,
     LocalVersionStale,
+    LocalVersionGitStub,
     GeneratedSourceMissing,
     GeneratedValidationError,
     ExtraFileStale,
@@ -345,6 +346,17 @@ pub enum VersionProblem<'a> {
     },
 
     #[error(
+        "This locally-added version is stored as a Git stub ({}), but Git \
+         stubs are only used for blessed versions. This tool can convert it \
+         to JSON for you.",
+        local_file.doc_file_name(),
+    )]
+    LocalVersionGitStub {
+        local_file: &'a LocalApiValid,
+        generated: &'a GeneratedApiDocFile,
+    },
+
+    #[error(
         "No generated OpenAPI document was found for this API. When using \
          --generated-from-dir, the specified directory must contain \
          documents for all configured APIs."
@@ -508,6 +520,9 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::LocalVersionStale { .. } => {
                 ProblemKind::LocalVersionStale
             }
+            VersionProblem::LocalVersionGitStub { .. } => {
+                ProblemKind::LocalVersionGitStub
+            }
             VersionProblem::GeneratedSourceMissing { .. } => {
                 ProblemKind::GeneratedSourceMissing
             }
@@ -561,6 +576,7 @@ impl<'a> VersionProblem<'a> {
             | VersionProblem::LocalVersionMissingLocal { .. }
             | VersionProblem::LocalVersionExtra { .. }
             | VersionProblem::LocalVersionStale { .. }
+            | VersionProblem::LocalVersionGitStub { .. }
             | VersionProblem::GeneratedSourceMissing { .. }
             | VersionProblem::GeneratedValidationError { .. }
             | VersionProblem::ExtraFileStale { .. }
@@ -617,6 +633,12 @@ impl<'a> VersionProblem<'a> {
                     old: DisplayableVec(
                         doc_files.iter().map(|s| s.doc_file_name()).collect(),
                     ),
+                    generated,
+                })
+            }
+            VersionProblem::LocalVersionGitStub { local_file, generated } => {
+                Some(Fix::UpdateVersionedFiles {
+                    old: DisplayableVec(vec![local_file.doc_file_name()]),
                     generated,
                 })
             }
@@ -2179,12 +2201,27 @@ fn resolve_api_version_local<'a>(
             problems
                 .push(VersionProblem::LocalVersionMissingLocal { generated });
         } else {
-            // There were non-matching documents.  This is your basic "stale"
-            // case.
-            problems.push(VersionProblem::LocalVersionStale {
-                doc_files: non_matching,
-                generated,
-            });
+            match non_matching.as_slice() {
+                // Convert a Git stub to JSON.
+                [LocalApiDocFile::Valid(valid)]
+                    if valid.doc_file_name().is_git_stub()
+                        && valid.doc_file_name().to_json_filename()
+                            == *generated.doc_file_name() =>
+                {
+                    problems.push(VersionProblem::LocalVersionGitStub {
+                        local_file: valid,
+                        generated,
+                    });
+                }
+                _ => {
+                    // There were non-matching documents.  This is your basic
+                    // "stale" case.
+                    problems.push(VersionProblem::LocalVersionStale {
+                        doc_files: non_matching,
+                        generated,
+                    });
+                }
+            }
         }
     } else if !non_matching.is_empty() {
         // There was a matching document, but also some non-matching ones.

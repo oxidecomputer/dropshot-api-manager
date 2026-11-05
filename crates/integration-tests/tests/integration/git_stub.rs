@@ -3703,15 +3703,20 @@ fn test_git_stub_for_locally_added_version_converted_to_json() -> Result<()> {
         json_paths.push(json_path);
     }
 
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "git_stub_locally_added.txt",
+        &rendered,
+    );
     assert_eq!(
         summaries,
         versions.map(|v| ProblemSummary::new(
             "versioned-health",
             v,
-            ProblemKind::LocalVersionStale
+            ProblemKind::LocalVersionGitStub
         )),
     );
 
