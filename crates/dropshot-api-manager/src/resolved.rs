@@ -245,7 +245,7 @@ pub enum NonVersionProblem<'a> {
         "\"Latest\" symlink for versioned API {api_ident:?} is stale: points \
          to {}, but should be {}",
          found.basename(),
-         link.basename(),
+         link.json_basename(),
     )]
     LatestLinkStale {
         api_ident: ApiIdent,
@@ -1618,21 +1618,14 @@ fn resolve_api<'a>(
             ResolutionKind::NewLocally => latest_generated,
         };
 
-        // Gap: for a blessed version, a link to the right version is accepted
-        // whether its hash is correct or not.
-        let up_to_date =
-            |latest_local: &VersionedApiDocFileName| match resolution.kind() {
-                ResolutionKind::Lockstep => {
-                    unreachable!("this is a versioned API");
-                }
-                ResolutionKind::Blessed => {
-                    latest_local.version() == expected_link.version()
-                }
-                ResolutionKind::NewLocally => latest_local == expected_link,
-            };
+        // Compare the full name including the hash.
         let latest_local = api_local.and_then(|l| l.latest_link());
         let symlink = match latest_local {
-            Some(latest_local) if up_to_date(latest_local) => None,
+            Some(latest_local)
+                if latest_local.basename() == expected_link.json_basename() =>
+            {
+                None
+            }
             Some(latest_local) => Some(NonVersionProblem::LatestLinkStale {
                 api_ident: api.ident().clone(),
                 link: expected_link,

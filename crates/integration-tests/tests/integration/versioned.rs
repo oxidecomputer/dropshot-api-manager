@@ -2268,3 +2268,41 @@ fn test_local_version_misnamed_copy_is_extra() -> Result<()> {
 
     Ok(())
 }
+
+/// Test that the latest symlink matches the blessed file's exact name.
+#[test]
+fn test_blessed_latest_symlink_wrong_hash() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_apis()?;
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    let symlink_rel = "documents/versioned-health/versioned-health-latest.json";
+    let original_target = env.read_link(symlink_rel)?;
+    env.replace_versioned_latest_symlink(
+        "versioned-health",
+        "versioned-health-3.0.0-ffffff.json",
+    )?;
+    assert!(!env.versioned_latest_document_exists("versioned-health"));
+
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::for_api(
+            "versioned-health",
+            ProblemKind::LatestLinkStale
+        )],
+    );
+
+    env.generate_documents(&apis)?;
+
+    assert_eq!(env.read_link(symlink_rel)?, original_target);
+    assert!(env.versioned_latest_document_exists("versioned-health"));
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
