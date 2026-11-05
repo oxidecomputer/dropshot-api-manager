@@ -3675,3 +3675,63 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
 
     blessed_version_missing_local_git_stub_verify(&env)
 }
+
+/// Git stubs for locally-added versions must be converted back to JSON.
+#[test]
+fn test_git_stub_for_locally_added_version_converted_to_json() -> Result<()> {
+    let mut env = TestEnvironment::new_git()?;
+    let apis = versioned_health_git_stub_apis()?;
+
+    env.create_branch("feature")?;
+    env.checkout_branch("feature")?;
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+    let feature_commit = env.get_current_commit_hash()?;
+
+    let versions = ["2.0.0", "3.0.0"];
+    let mut json_paths = Vec::new();
+    for version in versions {
+        let json_path = env
+            .find_versioned_document_path("versioned-health", version)?
+            .with_context(|| format!("v{version} JSON should exist"))?;
+        env.create_file(
+            format!("{json_path}.gitstub"),
+            &format!("{feature_commit}:{json_path}\n"),
+        )?;
+        std::fs::remove_file(env.workspace_root().join(&json_path))
+            .with_context(|| format!("failed to remove {json_path}"))?;
+        json_paths.push(json_path);
+    }
+
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        versions.map(|v| ProblemSummary::new(
+            "versioned-health",
+            v,
+            ProblemKind::LocalVersionStale
+        )),
+    );
+
+    env.generate_documents(&apis)?;
+
+    for json_path in &json_paths {
+        assert!(env.file_exists(json_path), "{json_path} should be restored");
+        assert!(
+            !env.file_exists(format!("{json_path}.gitstub")),
+            "{json_path}.gitstub should be removed"
+        );
+    }
+    let latest_path = json_paths.last().expect("json_paths is non-empty");
+    assert_eq!(
+        env.read_versioned_latest_document("versioned-health")?,
+        env.read_file(latest_path)?,
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}

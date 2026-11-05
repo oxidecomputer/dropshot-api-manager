@@ -2174,3 +2174,97 @@ fn test_blessed_ws_old_format_passes_with_trivial_changes_allowed() -> Result<()
 
     Ok(())
 }
+
+/// Regression test for rebase leaving contents under a stale-hash file name.
+#[test]
+fn test_local_version_file_name_hash_mismatch() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_apis()?;
+    env.generate_documents(&apis)?;
+
+    let versions = ["2.0.0", "3.0.0"];
+    let mut paths = Vec::new();
+    for version in versions {
+        let correct = env
+            .find_versioned_document_path("versioned-health", version)?
+            .with_context(|| format!("v{version} document should exist"))?;
+        let misnamed = correct
+            .with_file_name(format!("versioned-health-{version}-ffffff.json"));
+        std::fs::rename(
+            env.workspace_root().join(&correct),
+            env.workspace_root().join(&misnamed),
+        )
+        .with_context(|| format!("failed to rename {correct}"))?;
+        paths.push((correct, misnamed));
+    }
+
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        versions.map(|v| ProblemSummary::new(
+            "versioned-health",
+            v,
+            ProblemKind::LocalVersionStale
+        )),
+    );
+
+    env.generate_documents(&apis)?;
+
+    for (correct, misnamed) in &paths {
+        assert!(env.file_exists(correct), "{correct} should be restored");
+        assert!(!env.file_exists(misnamed), "{misnamed} should be removed");
+    }
+    let (latest_path, _) = paths.last().expect("paths is non-empty");
+    assert_eq!(
+        env.read_versioned_latest_document("versioned-health")?,
+        env.read_file(latest_path)?,
+    );
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// A misnamed copy next to the correct file is treated as extra. This can
+/// happen e.g. with a jj rebase leaving both.
+#[test]
+fn test_local_version_misnamed_copy_is_extra() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_apis()?;
+    env.generate_documents(&apis)?;
+
+    let correct = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .context("v3 document should exist")?;
+    let misnamed = correct.with_file_name("versioned-health-3.0.0-ffffff.json");
+    std::fs::copy(
+        env.workspace_root().join(&correct),
+        env.workspace_root().join(&misnamed),
+    )
+    .with_context(|| format!("failed to copy {correct}"))?;
+
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "3.0.0",
+            ProblemKind::LocalVersionExtra
+        )],
+    );
+
+    env.generate_documents(&apis)?;
+
+    assert!(env.file_exists(&correct), "{correct} should be kept");
+    assert!(!env.file_exists(&misnamed), "{misnamed} should be removed");
+
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}

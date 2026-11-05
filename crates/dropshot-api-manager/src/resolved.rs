@@ -2156,9 +2156,21 @@ fn resolve_api_version_local<'a>(
     // Validate the generated API document.
     validate_generated(env, api, validation, version, generated, &mut problems);
 
-    let (matching, non_matching): (Vec<_>, Vec<_>) = local
-        .iter()
-        .partition(|local| local.contents() == generated.contents());
+    // Match the exact file name so misnamed files and Git stubs count as stale.
+    let (matching, non_matching): (Vec<_>, Vec<_>) =
+        local.iter().partition(|file| match file {
+            LocalApiDocFile::Valid(valid) => {
+                let names_match =
+                    valid.doc_file_name() == generated.doc_file_name();
+                assert!(
+                    !names_match
+                        || valid.doc.contents() == generated.contents(),
+                    "for valid files, name match implies contents match"
+                );
+                names_match
+            }
+            LocalApiDocFile::Unparseable(_) => false,
+        });
 
     if matching.is_empty() {
         // There was no matching document.
