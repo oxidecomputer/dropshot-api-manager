@@ -1460,23 +1460,13 @@ fn test_malformed_latest_symlink_nonversioned_target() -> Result<()> {
         original_target
     );
 
-    // Delete the valid symlink and create a malformed one pointing to a
-    // non-versioned target.
-    env.delete_versioned_latest_symlink("versioned-health")?;
-
-    let symlink_path = env
-        .documents_dir()
-        .join("versioned-health/versioned-health-latest.json");
-
-    // Create a symlink pointing to a non-versioned file name. The target
-    // doesn't need to exist: we're testing that the symlink parsing handles
-    // this gracefully.
-    #[cfg(unix)]
-    std::os::unix::fs::symlink("versioned-health.json", &symlink_path)
-        .context("failed to create malformed symlink")?;
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_file("versioned-health.json", &symlink_path)
-        .context("failed to create malformed symlink")?;
+    // Replace the valid symlink with a malformed one pointing to a
+    // non-versioned file name. The target doesn't need to exist: we're
+    // testing that the symlink parsing handles this gracefully.
+    env.replace_versioned_latest_symlink(
+        "versioned-health",
+        "versioned-health.json",
+    )?;
 
     // The check should not panic. It should report that updates are needed
     // (because the "latest" symlink is effectively missing/malformed).
