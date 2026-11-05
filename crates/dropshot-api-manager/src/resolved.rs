@@ -171,6 +171,7 @@ pub enum ProblemKind {
     LatestLinkStale,
     BlessedVersionShouldBeGitStub,
     GitStubShouldBeJson,
+    BlessedVersionCorruptedExtra { basename: String },
     DuplicateLocalFile { basename: String },
     GitStubCommitStale,
     GitStubFirstCommitUnknown,
@@ -389,21 +390,30 @@ pub enum VersionProblem<'a> {
     #[error(
         "Blessed non-latest version is stored as a full JSON file. This can \
          be converted to a Git stub. This tool can perform the conversion for \
-         you."
+         you.{}",
+        replaced_by_conversion_message(*replaces),
     )]
     BlessedVersionShouldBeGitStub {
         local_file: &'a LocalApiValid,
         git_stub: GitStub,
+        /// A corrupted file at the target path that will be overwritten.
+        replaces: Option<&'a LocalApiUnparseable>,
     },
 
     #[error(
         "Blessed version is stored as a Git stub, but should be stored as \
-         JSON. This tool can perform the conversion for you."
+         JSON. This tool can perform the conversion for you.{}",
+        replaced_by_conversion_message(*replaces),
     )]
     GitStubShouldBeJson {
         local_file: &'a LocalApiValid,
         blessed: &'a BlessedApiDocFile,
+        /// A corrupted file at the target path that will be overwritten.
+        replaces: Option<&'a LocalApiUnparseable>,
     },
+
+    #[error("{}", corrupted_extra_message(local_file))]
+    BlessedVersionCorruptedExtra { local_file: &'a LocalApiUnparseable },
 
     #[error(
         "Duplicate local file found: both JSON and Git stub versions exist for \
@@ -539,6 +549,11 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::GitStubShouldBeJson { .. } => {
                 ProblemKind::GitStubShouldBeJson
             }
+            VersionProblem::BlessedVersionCorruptedExtra { local_file } => {
+                ProblemKind::BlessedVersionCorruptedExtra {
+                    basename: local_file.name.basename(),
+                }
+            }
             VersionProblem::DuplicateLocalFile { local_file } => {
                 ProblemKind::DuplicateLocalFile {
                     basename: local_file.doc_file_name().basename(),
@@ -579,6 +594,7 @@ impl<'a> VersionProblem<'a> {
             | VersionProblem::ExtraFileStale { .. }
             | VersionProblem::BlessedVersionShouldBeGitStub { .. }
             | VersionProblem::GitStubShouldBeJson { .. }
+            | VersionProblem::BlessedVersionCorruptedExtra { .. }
             | VersionProblem::DuplicateLocalFile { .. }
             | VersionProblem::GitStubCommitStale { .. }
             | VersionProblem::GitStubFirstCommitUnknown { .. } => &[],
@@ -646,9 +662,25 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::BlessedVersionShouldBeGitStub {
                 local_file,
                 git_stub,
-            } => Some(Fix::ConvertToGitStub { local_file, git_stub }),
-            VersionProblem::GitStubShouldBeJson { local_file, blessed } => {
-                Some(Fix::ConvertToJson { local_file, blessed })
+                replaces,
+            } => Some(Fix::ConvertToGitStub {
+                local_file,
+                git_stub,
+                replaces: *replaces,
+            }),
+            VersionProblem::GitStubShouldBeJson {
+                local_file,
+                blessed,
+                replaces,
+            } => Some(Fix::ConvertToJson {
+                local_file,
+                blessed,
+                replaces: *replaces,
+            }),
+            VersionProblem::BlessedVersionCorruptedExtra { local_file } => {
+                Some(Fix::DeleteFiles {
+                    files: DisplayableVec(vec![local_file.name.clone()]),
+                })
             }
             VersionProblem::DuplicateLocalFile { local_file } => {
                 Some(Fix::DeleteFiles {
@@ -688,11 +720,13 @@ pub enum Fix<'a> {
     ConvertToGitStub {
         local_file: &'a LocalApiValid,
         git_stub: &'a GitStub,
+        replaces: Option<&'a LocalApiUnparseable>,
     },
     /// Convert a Git stub back to a full JSON file.
     ConvertToJson {
         local_file: &'a LocalApiValid,
         blessed: &'a BlessedApiDocFile,
+        replaces: Option<&'a LocalApiUnparseable>,
     },
     /// Restore a blessed file from the blessed content, or as a Git stub.
     ///
@@ -757,18 +791,20 @@ impl Display for Fix<'_> {
                     link.json_basename()
                 )?;
             }
-            Fix::ConvertToGitStub { local_file, .. } => {
+            Fix::ConvertToGitStub { local_file, replaces, .. } => {
                 writeln!(
                     f,
-                    "convert {} to Git stub",
-                    local_file.doc_file_name().path()
+                    "convert {} to Git stub{}",
+                    local_file.doc_file_name().path(),
+                    corrupted_suffix("replacing", *replaces),
                 )?;
             }
-            Fix::ConvertToJson { local_file, .. } => {
+            Fix::ConvertToJson { local_file, replaces, .. } => {
                 writeln!(
                     f,
-                    "convert {} from Git stub to JSON",
-                    local_file.doc_file_name().path()
+                    "convert {} from Git stub to JSON{}",
+                    local_file.doc_file_name().path(),
+                    corrupted_suffix("replacing", *replaces),
                 )?;
             }
             Fix::RestoreFromBlessed { blessed, storage, corrupted } => {
@@ -870,7 +906,7 @@ impl Fix<'_> {
                 symlink_file(&target, &path)?;
                 Ok(vec![format!("wrote link {} -> {}", path, target)])
             }
-            Fix::ConvertToGitStub { local_file, git_stub } => {
+            Fix::ConvertToGitStub { local_file, git_stub, replaces } => {
                 let json_path = root.join(local_file.doc_file_name().path());
 
                 let git_stub_basename =
@@ -879,6 +915,15 @@ impl Fix<'_> {
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(&git_stub_basename);
+
+                if let Some(corrupted) = replaces {
+                    debug_assert_eq!(
+                        root.join(corrupted.name.path()),
+                        git_stub_path,
+                        "the replaced corrupted file should be at the \
+                         conversion's target path",
+                    );
+                }
 
                 // Write the Git stub in canonical format (forward slashes,
                 // trailing newline).
@@ -898,7 +943,7 @@ impl Fix<'_> {
                     ),
                 ])
             }
-            Fix::ConvertToJson { local_file, blessed } => {
+            Fix::ConvertToJson { local_file, blessed, replaces } => {
                 let git_stub_path =
                     root.join(local_file.doc_file_name().path());
 
@@ -911,6 +956,15 @@ impl Fix<'_> {
                     .parent()
                     .ok_or_else(|| anyhow!("cannot get parent directory"))?
                     .join(json_basename);
+
+                if let Some(corrupted) = replaces {
+                    debug_assert_eq!(
+                        root.join(corrupted.name.path()),
+                        json_path,
+                        "the replaced corrupted file should be at the \
+                         conversion's target path",
+                    );
+                }
 
                 let overwrite_status = overwrite_file(&json_path, contents)?;
 
@@ -1422,6 +1476,26 @@ fn restore_blocked_message(corrupted: &[&LocalApiUnparseable]) -> String {
          determines whether the file should be stored as JSON or as a Git \
          stub).",
     )
+}
+
+fn corrupted_extra_message(local_file: &LocalApiUnparseable) -> String {
+    format!(
+        "{}  A valid copy of this version is present, so this file is \
+         redundant.  This tool can remove it for you.",
+        corrupted_not_loaded(&[local_file]),
+    )
+}
+
+fn replaced_by_conversion_message(
+    replaces: Option<&LocalApiUnparseable>,
+) -> String {
+    match replaces {
+        Some(corrupted) => format!(
+            "  {}  The conversion replaces it.",
+            corrupted_not_loaded(&[corrupted]),
+        ),
+        None => String::new(),
+    }
 }
 
 /// Returns " (<verb> corrupted <paths>)", or nothing if `corrupted` yields no
@@ -2053,22 +2127,9 @@ fn resolve_api_version_blessed<'a>(
             }
         },
         BlessedLocalState::One { usable, extra } => {
-            // BUG: we offer to regenerate a corrupted extra file even though a
-            // usable copy exists, and as JSON if the storage format is unknown.
-            // We should offer to delete it instead.
-            problems.extend(extra.map(|local_file| {
-                let storage = match &storage_format {
-                    VersionStorageFormat::Known(storage) => storage.clone(),
-                    VersionStorageFormat::Unknown => BlessedStorage::Json,
-                };
-                VersionProblem::BlessedVersionNeedsRestore {
-                    blessed,
-                    corrupted: vec![local_file],
-                    storage,
-                }
-            }));
             single_copy_storage_problems(
                 usable,
+                extra,
                 blessed,
                 &storage_format,
                 &mut problems,
@@ -2111,8 +2172,11 @@ fn check_git_stub_staleness<'a>(
 }
 
 /// Checks for storage problems with a single usable copy of a blessed version.
+///
+/// `extra` is a corrupted file at the other kind's path, if any.
 fn single_copy_storage_problems<'a>(
     usable: &'a LocalApiValid,
+    extra: Option<&'a LocalApiUnparseable>,
     blessed: &'a BlessedApiDocFile,
     storage_format: &VersionStorageFormat,
     problems: &mut Vec<VersionProblem<'a>>,
@@ -2121,7 +2185,9 @@ fn single_copy_storage_problems<'a>(
         .doc_file_name()
         .versioned_kind()
         .expect("blessed local files should be versioned");
-    match (storage_format, kind) {
+    // When converting paths, the conversion would write to the same path as the
+    // extra file; otherwise, the extra file is deleted.
+    let unabsorbed = match (storage_format, kind) {
         (
             VersionStorageFormat::Known(BlessedStorage::GitStub(git_stub)),
             VersionedApiDocKind::Json,
@@ -2130,7 +2196,9 @@ fn single_copy_storage_problems<'a>(
             problems.push(VersionProblem::BlessedVersionShouldBeGitStub {
                 local_file: usable,
                 git_stub: git_stub.clone(),
+                replaces: extra,
             });
+            None
         }
         (
             VersionStorageFormat::Known(BlessedStorage::Json),
@@ -2140,7 +2208,9 @@ fn single_copy_storage_problems<'a>(
             problems.push(VersionProblem::GitStubShouldBeJson {
                 local_file: usable,
                 blessed,
+                replaces: extra,
             });
+            None
         }
         (
             VersionStorageFormat::Known(BlessedStorage::GitStub(
@@ -2151,6 +2221,7 @@ fn single_copy_storage_problems<'a>(
             // Format is correct (Git stub). Check if the commit
             // hash inside the local gitstub file still matches.
             check_git_stub_staleness(usable, expected_git_stub, problems);
+            extra
         }
         (
             VersionStorageFormat::Known(BlessedStorage::Json),
@@ -2159,8 +2230,12 @@ fn single_copy_storage_problems<'a>(
         | (VersionStorageFormat::Unknown, _) => {
             // Format matches preference, or it couldn't be determined: no
             // conversion.
+            extra
         }
-    }
+    };
+    problems.extend(unabsorbed.map(|local_file| {
+        VersionProblem::BlessedVersionCorruptedExtra { local_file }
+    }));
 }
 
 /// Checks for storage problems when both a valid JSON file and a valid Git stub

@@ -22,11 +22,10 @@
               versioned-health/versioned-health-1.0.0-da85d6.json.gitstub
               (parsing as a Git stub: invalid commit hash in git stub: invalid
               length: expected 40 (SHA-1) or 64 (SHA-256) hex characters, got
-              19).  This tool can restore the file from the blessed version for
-              you: versioned-health/versioned-health-1.0.0-da85d6.json
-         fix: will restore versioned-health/versioned-health-1.0.0-da85d6.json
-              from blessed content (removing corrupted versioned-health/
-              versioned-health-1.0.0-da85d6.json.gitstub)
+              19).  A valid copy of this version is present, so this file is
+              redundant.  This tool can remove it for you.
+         fix: will delete file: versioned-health/versioned-health-1.0.0-
+              da85d6.json.gitstub
      Failure versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
        error: The first commit for this blessed version could not be determined.
               This may indicate a corrupted repository or other VCS-related

@@ -5,16 +5,14 @@
      -------
     Checking 3 OpenAPI documents...
        Stale versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
-     problem: Local file for this blessed version could not be loaded:
-              versioned-health/versioned-health-1.0.0-da85d6.json (parsing
-              as JSON: expected value at line 1 column 1).  This tool can
-              regenerate the file from the blessed version for you.
-         fix: will regenerate versioned-health/versioned-health-1.0.0-
-              da85d6.json from blessed content
      problem: Blessed version is stored as a Git stub, but should be stored as
-              JSON. This tool can perform the conversion for you.
+              JSON. This tool can perform the conversion for you.  Local file
+              for this blessed version could not be loaded: versioned-health/
+              versioned-health-1.0.0-da85d6.json (parsing as JSON: expected
+              value at line 1 column 1).  The conversion replaces it.
          fix: will convert versioned-health/versioned-health-1.0.0-
-              da85d6.json.gitstub from Git stub to JSON
+              da85d6.json.gitstub from Git stub to JSON (replacing corrupted
+              versioned-health/versioned-health-1.0.0-da85d6.json)
        Stale versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
      problem: Blessed version is stored as a Git stub, but should be stored as
               JSON. This tool can perform the conversion for you.
