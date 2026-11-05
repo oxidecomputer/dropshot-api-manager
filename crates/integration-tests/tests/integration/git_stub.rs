@@ -3682,6 +3682,18 @@ fn test_git_stub_for_locally_added_version_converted_to_json() -> Result<()> {
     Ok(())
 }
 
+fn assert_stored_as_json(env: &TestEnvironment, version: &str) -> Result<()> {
+    assert!(
+        env.versioned_local_document_exists("versioned-health", version)?,
+        "v{version} should be stored as JSON"
+    );
+    assert!(
+        !env.versioned_git_stub_exists("versioned-health", version)?,
+        "v{version} should not be stored as a Git stub"
+    );
+    Ok(())
+}
+
 /// Test that a corrupted Git stub for a version that becomes latest again
 /// (newer version dropped) is regenerated as JSON.
 #[test]
@@ -3742,34 +3754,13 @@ fn test_corrupted_git_stub_for_latest_version_regenerated_as_json() -> Result<()
         ],
     );
 
-    // BUG: the restored JSON is written to the Git stub path.
-    assert!(
-        env.generate_documents(&v1_v2_v3_apis).is_err(),
-        "generate should fail its post-fix recheck"
-    );
-    assert!(!env.file_exists(&v3_json_path), "the JSON file is never written");
-    assert_eq!(
-        env.read_file(&v3_git_stub_path)?,
-        v3_json_contents,
-        "the JSON is written into the Git stub's path"
-    );
-    assert!(
-        !env.versioned_latest_document_exists("versioned-health"),
-        "the latest symlink points at the JSON file, which doesn't exist"
-    );
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
-    assert_eq!(result, CheckResult::NeedsUpdate);
-    assert_eq!(
-        summaries,
-        [ProblemSummary::new(
-            "versioned-health",
-            "3.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: basename(&v3_git_stub_path)?,
-            },
-        )],
-    );
+    env.generate_documents(&v1_v2_v3_apis)?;
+
+    assert_stored_as_json(&env, "3.0.0")?;
+    assert_eq!(env.read_file(&v3_json_path)?, v3_json_contents);
+    assert!(env.versioned_latest_document_exists("versioned-health"));
+    let result = check_apis_up_to_date(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::Success);
 
     Ok(())
 }
@@ -3814,30 +3805,12 @@ fn test_missing_git_stub_restored_as_json_with_storage_disabled() -> Result<()>
         ],
     );
 
-    // BUG: the restored JSON is written to the Git stub path.
-    assert!(
-        env.generate_documents(&json_apis).is_err(),
-        "generate should fail its post-fix recheck"
-    );
-    assert!(!env.file_exists(&v1_json_path), "the JSON file is never written");
-    assert_eq!(
-        env.read_file(&v1_git_stub_path)?,
-        v1_json_contents,
-        "the JSON is written into the Git stub's path"
-    );
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &json_apis)?;
-    assert_eq!(result, CheckResult::NeedsUpdate);
-    assert_eq!(
-        summaries,
-        [ProblemSummary::new(
-            "versioned-health",
-            "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: basename(&v1_git_stub_path)?,
-            },
-        )],
-    );
+    env.generate_documents(&json_apis)?;
+
+    assert_stored_as_json(&env, "1.0.0")?;
+    assert_eq!(env.read_file(&v1_json_path)?, v1_json_contents);
+    let result = check_apis_up_to_date(env.environment(), &json_apis)?;
+    assert_eq!(result, CheckResult::Success);
 
     Ok(())
 }

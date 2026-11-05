@@ -392,6 +392,12 @@ impl ApiDocFile {
     pub(crate) fn into_name_and_contents(self) -> (ApiDocFileName, Vec<u8>) {
         (self.name, self.contents_buf.0)
     }
+
+    /// Consumes self, returning a new [`ApiDocFile`] with fully stored JSON.
+    pub(crate) fn into_json_named(self) -> Self {
+        let name = self.name.to_json_filename();
+        Self { name, ..self }
+    }
 }
 
 /// Builder for constructing a set of found OpenAPI documents

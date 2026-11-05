@@ -265,7 +265,7 @@ pub enum VersionProblem<'a> {
          missing a local OpenAPI document. This can happen with dependent \
          commits or PRs. This tool can restore the file from the blessed \
          version for you: {}",
-        blessed.versioned_doc_file_name()
+        restore_target(blessed, git_stub)
     )]
     BlessedVersionMissingLocal {
         blessed: &'a BlessedApiDocFile,
@@ -792,18 +792,18 @@ impl Display for Fix<'_> {
                     local_file.doc_file_name().path()
                 )?;
             }
-            Fix::RegenerateFromBlessed { local_file, git_stub, .. } => {
+            Fix::RegenerateFromBlessed { blessed, git_stub, .. } => {
                 if git_stub.is_some() {
                     writeln!(
                         f,
                         "regenerate {} from blessed content as Git stub",
-                        local_file.name.path()
+                        blessed.versioned_doc_file_name().to_git_stub().path()
                     )?;
                 } else {
                     writeln!(
                         f,
                         "regenerate {} from blessed content",
-                        local_file.name.path()
+                        blessed.versioned_doc_file_name().path()
                     )?;
                 }
             }
@@ -968,37 +968,35 @@ impl Fix<'_> {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(e.into()),
                 }
+                let mut rv =
+                    vec![format!("removed corrupted file {}", local_path)];
 
+                // The target comes from the blessed name, not the corrupted
+                // file's, whose kind may differ.
                 if let Some(git_stub) = git_stub {
-                    // Write as a Git stub.
-                    let git_stub_basename = local_file.name.git_stub_basename();
-                    let git_stub_path = local_path
-                        .parent()
-                        .ok_or_else(|| anyhow!("cannot get parent directory"))?
-                        .join(&git_stub_basename);
-
+                    let git_stub_path = root.join(
+                        blessed.versioned_doc_file_name().to_git_stub().path(),
+                    );
                     // Write in canonical format (forward slashes, trailing newline).
                     let overwrite_status = overwrite_file(
                         &git_stub_path,
                         git_stub.to_file_contents().as_bytes(),
                     )?;
-
-                    Ok(vec![
-                        format!("removed corrupted file {}", local_path),
-                        format!(
-                            "created Git stub {}: {:?}",
-                            git_stub_path, overwrite_status
-                        ),
-                    ])
+                    rv.push(format!(
+                        "created Git stub {}: {:?}",
+                        git_stub_path, overwrite_status
+                    ));
                 } else {
-                    // Write the JSON content directly.
+                    let json_path =
+                        root.join(blessed.versioned_doc_file_name().path());
                     let overwrite_status =
-                        overwrite_file(&local_path, blessed.contents())?;
-                    Ok(vec![format!(
+                        overwrite_file(&json_path, blessed.contents())?;
+                    rv.push(format!(
                         "regenerated {} from blessed content: {:?}",
-                        local_path, overwrite_status
-                    )])
+                        json_path, overwrite_status
+                    ));
                 }
+                Ok(rv)
             }
             Fix::RestoreFromBlessed { blessed, git_stub } => {
                 if let Some(git_stub) = git_stub {
@@ -1319,6 +1317,16 @@ fn file_validity(doc_file: &LocalApiDocFile) -> FileValidity {
     match doc_file {
         LocalApiDocFile::Valid(_) => FileValidity::Valid,
         LocalApiDocFile::Unparseable(_) => FileValidity::Unparseable,
+    }
+}
+
+fn restore_target(
+    blessed: &BlessedApiDocFile,
+    git_stub: &Option<GitStub>,
+) -> VersionedApiDocFileName {
+    match git_stub {
+        Some(_) => blessed.versioned_doc_file_name().to_git_stub(),
+        None => blessed.versioned_doc_file_name().clone(),
     }
 }
 

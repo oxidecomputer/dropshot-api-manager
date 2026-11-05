@@ -14,7 +14,7 @@
               19).  This tool can regenerate the file from the blessed version
               for you.
          fix: will regenerate versioned-health/versioned-health-3.0.0-
-              05def5.json.gitstub from blessed content
+              05def5.json from blessed content
        Stale versioned-health "latest" symlink
      problem: "Latest" symlink for versioned API "versioned-health" is stale:
               points to versioned-health-4.0.0-601ed7.json, but should be

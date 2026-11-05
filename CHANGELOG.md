@@ -7,6 +7,7 @@
 
 - Previously, a locally-added API version whose document file name didn't match its contents was reported as up to date. (This can happen when Git rename detection during a rebase moves a regenerated document's contents under its old file name, leaving the `latest` symlink pointing at a file that doesn't exist.) Such files are now reported as stale, and `generate` replaces them with correctly named documents. Similarly, Git stubs for locally-added versions are reported and converted to JSON.
 - The `latest` symlink for a blessed version is now checked against the exact file name, including the hash. Previously, a symlink pointing at a nonexistent file for the right version was accepted.
+- Previously, while restoring a blessed version as full JSON, we could write out the full JSON contents to the corresponding `.json.gitstub` file. The document is now always written to the `.json` path.
 
 ### Changed
 
