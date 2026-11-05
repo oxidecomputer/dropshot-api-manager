@@ -10,7 +10,7 @@
 
 ### Changed
 
-- On Unix, errors from reading Git stub contents now report `exit code: N` instead of `exit status: N`, matching Windows.
+- On Unix, errors from Git and Jujutsu commands, including reading Git stub contents, now report `exit code: N` instead of `exit status: N`, matching Windows.
 - Updated git-stub-vcs to 0.1.1.
 
 ## [0.9.0] - 2026-10-30
