@@ -427,6 +427,27 @@ impl TestEnvironment {
         })
     }
 
+    /// Replaces the latest symlink.
+    ///
+    /// The symlink target need not exist.
+    pub fn replace_versioned_latest_symlink(
+        &self,
+        api_ident: &str,
+        target: &str,
+    ) -> Result<()> {
+        self.delete_versioned_latest_symlink(api_ident)?;
+        let latest_link = self
+            .documents_dir()
+            .join(format!("{}/{}-latest.json", api_ident, api_ident));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, &latest_link)
+            .with_context(|| format!("failed to create {latest_link}"))?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(target, &latest_link)
+            .with_context(|| format!("failed to create {latest_link}"))?;
+        Ok(())
+    }
+
     /// Read the latest document for a versioned API.
     pub fn read_versioned_latest_document(
         &self,
