@@ -657,6 +657,32 @@ fn test_duplicates() -> Result<()> {
     );
 
     let extended_no_git_stub = versioned_health_with_v4_apis()?;
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &extended_no_git_stub)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::DuplicateLocalFile {
+                    basename: "versioned-health-1.0.0-da85d6.json.gitstub"
+                        .to_owned(),
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+        ],
+    );
     env.generate_documents(&extended_no_git_stub)?;
 
     assert!(
@@ -1504,6 +1530,45 @@ fn test_rename_conflict_blessed_versions() -> Result<()> {
 
     // Resolution: make branch's alternate v3 into v4, keep main's v3.
     let v1_v2_v3_v4alt_apis = versioned_health_v1_v2_v3_v4alt_git_stub_apis()?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v1_v2_v3_v4alt_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "rename_conflict_blessed_versions.txt",
+        &rendered,
+    );
+    // Main's v3 has conflict markers in it and should be replaced by a Git
+    // stub; the branch's v3 is vestigial and should be deleted.
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: "versioned-health-3.0.0-05def5.json".to_owned(),
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionExtraLocalDoc {
+                    basename: "versioned-health-3.0.0-23d303.json".to_owned(),
+                    validity: FileValidity::Unparseable,
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "4.0.0",
+                ProblemKind::LocalVersionMissingLocal,
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
     env.generate_documents(&v1_v2_v3_v4alt_apis)?;
     env.complete_merge()?;
 
