@@ -2255,13 +2255,18 @@ fn test_unresolvable_git_stub_regenerated() -> Result<()> {
     env.create_file(&v1_git_stub_path, &unresolvable_content)?;
 
     // Check should report NeedsUpdate (not Failures).
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v1_v2_v3_apis)?;
     assert_eq!(
         result,
         CheckResult::NeedsUpdate,
         "check should report needs update for unresolvable Git stub, \
          not a hard failure"
+    );
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "unresolvable_git_stub.txt",
+        &rendered,
     );
     assert_eq!(
         summaries,

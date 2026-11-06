@@ -981,9 +981,9 @@ dependencies = [
 
 [[package]]
 name = "git-stub-vcs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "030ad7aaa1d066e8fb39ac2748f1a12b072eed4a4af8d2e073fc80ba74ab173c"
+checksum = "5f1531d32cc3bded64fca8c105ae157168d071f5bb23ad15870bb3e2c3159eeb"
 dependencies = [
  "atomicwrites",
  "camino",
