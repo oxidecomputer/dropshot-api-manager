@@ -2306,3 +2306,50 @@ fn test_blessed_latest_symlink_wrong_hash() -> Result<()> {
 
     Ok(())
 }
+
+/// Test conflict markers in blessed JSON files (one older, one latest) without
+/// Git stubs.
+#[test]
+fn test_corrupted_blessed_json_restored() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_apis()?;
+    env.generate_documents(&apis)?;
+    env.commit_documents()?;
+
+    let mut originals = Vec::new();
+    let mut expected = Vec::new();
+    for version in ["1.0.0", "3.0.0"] {
+        let path = env
+            .find_versioned_document_path("versioned-health", version)?
+            .with_context(|| format!("v{version} should exist as JSON"))?;
+        expected.push(ProblemSummary::new(
+            "versioned-health",
+            version,
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: basename(&path)?,
+            },
+        ));
+        originals.push((path.clone(), env.read_file(&path)?));
+        env.create_file(&path, CONFLICTED_CONTENTS)?;
+    }
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "corrupted_blessed_json_restored.txt",
+        &rendered,
+    );
+    assert_eq!(summaries, expected);
+
+    env.generate_documents(&apis)?;
+
+    for (path, contents) in &originals {
+        assert_eq!(&env.read_file(path)?, contents, "{path} restored");
+    }
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
