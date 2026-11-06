@@ -960,40 +960,52 @@ impl Fix<'_> {
                 ])
             }
             Fix::RegenerateFromBlessed { local_file, blessed, git_stub } => {
-                let local_path = root.join(local_file.name.path());
-
-                // Remove the corrupted file.
-                match fs_err::remove_file(&local_path) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e.into()),
-                }
-                let mut rv =
-                    vec![format!("removed corrupted file {}", local_path)];
+                // This invariant is upheld in the partition loop.
+                assert_eq!(
+                    local_file.name.to_json_filename().as_versioned(),
+                    Some(blessed.versioned_doc_file_name()),
+                    "corrupted file should be the same document as the \
+                     blessed file it is replaced with",
+                );
 
                 // The target comes from the blessed name, not the corrupted
                 // file's, whose kind may differ.
+                let target = match git_stub {
+                    Some(_) => blessed.versioned_doc_file_name().to_git_stub(),
+                    None => blessed.versioned_doc_file_name().clone(),
+                };
+                let target_path = root.join(target.path());
+
+                let mut rv = Vec::new();
+                // A corrupted file at the target is overwritten atomically
+                // below instead, so that users don't see the intermediate
+                // period where there's no file on disk.
+                if local_file.name.as_versioned() != Some(&target) {
+                    let local_path = root.join(local_file.name.path());
+                    match fs_err::remove_file(&local_path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                    rv.push(format!("removed corrupted file {}", local_path));
+                }
+
                 if let Some(git_stub) = git_stub {
-                    let git_stub_path = root.join(
-                        blessed.versioned_doc_file_name().to_git_stub().path(),
-                    );
                     // Write in canonical format (forward slashes, trailing newline).
                     let overwrite_status = overwrite_file(
-                        &git_stub_path,
+                        &target_path,
                         git_stub.to_file_contents().as_bytes(),
                     )?;
                     rv.push(format!(
                         "created Git stub {}: {:?}",
-                        git_stub_path, overwrite_status
+                        target_path, overwrite_status
                     ));
                 } else {
-                    let json_path =
-                        root.join(blessed.versioned_doc_file_name().path());
                     let overwrite_status =
-                        overwrite_file(&json_path, blessed.contents())?;
+                        overwrite_file(&target_path, blessed.contents())?;
                     rv.push(format!(
                         "regenerated {} from blessed content: {:?}",
-                        json_path, overwrite_status
+                        target_path, overwrite_status
                     ));
                 }
                 Ok(rv)
