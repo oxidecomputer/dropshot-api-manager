@@ -153,6 +153,7 @@ impl Display for ResolutionKind {
 pub enum ProblemKind {
     LocalDocFileOrphaned { basename: String, validity: FileValidity },
     BlessedVersionNeedsRestore { corrupted: Vec<String> },
+    BlessedVersionRestoreBlocked { corrupted: Vec<String> },
     BlessedVersionExtraLocalDoc { basename: String, validity: FileValidity },
     BlessedVersionCompareError,
     BlessedVersionBroken,
@@ -265,6 +266,12 @@ pub enum VersionProblem<'a> {
         /// An empty list means the local file is missing.
         corrupted: Vec<&'a LocalApiUnparseable>,
         storage: BlessedStorage,
+    },
+
+    #[error("{}", restore_blocked_message(corrupted))]
+    BlessedVersionRestoreBlocked {
+        /// An empty list means the local file is missing.
+        corrupted: Vec<&'a LocalApiUnparseable>,
     },
 
     #[error("{}", extra_local_doc_message(doc_file))]
@@ -481,6 +488,11 @@ impl<'a> VersionProblem<'a> {
             } => ProblemKind::BlessedVersionNeedsRestore {
                 corrupted: corrupted_basenames(corrupted),
             },
+            VersionProblem::BlessedVersionRestoreBlocked { corrupted } => {
+                ProblemKind::BlessedVersionRestoreBlocked {
+                    corrupted: corrupted_basenames(corrupted),
+                }
+            }
             VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 ProblemKind::BlessedVersionExtraLocalDoc {
                     basename: doc_file.doc_file_name().basename(),
@@ -552,6 +564,7 @@ impl<'a> VersionProblem<'a> {
                 compatibility_issues
             }
             VersionProblem::BlessedVersionNeedsRestore { .. }
+            | VersionProblem::BlessedVersionRestoreBlocked { .. }
             | VersionProblem::BlessedVersionExtraLocalDoc { .. }
             | VersionProblem::BlessedVersionCompareError { .. }
             | VersionProblem::BlessedLatestVersionBytewiseMismatch { .. }
@@ -579,6 +592,8 @@ impl<'a> VersionProblem<'a> {
                 corrupted,
                 storage,
             } => Some(Fix::RestoreFromBlessed { blessed, storage, corrupted }),
+            // This is unfixable until the storage format can be determined.
+            VersionProblem::BlessedVersionRestoreBlocked { .. } => None,
             VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![
@@ -1396,6 +1411,19 @@ fn needs_restore_message(
     format!("{problem}{separator}{remedy}")
 }
 
+fn restore_blocked_message(corrupted: &[&LocalApiUnparseable]) -> String {
+    let problem = match corrupted {
+        [] => MISSING_LOCAL.to_owned(),
+        [_, ..] => corrupted_not_loaded(corrupted),
+    };
+    format!(
+        "{problem}  This tool can restore the file from the blessed version \
+         once the error about determining a first commit is fixed (that \
+         determines whether the file should be stored as JSON or as a Git \
+         stub).",
+    )
+}
+
 /// Returns " (<verb> corrupted <paths>)", or nothing if `corrupted` yields no
 /// items.
 fn corrupted_suffix<'a>(
@@ -2006,33 +2034,24 @@ fn resolve_api_version_blessed<'a>(
     };
 
     match local_state {
-        BlessedLocalState::Absent { corrupted } => {
-            match (&storage_format, corrupted.as_slice()) {
-                (VersionStorageFormat::Known(storage), _) => {
-                    problems.push(VersionProblem::BlessedVersionNeedsRestore {
-                        blessed,
-                        corrupted,
-                        storage: storage.clone(),
-                    });
-                }
-                (VersionStorageFormat::Unknown, []) => {
-                    // Already pushed an unfixable
-                    // GitStubFirstCommitUnknown problem. Skip
-                    // BlessedVersionNeedsRestore: we can't determine
-                    // the correct storage format to restore as.
-                    // BUG: the missing file itself isn't reported.
-                }
-                (VersionStorageFormat::Unknown, [_, ..]) => {
-                    // BUG: the storage format is unknown, so regenerating as
-                    // JSON is a guess.
-                    problems.push(VersionProblem::BlessedVersionNeedsRestore {
-                        blessed,
-                        corrupted,
-                        storage: BlessedStorage::Json,
-                    });
-                }
+        BlessedLocalState::Absent { corrupted } => match &storage_format {
+            VersionStorageFormat::Known(storage) => {
+                problems.push(VersionProblem::BlessedVersionNeedsRestore {
+                    blessed,
+                    corrupted,
+                    storage: storage.clone(),
+                });
             }
-        }
+            VersionStorageFormat::Unknown => {
+                // Already pushed an unfixable GitStubFirstCommitUnknown
+                // problem. We can't determine the correct storage format to
+                // restore as, so report the version as blocked rather than
+                // offering a fix.
+                problems.push(VersionProblem::BlessedVersionRestoreBlocked {
+                    corrupted,
+                });
+            }
+        },
         BlessedLocalState::One { usable, extra } => {
             // BUG: we offer to regenerate a corrupted extra file even though a
             // usable copy exists, and as JSON if the storage format is unknown.
@@ -2307,8 +2326,8 @@ enum BlessedLocalState<'a> {
 enum VersionStorageFormat {
     /// The storage format is known.
     Known(BlessedStorage),
-    /// An error occurred while determining the storage format. The version
-    /// should not be modified.
+    /// An error occurred while determining the storage format. No storage
+    /// conversion or restore should be attempted.
     Unknown,
 }
 

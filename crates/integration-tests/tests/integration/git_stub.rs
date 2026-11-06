@@ -3953,8 +3953,7 @@ fn test_missing_file_with_unknown_storage_reported() -> Result<()> {
     check_with_first_commit_unknown(
         &env,
         "missing_file_with_unknown_storage.txt",
-        // BUG: the missing file isn't reported.
-        vec![],
+        vec![ProblemKind::BlessedVersionRestoreBlocked { corrupted: vec![] }],
     )
 }
 
@@ -3969,9 +3968,7 @@ fn test_corrupted_file_with_unknown_storage_not_regenerated() -> Result<()> {
     check_with_first_commit_unknown(
         &env,
         "corrupted_file_with_unknown_storage.txt",
-        // BUG: we offer to regenerate the file as JSON, though the storage
-        // format is unknown.
-        vec![ProblemKind::BlessedVersionNeedsRestore {
+        vec![ProblemKind::BlessedVersionRestoreBlocked {
             corrupted: vec![basename(&v1_json_path)?],
         }],
     )
