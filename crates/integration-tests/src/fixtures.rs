@@ -1827,6 +1827,22 @@ fn validate_with_extra_file(
     }
 }
 
+pub fn report_error_for_every_version(
+    _doc: &openapiv3::OpenAPI,
+    mut cx: ValidationContext<'_>,
+) {
+    cx.report_error(anyhow::anyhow!("synthetic validation error"));
+}
+
+pub fn report_error_for_latest_and_unblessed(
+    _doc: &openapiv3::OpenAPI,
+    mut cx: ValidationContext<'_>,
+) {
+    if cx.is_latest() || cx.is_blessed() != Some(true) {
+        cx.report_error(anyhow::anyhow!("synthetic validation error"));
+    }
+}
+
 pub fn versioned_health_with_validation_api() -> ManagedApi {
     ManagedApi::from(ManagedApiConfig {
         ident: "versioned-health",

@@ -1,0 +1,32 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 3 OpenAPI documents...
+     Failure versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       error: Generated OpenAPI document for API "versioned-health" version
+              1.0.0 is not valid: OpenAPI document validation failed:
+              synthetic validation error
+        help: version 1.0.0 is blessed, so its OpenAPI document can't be
+              changed. To fix these errors, add a new API version that addresses
+              them. If these validation rules are newer than version 1.0.0, only
+              enforce them on the latest version and on unblessed versions (see
+              the documentation on `ManagedApis::with_validation` for more).
+     Failure versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+       error: Generated OpenAPI document for API "versioned-health" version
+              2.0.0 is not valid: OpenAPI document validation failed:
+              synthetic validation error
+        help: version 2.0.0 is blessed, so its OpenAPI document can't be
+              changed. To fix these errors, add a new API version that addresses
+              them. If these validation rules are newer than version 2.0.0, only
+              enforce them on the latest version and on unblessed versions (see
+              the documentation on `ManagedApis::with_validation` for more).
+     Failure versioned-health (versioned v3.0.0 (added locally)): Versioned Health API
+       error: Generated OpenAPI document for API "versioned-health" version
+              3.0.0 is not valid: OpenAPI document validation failed:
+              synthetic validation error
+       Fresh versioned-health "latest" symlink
+     -------
+     Failure 3 documents checked: 1 fresh, 0 stale, 3 failed, 0 other problems
+             (fix failures, then run test-openapi-manager generate to update)

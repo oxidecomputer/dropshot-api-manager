@@ -21,6 +21,7 @@
 
 - On Unix, errors from Git and Jujutsu commands, including reading Git stub contents, now report `exit code: N` instead of `exit status: N`, matching Windows.
 - If a blessed version's local files are corrupted, the fixes now mention every corrupted file that is removed or replaced. If both the `.json` and `.json.gitstub` files are corrupted, it is now represented as a single problem.
+- When a blessed version fails validation, the check output now includes a `help:` line explaining that blessed documents can't be changed and that the fix is to add a new API version. For older blessed versions, it also explains how to skip particular validation rules, i.e. to only enforce them when `cx.is_latest() || cx.is_blessed() != Some(true)`.
 - Updated git-stub-vcs to 0.1.1.
 
 ## [0.9.0] - 2026-10-30

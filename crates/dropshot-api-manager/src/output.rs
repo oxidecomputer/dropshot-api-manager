@@ -599,6 +599,10 @@ where
             )?;
         }
 
+        if let Some(help) = p.help() {
+            write_help(writer, &help, styles)?;
+        }
+
         let Some(fix) = p.fix() else {
             continue;
         };
@@ -714,6 +718,26 @@ fn write_problem_header(
         "{}",
         textwrap::fill(
             &InlineErrorChain::new(error).to_string(),
+            textwrap::Options::new(term_width())
+                .initial_indent(&first_indent)
+                .subsequent_indent(&more_indent)
+        )
+    )
+}
+
+fn write_help(
+    writer: &mut dyn io::Write,
+    help: &str,
+    styles: &Styles,
+) -> io::Result<()> {
+    let first_indent =
+        format!("{:>HEADER_WIDTH$}: ", "help".style(styles.header));
+    let more_indent = " ".repeat(HEADER_WIDTH + 2);
+    writeln!(
+        writer,
+        "{}",
+        textwrap::fill(
+            help,
             textwrap::Options::new(term_width())
                 .initial_indent(&first_indent)
                 .subsequent_indent(&more_indent)
