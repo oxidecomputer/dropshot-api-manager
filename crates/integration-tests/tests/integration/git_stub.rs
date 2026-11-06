@@ -3978,23 +3978,23 @@ fn test_corrupted_file_with_unknown_storage_not_regenerated() -> Result<()> {
 }
 
 /// Tests that with unknown storage there's no conversion, so a corrupted
-/// leftover file is still deleted.
+/// extra file is still deleted.
 #[test]
-fn test_corrupted_leftover_with_unknown_storage_reported_for_deletion()
+fn test_corrupted_extra_with_unknown_storage_reported_for_deletion()
 -> Result<()> {
     let (env, v1_json_path) =
         env_with_v1_json(&versioned_health_git_stub_apis()?)?;
-    let leftover = Utf8PathBuf::from(format!("{v1_json_path}.gitstub"));
-    env.create_file(&leftover, CONFLICTED_CONTENTS)?;
+    let extra = Utf8PathBuf::from(format!("{v1_json_path}.gitstub"));
+    env.create_file(&extra, CONFLICTED_CONTENTS)?;
 
     check_with_first_commit_unknown(
         &env,
-        "corrupted_leftover_with_unknown_storage.txt",
+        "corrupted_extra_with_unknown_storage.txt",
         // BUG: we offer to regenerate the extra file as JSON, which rewrites
         // the valid copy, instead of the right thing to do which is to delete
         // it.
         vec![ProblemKind::BlessedVersionNeedsRestore {
-            corrupted: vec![basename(&leftover)?],
+            corrupted: vec![basename(&extra)?],
         }],
     )
 }
@@ -4021,19 +4021,19 @@ fn test_duplicate_copies_with_unknown_storage_untouched() -> Result<()> {
 /// Tests that a corrupted extra file next to a valid copy is junk to delete,
 /// not something to regenerate.
 #[test]
-fn test_corrupted_leftover_next_to_valid_copy_deleted() -> Result<()> {
+fn test_corrupted_extra_next_to_valid_copy_deleted() -> Result<()> {
     let apis = versioned_health_apis()?;
     let (env, v1_json_path) = env_with_v1_json(&apis)?;
     let v1_json_contents = env.read_file(&v1_json_path)?;
-    let leftover = Utf8PathBuf::from(format!("{v1_json_path}.gitstub"));
-    env.create_file(&leftover, CONFLICTED_CONTENTS)?;
+    let extra = Utf8PathBuf::from(format!("{v1_json_path}.gitstub"));
+    env.create_file(&extra, CONFLICTED_CONTENTS)?;
 
     let (result, summaries, rendered) =
         check_apis_with_render(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
     crate::snapshot::assert_render_snapshot(
         &env,
-        "corrupted_leftover_next_to_valid_copy.txt",
+        "corrupted_extra_next_to_valid_copy.txt",
         &rendered,
     );
     // BUG: we offer to regenerate the file which rewrites the valid copy. We
@@ -4044,14 +4044,14 @@ fn test_corrupted_leftover_next_to_valid_copy_deleted() -> Result<()> {
             "versioned-health",
             "1.0.0",
             ProblemKind::BlessedVersionNeedsRestore {
-                corrupted: vec![basename(&leftover)?]
+                corrupted: vec![basename(&extra)?]
             },
         )],
     );
 
     env.generate_documents(&apis)?;
 
-    assert!(!env.file_exists(&leftover), "{leftover} should be removed");
+    assert!(!env.file_exists(&extra), "{extra} should be removed");
     assert_eq!(env.read_file(&v1_json_path)?, v1_json_contents);
     let result = check_apis_up_to_date(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::Success);
@@ -4062,7 +4062,7 @@ fn test_corrupted_leftover_next_to_valid_copy_deleted() -> Result<()> {
 /// Tests that JSON -> Git stub conversion, where the target path holds a
 /// corrupted extra file, is handled correctly.
 #[test]
-fn test_corrupted_leftover_at_conversion_target() -> Result<()> {
+fn test_corrupted_extra_at_conversion_target() -> Result<()> {
     let env = TestEnvironment::new_git()?;
     let apis = versioned_health_git_stub_apis()?;
     let V1GitStub {
@@ -4083,7 +4083,7 @@ fn test_corrupted_leftover_at_conversion_target() -> Result<()> {
     assert_eq!(result, CheckResult::NeedsUpdate);
     crate::snapshot::assert_render_snapshot(
         &env,
-        "corrupted_leftover_at_conversion_target.txt",
+        "corrupted_extra_at_conversion_target.txt",
         &rendered,
     );
     // BUG: the extra file's regeneration and the conversion are separate fixes
@@ -4119,7 +4119,7 @@ fn test_corrupted_leftover_at_conversion_target() -> Result<()> {
 /// Tests that Git stub -> JSON conversion, where the target path holds a
 /// corrupted extra file, is handled correctly.
 #[test]
-fn test_corrupted_leftover_at_json_conversion_target() -> Result<()> {
+fn test_corrupted_extra_at_json_conversion_target() -> Result<()> {
     let env = TestEnvironment::new_git()?;
     let V1GitStub {
         json_path: v1_json_path,
@@ -4138,7 +4138,7 @@ fn test_corrupted_leftover_at_json_conversion_target() -> Result<()> {
     assert_eq!(result, CheckResult::NeedsUpdate);
     crate::snapshot::assert_render_snapshot(
         &env,
-        "corrupted_leftover_at_json_conversion_target.txt",
+        "corrupted_extra_at_json_conversion_target.txt",
         &rendered,
     );
     // BUG: the extra file's regeneration and the conversion are separate fixes
@@ -4177,7 +4177,7 @@ fn test_corrupted_leftover_at_json_conversion_target() -> Result<()> {
 }
 
 #[test]
-fn test_stale_git_stub_with_corrupted_json_leftover() -> Result<()> {
+fn test_stale_git_stub_with_corrupted_json_extra() -> Result<()> {
     let env = TestEnvironment::new_git()?;
     let apis = versioned_health_git_stub_apis()?;
     let V1GitStub {
@@ -4203,7 +4203,7 @@ fn test_stale_git_stub_with_corrupted_json_leftover() -> Result<()> {
         .replace(&later_commit, "<later commit>");
     crate::snapshot::assert_render_snapshot(
         &env,
-        "stale_git_stub_with_corrupted_json_leftover.txt",
+        "stale_git_stub_with_corrupted_json_extra.txt",
         &rendered,
     );
     // BUG: the extra file's regeneration and the conversion are separate fixes
