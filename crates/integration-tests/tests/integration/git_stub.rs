@@ -918,18 +918,7 @@ fn test_git_error_reports_problem() -> Result<()> {
     env.generate_documents(&apis)?;
     env.commit_documents()?;
 
-    let fake_git = std::env::var("NEXTEST_BIN_EXE_fake_git")
-        .expect("NEXTEST_BIN_EXE_fake_git should be set by nextest");
-    let original_git = std::env::var("GIT").ok();
-
-    // SAFETY:
-    // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
-    unsafe {
-        std::env::set_var("GIT", &fake_git);
-        // Tell fake_git where the real git is.
-        std::env::set_var("REAL_GIT", original_git.as_deref().unwrap_or("git"));
-        std::env::set_var("FAKE_GIT_FAIL", "diff_filter_a");
-    }
+    use_fake_git(FakeGitFail::DiffFilterA);
 
     let v4_apis = versioned_health_with_v4_git_stub_apis()?;
     let (result, summaries) =
@@ -3143,17 +3132,7 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
     // Now swap in fake-git that fails on --is-ancestor. This causes
     // git_is_ancestor to return an error, which propagates through
     // BlessedGitStub::to_git_stub as an Err.
-    let fake_git = std::env::var("NEXTEST_BIN_EXE_fake_git")
-        .expect("NEXTEST_BIN_EXE_fake_git should be set by nextest");
-    let original_git = std::env::var("GIT").ok();
-
-    // SAFETY:
-    // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
-    unsafe {
-        std::env::set_var("GIT", &fake_git);
-        std::env::set_var("REAL_GIT", original_git.as_deref().unwrap_or("git"));
-        std::env::set_var("FAKE_GIT_FAIL", "is_ancestor");
-    }
+    use_fake_git(FakeGitFail::IsAncestor);
 
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v4)?;
@@ -3695,4 +3674,50 @@ fn test_git_stub_for_locally_added_version_converted_to_json() -> Result<()> {
     assert_eq!(result, CheckResult::Success);
 
     Ok(())
+}
+
+/// For the fake git, which invocation is supposed to fail.
+#[derive(Clone, Copy, Debug)]
+enum FakeGitFail {
+    /// First-commit lookups (`--diff-filter=A`).
+    DiffFilterA,
+    /// `merge-base --is-ancestor`.
+    IsAncestor,
+}
+
+impl FakeGitFail {
+    fn mode(self) -> &'static str {
+        match self {
+            FakeGitFail::DiffFilterA => "diff_filter_a",
+            FakeGitFail::IsAncestor => "is_ancestor",
+        }
+    }
+}
+
+fn use_fake_git(fail: FakeGitFail) {
+    let fake_git = Utf8PathBuf::from(
+        std::env::var("NEXTEST_BIN_EXE_fake_git")
+            .expect("NEXTEST_BIN_EXE_fake_git should be set by nextest"),
+    );
+    let original_git = std::env::var("GIT").ok();
+    // Invoke fake_git by its bare name via the PATH to smooth out snapshot
+    // differences across machines and platforms.
+    let fake_git_dir = fake_git.parent().expect("fake_git has a parent");
+    let fake_git_name = fake_git.file_stem().expect("fake_git has a name");
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(fake_git_dir.as_std_path().to_owned())
+            .chain(std::env::split_paths(&path)),
+    )
+    .expect("PATH entries should be joinable");
+
+    // SAFETY:
+    // https://nexte.st/docs/configuration/env-vars/#altering-the-environment-within-tests
+    unsafe {
+        std::env::set_var("PATH", path);
+        std::env::set_var("GIT", fake_git_name);
+        // Tell fake_git where the real git is.
+        std::env::set_var("REAL_GIT", original_git.as_deref().unwrap_or("git"));
+        std::env::set_var("FAKE_GIT_FAIL", fail.mode());
+    }
 }
