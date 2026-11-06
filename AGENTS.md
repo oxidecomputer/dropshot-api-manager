@@ -182,7 +182,7 @@ pub enum ResolutionKind {
 // Per-(api, version) problems: anything tied to a specific supported
 // version. The bulk of the variants live here.
 pub enum VersionProblem<'a> {
-    BlessedVersionMissingLocal { ... },
+    BlessedVersionNeedsRestore { ... },
     BlessedVersionBroken { ... },
     LockstepStale { ... },
     LocalVersionMissingLocal { ... },

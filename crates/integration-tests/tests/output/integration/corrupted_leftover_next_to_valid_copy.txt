@@ -9,10 +9,11 @@
               versioned-health/versioned-health-1.0.0-da85d6.json.gitstub
               (parsing as a Git stub: invalid commit hash in git stub: invalid
               length: expected 40 (SHA-1) or 64 (SHA-256) hex characters, got
-              19).  This tool can regenerate the file from the blessed version
-              for you.
-         fix: will regenerate versioned-health/versioned-health-1.0.0-
-              da85d6.json from blessed content
+              19).  This tool can restore the file from the blessed version for
+              you: versioned-health/versioned-health-1.0.0-da85d6.json
+         fix: will restore versioned-health/versioned-health-1.0.0-da85d6.json
+              from blessed content (removing corrupted versioned-health/
+              versioned-health-1.0.0-da85d6.json.gitstub)
        Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
        Fresh versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
        Fresh versioned-health "latest" symlink

@@ -10,9 +10,11 @@
      problem: Local file for this blessed version could not be loaded:
               versioned-health/versioned-health-3.0.0-05def5.json (parsing as
               JSON: key must be a string at line 59 column 1).  This tool can
-              regenerate the file from the blessed version for you.
-         fix: will regenerate versioned-health/versioned-health-3.0.0-
-              05def5.json.gitstub from blessed content as Git stub
+              restore the file from the blessed version for you: versioned-
+              health/versioned-health-3.0.0-05def5.json.gitstub
+         fix: will restore versioned-health/versioned-health-3.0.0-
+              05def5.json.gitstub from blessed content as Git stub (removing
+              corrupted versioned-health/versioned-health-3.0.0-05def5.json)
      problem: For this blessed version, found an extra OpenAPI document that
               does not match the blessed (upstream) OpenAPI document: versioned-
               health/versioned-health-3.0.0-23d303.json (parsing as JSON: key

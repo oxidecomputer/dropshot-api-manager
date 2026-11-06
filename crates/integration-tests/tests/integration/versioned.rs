@@ -1679,7 +1679,7 @@ fn test_jj_rebase_successive_changes_to_nonblessed_version_concrete()
 // Blessed version missing local (dependent-PR rebase scenario)
 // ---------------------------------------------------------------------------
 
-/// Direct test: verify that `BlessedVersionMissingLocal` is fixable.
+/// Direct test: verify that `BlessedVersionNeedsRestore` is fixable.
 #[test]
 fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
     let mut env = TestEnvironment::new_git()?;
@@ -1714,7 +1714,7 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
             [ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             )],
         );
 
@@ -1741,7 +1741,7 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
     // The v4_trivial_apis configuration includes a trivially different
     // v3 definition and adds v4 as the new latest. Since the original
     // blessed v3 file was deleted, the tool should detect this as
-    // BlessedVersionMissingLocal and restore from the blessed content.
+    // BlessedVersionNeedsRestore and restore from the blessed content.
     let v4_trivial_apis =
         versioned_health_with_v4_trivial_v3_apis(Storage::Concrete)?;
 
@@ -1755,7 +1755,7 @@ fn test_blessed_version_missing_local_is_fixable() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -1895,7 +1895,7 @@ fn test_rebase_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -1940,7 +1940,7 @@ fn test_merge_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -1991,7 +1991,7 @@ fn test_jj_rebase_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -2041,7 +2041,7 @@ fn test_jj_merge_blessed_version_missing_local() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -2325,8 +2325,8 @@ fn test_corrupted_blessed_json_restored() -> Result<()> {
         expected.push(ProblemSummary::new(
             "versioned-health",
             version,
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: basename(&path)?,
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&path)?],
             },
         ));
         originals.push((path.clone(), env.read_file(&path)?));
