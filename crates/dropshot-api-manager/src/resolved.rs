@@ -152,7 +152,7 @@ impl Display for ResolutionKind {
 #[expect(missing_docs)]
 pub enum ProblemKind {
     LocalDocFileOrphaned { basename: String, validity: FileValidity },
-    BlessedVersionMissingLocal,
+    BlessedVersionNeedsRestore { corrupted: Vec<String> },
     BlessedVersionExtraLocalDoc { basename: String, validity: FileValidity },
     BlessedVersionCompareError,
     BlessedVersionBroken,
@@ -170,7 +170,6 @@ pub enum ProblemKind {
     LatestLinkStale,
     BlessedVersionShouldBeGitStub,
     GitStubShouldBeJson,
-    BlessedVersionCorruptedLocal { basename: String },
     DuplicateLocalFile { basename: String },
     GitStubCommitStale,
     GitStubFirstCommitUnknown,
@@ -260,15 +259,11 @@ pub enum NonVersionProblem<'a> {
 /// a specific version.
 #[derive(Debug, Error)]
 pub enum VersionProblem<'a> {
-    #[error(
-        "This version is blessed, and it's a supported version, but it's \
-         missing a local OpenAPI document. This can happen with dependent \
-         commits or PRs. This tool can restore the file from the blessed \
-         version for you: {}",
-        restore_target(blessed, storage)
-    )]
-    BlessedVersionMissingLocal {
+    #[error("{}", needs_restore_message(blessed, corrupted, storage))]
+    BlessedVersionNeedsRestore {
         blessed: &'a BlessedApiDocFile,
+        /// An empty list means the local file is missing.
+        corrupted: Vec<&'a LocalApiUnparseable>,
         storage: BlessedStorage,
     },
 
@@ -403,13 +398,6 @@ pub enum VersionProblem<'a> {
         blessed: &'a BlessedApiDocFile,
     },
 
-    #[error("{}", corrupted_local_message(local_file))]
-    BlessedVersionCorruptedLocal {
-        local_file: &'a LocalApiUnparseable,
-        blessed: &'a BlessedApiDocFile,
-        storage: BlessedStorage,
-    },
-
     #[error(
         "Duplicate local file found: both JSON and Git stub versions exist for \
          this API version. This tool can remove the redundant file for you."
@@ -488,9 +476,11 @@ impl<'a> VersionProblem<'a> {
     /// error.
     pub fn kind(&self) -> ProblemKind {
         match self {
-            VersionProblem::BlessedVersionMissingLocal { .. } => {
-                ProblemKind::BlessedVersionMissingLocal
-            }
+            VersionProblem::BlessedVersionNeedsRestore {
+                corrupted, ..
+            } => ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: corrupted_basenames(corrupted),
+            },
             VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 ProblemKind::BlessedVersionExtraLocalDoc {
                     basename: doc_file.doc_file_name().basename(),
@@ -537,11 +527,6 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::GitStubShouldBeJson { .. } => {
                 ProblemKind::GitStubShouldBeJson
             }
-            VersionProblem::BlessedVersionCorruptedLocal {
-                local_file, ..
-            } => ProblemKind::BlessedVersionCorruptedLocal {
-                basename: local_file.name.basename(),
-            },
             VersionProblem::DuplicateLocalFile { local_file } => {
                 ProblemKind::DuplicateLocalFile {
                     basename: local_file.doc_file_name().basename(),
@@ -566,7 +551,7 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::BlessedVersionBroken { compatibility_issues } => {
                 compatibility_issues
             }
-            VersionProblem::BlessedVersionMissingLocal { .. }
+            VersionProblem::BlessedVersionNeedsRestore { .. }
             | VersionProblem::BlessedVersionExtraLocalDoc { .. }
             | VersionProblem::BlessedVersionCompareError { .. }
             | VersionProblem::BlessedLatestVersionBytewiseMismatch { .. }
@@ -581,7 +566,6 @@ impl<'a> VersionProblem<'a> {
             | VersionProblem::ExtraFileStale { .. }
             | VersionProblem::BlessedVersionShouldBeGitStub { .. }
             | VersionProblem::GitStubShouldBeJson { .. }
-            | VersionProblem::BlessedVersionCorruptedLocal { .. }
             | VersionProblem::DuplicateLocalFile { .. }
             | VersionProblem::GitStubCommitStale { .. }
             | VersionProblem::GitStubFirstCommitUnknown { .. } => &[],
@@ -590,13 +574,11 @@ impl<'a> VersionProblem<'a> {
 
     pub fn fix(&'a self) -> Option<Fix<'a>> {
         match self {
-            VersionProblem::BlessedVersionMissingLocal { blessed, storage } => {
-                Some(Fix::RestoreFromBlessed {
-                    blessed,
-                    storage,
-                    corrupted: None,
-                })
-            }
+            VersionProblem::BlessedVersionNeedsRestore {
+                blessed,
+                corrupted,
+                storage,
+            } => Some(Fix::RestoreFromBlessed { blessed, storage, corrupted }),
             VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![
@@ -653,15 +635,6 @@ impl<'a> VersionProblem<'a> {
             VersionProblem::GitStubShouldBeJson { local_file, blessed } => {
                 Some(Fix::ConvertToJson { local_file, blessed })
             }
-            VersionProblem::BlessedVersionCorruptedLocal {
-                local_file,
-                blessed,
-                storage,
-            } => Some(Fix::RestoreFromBlessed {
-                blessed,
-                storage,
-                corrupted: Some(local_file),
-            }),
             VersionProblem::DuplicateLocalFile { local_file } => {
                 Some(Fix::DeleteFiles {
                     files: DisplayableVec(vec![
@@ -712,9 +685,9 @@ pub enum Fix<'a> {
     RestoreFromBlessed {
         blessed: &'a BlessedApiDocFile,
         storage: &'a BlessedStorage,
-        /// A corrupted local file to remove first. This is expected to have the
-        /// same hash as `blessed`, but possibly a different kind.
-        corrupted: Option<&'a LocalApiUnparseable>,
+        /// Corrupted local files to remove first. These are expected to have
+        /// the same hash as `blessed`, but possibly a different kind.
+        corrupted: &'a [&'a LocalApiUnparseable],
     },
     /// Update a Git stub whose commit hash has become stale (e.g.,
     /// after a rebase).
@@ -784,15 +757,19 @@ impl Display for Fix<'_> {
                 )?;
             }
             Fix::RestoreFromBlessed { blessed, storage, corrupted } => {
-                let verb = match corrupted {
-                    Some(_) => "regenerate",
-                    None => "restore",
-                };
+                let target = restore_target(blessed, storage);
                 writeln!(
                     f,
-                    "{verb} {} from blessed content{}",
-                    restore_target(blessed, storage).path(),
+                    "{} {} from blessed content{}{}",
+                    RestoreAction::new(corrupted, &target).present(),
+                    target.path(),
                     storage.description_suffix(),
+                    corrupted_suffix(
+                        "removing",
+                        corrupted.iter().copied().filter(|file| {
+                            file.name.as_versioned() != Some(&target)
+                        }),
+                    ),
                 )?;
             }
             Fix::UpdateGitStub { local_file, git_stub } => {
@@ -938,10 +915,10 @@ impl Fix<'_> {
                 let target = restore_target(blessed, storage);
                 let target_path = root.join(target.path());
                 let mut rv = Vec::new();
-                if let Some(corrupted) = corrupted {
+                for file in corrupted.iter() {
                     // This invariant is upheld in the partition loop.
                     assert_eq!(
-                        corrupted.name.to_json_filename().as_versioned(),
+                        file.name.to_json_filename().as_versioned(),
                         Some(blessed.versioned_doc_file_name()),
                         "corrupted file should be the same document as the \
                          blessed file it is replaced with",
@@ -949,20 +926,19 @@ impl Fix<'_> {
                     // A corrupted file at the target is overwritten atomically
                     // below instead, so that users don't see the intermediate
                     // period where there's no file on disk.
-                    if corrupted.name.as_versioned() != Some(&target) {
-                        let corrupted_path = root.join(corrupted.name.path());
-                        match fs_err::remove_file(&corrupted_path) {
-                            Ok(()) => {}
-                            Err(e)
-                                if e.kind() == std::io::ErrorKind::NotFound => {
-                            }
-                            Err(e) => return Err(e.into()),
-                        }
-                        rv.push(format!(
-                            "removed corrupted file {}",
-                            corrupted_path
-                        ));
+                    if file.name.as_versioned() == Some(&target) {
+                        continue;
                     }
+                    let corrupted_path = root.join(file.name.path());
+                    match fs_err::remove_file(&corrupted_path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                    rv.push(format!(
+                        "removed corrupted file {}",
+                        corrupted_path
+                    ));
                 }
 
                 let overwrite_status = match storage {
@@ -978,12 +954,9 @@ impl Fix<'_> {
                         )?
                     }
                 };
-                let verb = match corrupted {
-                    Some(_) => "regenerated",
-                    None => "restored",
-                };
                 rv.push(format!(
-                    "{verb} {} from blessed content{}: {:?}",
+                    "{} {} from blessed content{}: {:?}",
+                    RestoreAction::new(corrupted, &target).past(),
                     target_path,
                     storage.description_suffix(),
                     overwrite_status
@@ -1375,12 +1348,104 @@ fn extra_local_doc_message(doc_file: &LocalApiDocFile) -> String {
     )
 }
 
-fn corrupted_local_message(local_file: &LocalApiUnparseable) -> String {
+fn corrupted_basenames(corrupted: &[&LocalApiUnparseable]) -> Vec<String> {
+    corrupted.iter().map(|local_file| local_file.name.basename()).collect()
+}
+
+fn corrupted_not_loaded(corrupted: &[&LocalApiUnparseable]) -> String {
     format!(
-        "Local file for this blessed version could not be loaded: {}.  This \
-         tool can regenerate the file from the blessed version for you.",
-        unparseable_with_reason(local_file),
+        "Local {} for this blessed version could not be loaded: {}.",
+        plural::files(corrupted.len()),
+        DisplayableVec(
+            corrupted
+                .iter()
+                .map(|unparseable| unparseable_with_reason(unparseable))
+                .collect()
+        ),
     )
+}
+
+const MISSING_LOCAL: &str = "This version is blessed, and it's a supported \
+                             version, but it's missing a local OpenAPI \
+                             document.";
+
+fn needs_restore_message(
+    blessed: &BlessedApiDocFile,
+    corrupted: &[&LocalApiUnparseable],
+    storage: &BlessedStorage,
+) -> String {
+    let target = restore_target(blessed, storage);
+    let (problem, separator) = match corrupted {
+        [] => (
+            format!(
+                "{MISSING_LOCAL} This can happen with dependent commits or PRs."
+            ),
+            " ",
+        ),
+        [_, ..] => (corrupted_not_loaded(corrupted), "  "),
+    };
+    let remedy = match RestoreAction::new(corrupted, &target) {
+        RestoreAction::Regenerate => "This tool can regenerate the file from \
+                                      the blessed version for you."
+            .to_owned(),
+        RestoreAction::Restore => format!(
+            "This tool can restore the file from the blessed version for \
+             you: {target}"
+        ),
+    };
+    format!("{problem}{separator}{remedy}")
+}
+
+/// Returns " (<verb> corrupted <paths>)", or nothing if `corrupted` yields no
+/// items.
+fn corrupted_suffix<'a>(
+    verb: &str,
+    corrupted: impl IntoIterator<Item = &'a LocalApiUnparseable>,
+) -> String {
+    let paths: Vec<_> = corrupted
+        .into_iter()
+        .map(|unparseable| unparseable.name.path())
+        .collect();
+    match paths.as_slice() {
+        [] => String::new(),
+        [_, ..] => format!(" ({verb} corrupted {})", DisplayableVec(paths)),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RestoreAction {
+    Restore,
+    Regenerate,
+}
+
+impl RestoreAction {
+    fn new(
+        corrupted: &[&LocalApiUnparseable],
+        target: &VersionedApiDocFileName,
+    ) -> Self {
+        if corrupted.iter().any(|file| file.name.as_versioned() == Some(target))
+        {
+            // If one of the files match, we say "regenerate".
+            RestoreAction::Regenerate
+        } else {
+            // Otherwise, we say "restore".
+            RestoreAction::Restore
+        }
+    }
+
+    fn present(self) -> &'static str {
+        match self {
+            RestoreAction::Restore => "restore",
+            RestoreAction::Regenerate => "regenerate",
+        }
+    }
+
+    fn past(self) -> &'static str {
+        match self {
+            RestoreAction::Restore => "restored",
+            RestoreAction::Regenerate => "regenerated",
+        }
+    }
 }
 
 fn lockstep_stale_message(
@@ -1943,42 +2008,28 @@ fn resolve_api_version_blessed<'a>(
     match local_state {
         BlessedLocalState::Absent { corrupted } => {
             match (&storage_format, corrupted.as_slice()) {
-                (VersionStorageFormat::Known(storage), []) => {
-                    problems.push(VersionProblem::BlessedVersionMissingLocal {
+                (VersionStorageFormat::Known(storage), _) => {
+                    problems.push(VersionProblem::BlessedVersionNeedsRestore {
                         blessed,
+                        corrupted,
                         storage: storage.clone(),
                     });
-                }
-                (VersionStorageFormat::Known(storage), corrupted) => {
-                    for &local_file in corrupted {
-                        problems.push(
-                            VersionProblem::BlessedVersionCorruptedLocal {
-                                local_file,
-                                blessed,
-                                storage: storage.clone(),
-                            },
-                        );
-                    }
                 }
                 (VersionStorageFormat::Unknown, []) => {
                     // Already pushed an unfixable
                     // GitStubFirstCommitUnknown problem. Skip
-                    // BlessedVersionMissingLocal: we can't determine
+                    // BlessedVersionNeedsRestore: we can't determine
                     // the correct storage format to restore as.
                     // BUG: the missing file itself isn't reported.
                 }
-                (VersionStorageFormat::Unknown, corrupted) => {
+                (VersionStorageFormat::Unknown, [_, ..]) => {
                     // BUG: the storage format is unknown, so regenerating as
                     // JSON is a guess.
-                    for &local_file in corrupted {
-                        problems.push(
-                            VersionProblem::BlessedVersionCorruptedLocal {
-                                local_file,
-                                blessed,
-                                storage: BlessedStorage::Json,
-                            },
-                        );
-                    }
+                    problems.push(VersionProblem::BlessedVersionNeedsRestore {
+                        blessed,
+                        corrupted,
+                        storage: BlessedStorage::Json,
+                    });
                 }
             }
         }
@@ -1991,9 +2042,9 @@ fn resolve_api_version_blessed<'a>(
                     VersionStorageFormat::Known(storage) => storage.clone(),
                     VersionStorageFormat::Unknown => BlessedStorage::Json,
                 };
-                VersionProblem::BlessedVersionCorruptedLocal {
-                    local_file,
+                VersionProblem::BlessedVersionNeedsRestore {
                     blessed,
+                    corrupted: vec![local_file],
                     storage,
                 }
             }));

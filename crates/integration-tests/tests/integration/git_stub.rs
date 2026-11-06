@@ -1559,8 +1559,10 @@ fn test_rename_conflict_blessed_versions() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: "versioned-health-3.0.0-05def5.json".to_owned(),
+                ProblemKind::BlessedVersionNeedsRestore {
+                    corrupted: vec![
+                        "versioned-health-3.0.0-05def5.json".to_owned()
+                    ],
                 },
             ),
             ProblemSummary::new(
@@ -1873,11 +1875,8 @@ fn test_unparseable_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: v1_git_stub_path
-                    .file_name()
-                    .expect("v1_git_stub_path has a file name")
-                    .to_owned()
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&v1_git_stub_path)?]
             },
         )],
     );
@@ -1949,11 +1948,8 @@ fn test_non_canonical_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: v1_git_stub_path
-                    .file_name()
-                    .expect("v1_git_stub_path has a file name")
-                    .to_owned()
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&v1_git_stub_path)?]
             },
         )],
     );
@@ -2008,11 +2004,8 @@ fn test_empty_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: v1_git_stub_path
-                    .file_name()
-                    .expect("v1_git_stub_path has a file name")
-                    .to_owned()
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&v1_git_stub_path)?]
             },
         )],
     );
@@ -2057,11 +2050,8 @@ fn test_invalid_commit_hash_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: v1_git_stub_path
-                    .file_name()
-                    .expect("v1_git_stub_path has a file name")
-                    .to_owned()
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&v1_git_stub_path)?]
             },
         )],
     );
@@ -2292,11 +2282,8 @@ fn test_unresolvable_git_stub_regenerated() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: v1_git_stub_path
-                    .file_name()
-                    .expect("v1_git_stub_path has a file name")
-                    .to_owned()
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&v1_git_stub_path)?]
             },
         )],
     );
@@ -3252,7 +3239,7 @@ fn test_stale_git_stub_is_ancestor_error() -> Result<()> {
 // Blessed version missing local
 // ---------------------------------------------------------------------------
 
-/// Verify that `BlessedVersionMissingLocal` is fixable with Git stub storage.
+/// Verify that `BlessedVersionNeedsRestore` is fixable with Git stub storage.
 ///
 /// The restored v3 should be written as a Git stub (not JSON) because it's a
 /// non-latest blessed version with Git stub storage enabled.
@@ -3312,7 +3299,7 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
             [ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             )],
         );
 
@@ -3361,7 +3348,7 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3528,7 +3515,7 @@ fn test_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3573,7 +3560,7 @@ fn test_merge_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3624,7 +3611,7 @@ fn test_jj_rebase_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3674,7 +3661,7 @@ fn test_jj_merge_blessed_version_missing_local_git_stub() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3821,8 +3808,8 @@ fn test_corrupted_git_stub_for_latest_version_regenerated_as_json() -> Result<()
             ProblemSummary::new(
                 "versioned-health",
                 "3.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: basename(&v3_git_stub_path)?
+                ProblemKind::BlessedVersionNeedsRestore {
+                    corrupted: vec![basename(&v3_git_stub_path)?],
                 },
             ),
             ProblemSummary::for_api(
@@ -3873,7 +3860,7 @@ fn test_missing_git_stub_restored_as_json_with_storage_disabled() -> Result<()>
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::BlessedVersionMissingLocal,
+                ProblemKind::BlessedVersionNeedsRestore { corrupted: vec![] },
             ),
             ProblemSummary::new(
                 "versioned-health",
@@ -3984,8 +3971,8 @@ fn test_corrupted_file_with_unknown_storage_not_regenerated() -> Result<()> {
         "corrupted_file_with_unknown_storage.txt",
         // BUG: we offer to regenerate the file as JSON, though the storage
         // format is unknown.
-        vec![ProblemKind::BlessedVersionCorruptedLocal {
-            basename: basename(&v1_json_path)?,
+        vec![ProblemKind::BlessedVersionNeedsRestore {
+            corrupted: vec![basename(&v1_json_path)?],
         }],
     )
 }
@@ -4006,8 +3993,8 @@ fn test_corrupted_leftover_with_unknown_storage_reported_for_deletion()
         // BUG: we offer to regenerate the extra file as JSON, which rewrites
         // the valid copy, instead of the right thing to do which is to delete
         // it.
-        vec![ProblemKind::BlessedVersionCorruptedLocal {
-            basename: basename(&leftover)?,
+        vec![ProblemKind::BlessedVersionNeedsRestore {
+            corrupted: vec![basename(&leftover)?],
         }],
     )
 }
@@ -4056,8 +4043,8 @@ fn test_corrupted_leftover_next_to_valid_copy_deleted() -> Result<()> {
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionCorruptedLocal {
-                basename: basename(&leftover)?,
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![basename(&leftover)?]
             },
         )],
     );
@@ -4107,8 +4094,8 @@ fn test_corrupted_leftover_at_conversion_target() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: basename(&v1_git_stub_path)?,
+                ProblemKind::BlessedVersionNeedsRestore {
+                    corrupted: vec![basename(&v1_git_stub_path)?]
                 },
             ),
             ProblemSummary::new(
@@ -4162,8 +4149,8 @@ fn test_corrupted_leftover_at_json_conversion_target() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: basename(&v1_json_path)?,
+                ProblemKind::BlessedVersionNeedsRestore {
+                    corrupted: vec![basename(&v1_json_path)?]
                 },
             ),
             ProblemSummary::new(
@@ -4227,8 +4214,8 @@ fn test_stale_git_stub_with_corrupted_json_leftover() -> Result<()> {
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: basename(&v1_json_path)?,
+                ProblemKind::BlessedVersionNeedsRestore {
+                    corrupted: vec![basename(&v1_json_path)?]
                 },
             ),
             ProblemSummary::new(
@@ -4270,26 +4257,18 @@ fn test_two_corrupted_copies_restored_once() -> Result<()> {
         "two_corrupted_copies_restored_once.txt",
         &rendered,
     );
-    // BUG: here, there is one problem per corrupted copy, each with a fix that
-    // writes the same Git stub.
     assert_eq!(
         summaries,
-        [
-            ProblemSummary::new(
-                "versioned-health",
-                "1.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: basename(&v1_json_path)?,
-                },
-            ),
-            ProblemSummary::new(
-                "versioned-health",
-                "1.0.0",
-                ProblemKind::BlessedVersionCorruptedLocal {
-                    basename: basename(&v1_git_stub_path)?,
-                },
-            )
-        ],
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionNeedsRestore {
+                corrupted: vec![
+                    basename(&v1_json_path)?,
+                    basename(&v1_git_stub_path)?,
+                ],
+            },
+        )],
     );
 
     env.generate_documents(&apis)?;
