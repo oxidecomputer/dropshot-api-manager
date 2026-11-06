@@ -11,11 +11,12 @@
 - `generate` now replaces a corrupted local file for a blessed version atomically. Previously, it deleted the file before writing the restored copy, so an interruption in between could leave the version with no file.
 - A blessed version whose local file is missing and whose storage format (JSON or Git stub) can't be determined is now reported. Previously, only the error about determining its first commit was reported, not the missing file.
 - A corrupted local file for a blessed version whose storage format can't be determined is no longer offered regeneration as JSON, which could have changed its storage format.
+- A corrupted file next to a valid copy of the same blessed version is now removed (or replaced by a storage conversion) instead of being regenerated.
 
 ### Changed
 
 - On Unix, errors from Git and Jujutsu commands, including reading Git stub contents, now report `exit code: N` instead of `exit status: N`, matching Windows.
-- If a blessed version's local files are corrupted, the fixes now mention every corrupted file that is removed. If both the `.json` and `.json.gitstub` files are corrupted, it is now represented as a single problem.
+- If a blessed version's local files are corrupted, the fixes now mention every corrupted file that is removed or replaced. If both the `.json` and `.json.gitstub` files are corrupted, it is now represented as a single problem.
 - Updated git-stub-vcs to 0.1.1.
 
 ## [0.9.0] - 2026-10-30

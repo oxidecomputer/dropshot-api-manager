@@ -3987,11 +3987,8 @@ fn test_corrupted_extra_with_unknown_storage_reported_for_deletion()
     check_with_first_commit_unknown(
         &env,
         "corrupted_extra_with_unknown_storage.txt",
-        // BUG: we offer to regenerate the extra file as JSON, which rewrites
-        // the valid copy, instead of the right thing to do which is to delete
-        // it.
-        vec![ProblemKind::BlessedVersionNeedsRestore {
-            corrupted: vec![basename(&extra)?],
+        vec![ProblemKind::BlessedVersionCorruptedExtra {
+            basename: basename(&extra)?,
         }],
     )
 }
@@ -4033,15 +4030,13 @@ fn test_corrupted_extra_next_to_valid_copy_deleted() -> Result<()> {
         "corrupted_extra_next_to_valid_copy.txt",
         &rendered,
     );
-    // BUG: we offer to regenerate the file which rewrites the valid copy. We
-    // should offer to delete it instead.
     assert_eq!(
         summaries,
         [ProblemSummary::new(
             "versioned-health",
             "1.0.0",
-            ProblemKind::BlessedVersionNeedsRestore {
-                corrupted: vec![basename(&extra)?]
+            ProblemKind::BlessedVersionCorruptedExtra {
+                basename: basename(&extra)?,
             },
         )],
     );
@@ -4083,24 +4078,13 @@ fn test_corrupted_extra_at_conversion_target() -> Result<()> {
         "corrupted_extra_at_conversion_target.txt",
         &rendered,
     );
-    // BUG: the extra file's regeneration and the conversion are separate fixes
-    // that both write the Git stub.
     assert_eq!(
         summaries,
-        [
-            ProblemSummary::new(
-                "versioned-health",
-                "1.0.0",
-                ProblemKind::BlessedVersionNeedsRestore {
-                    corrupted: vec![basename(&v1_git_stub_path)?]
-                },
-            ),
-            ProblemSummary::new(
-                "versioned-health",
-                "1.0.0",
-                ProblemKind::BlessedVersionShouldBeGitStub,
-            ),
-        ],
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionShouldBeGitStub,
+        )],
     );
 
     env.generate_documents(&apis)?;
@@ -4138,18 +4122,9 @@ fn test_corrupted_extra_at_json_conversion_target() -> Result<()> {
         "corrupted_extra_at_json_conversion_target.txt",
         &rendered,
     );
-    // BUG: the extra file's regeneration and the conversion are separate fixes
-    // that both write to the same JSON file.
     assert_eq!(
         summaries,
         [
-            ProblemSummary::new(
-                "versioned-health",
-                "1.0.0",
-                ProblemKind::BlessedVersionNeedsRestore {
-                    corrupted: vec![basename(&v1_json_path)?]
-                },
-            ),
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
@@ -4203,22 +4178,20 @@ fn test_stale_git_stub_with_corrupted_json_extra() -> Result<()> {
         "stale_git_stub_with_corrupted_json_extra.txt",
         &rendered,
     );
-    // BUG: the extra file's regeneration and the conversion are separate fixes
-    // that both write the Git stub.
     assert_eq!(
         summaries,
         [
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::BlessedVersionNeedsRestore {
-                    corrupted: vec![basename(&v1_json_path)?]
-                },
+                ProblemKind::GitStubCommitStale,
             ),
             ProblemSummary::new(
                 "versioned-health",
                 "1.0.0",
-                ProblemKind::GitStubCommitStale,
+                ProblemKind::BlessedVersionCorruptedExtra {
+                    basename: basename(&v1_json_path)?,
+                },
             ),
         ],
     );
