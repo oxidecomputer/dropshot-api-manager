@@ -1,0 +1,62 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 4 OpenAPI documents...
+     Failure versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       error: The first commit for this blessed version could not be determined.
+              This may indicate a corrupted repository or other VCS-related
+              issue. Git stub storage requires complete VCS history access:
+              command failed: "fake-git" "log" "-m" "--diff-filter=A"
+              "--format=%H" "<merge base>" "--"
+              "documents/versioned-health/versioned-health-1.0.0-da85d6.json":
+              exit code: 128
+              stderr:
+              -----
+              fatal: simulated git failure for testing (diff_filter_a)
+              
+              -----
+              
+     Failure versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+       error: The first commit for this blessed version could not be determined.
+              This may indicate a corrupted repository or other VCS-related
+              issue. Git stub storage requires complete VCS history access:
+              command failed: "fake-git" "log" "-m" "--diff-filter=A"
+              "--format=%H" "<merge base>" "--"
+              "documents/versioned-health/versioned-health-2.0.0-511899.json":
+              exit code: 128
+              stderr:
+              -----
+              fatal: simulated git failure for testing (diff_filter_a)
+              
+              -----
+              
+     Failure versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+       error: The first commit for this blessed version could not be determined.
+              This may indicate a corrupted repository or other VCS-related
+              issue. Git stub storage requires complete VCS history access:
+              command failed: "fake-git" "log" "-m" "--diff-filter=A"
+              "--format=%H" "<merge base>" "--"
+              "documents/versioned-health/versioned-health-3.0.0-05def5.json":
+              exit code: 128
+              stderr:
+              -----
+              fatal: simulated git failure for testing (diff_filter_a)
+              
+              -----
+              
+       Stale versioned-health (versioned v4.0.0 (added locally)): Versioned Health API
+     problem: No OpenAPI document was found for this locally-added API version.
+              This is normal if you have added or changed this API version.
+              This tool can generate the file for you.
+         fix: will write new file versioned-health/versioned-health-4.0.0-
+              601ed7.json from generated
+       Stale versioned-health "latest" symlink
+     problem: "Latest" symlink for versioned API "versioned-health" is stale:
+              points to versioned-health-3.0.0-05def5.json, but should be
+              versioned-health-4.0.0-601ed7.json
+         fix: will update symlink to point to versioned-health-4.0.0-601ed7.json
+     -------
+     Failure 4 documents checked: 0 fresh, 1 stale, 3 failed, 1 other problem
+             (fix failures, then run test-openapi-manager generate to update)

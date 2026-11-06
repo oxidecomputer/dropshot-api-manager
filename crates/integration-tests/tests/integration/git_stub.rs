@@ -321,9 +321,13 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
 struct V1GitStub {
     /// The commit that added v1 and v2 (their Git stubs will point at it).
     first_commit: String,
+    /// The unrelated commit after it. (In this commit, v1 is still stored as
+    /// JSON.)
+    later_commit: String,
     json_path: Utf8PathBuf,
     json_contents: String,
     git_stub_path: Utf8PathBuf,
+    git_stub_contents: String,
 }
 
 fn v1_git_stub_setup(env: &TestEnvironment) -> Result<V1GitStub> {
@@ -337,12 +341,21 @@ fn v1_git_stub_setup(env: &TestEnvironment) -> Result<V1GitStub> {
     // Make an unrelated intermediate commit so we ensure that the Git stubs
     // point at the commit which introduced v1/v2, not this unrelated one.
     env.make_unrelated_commit("intermediate")?;
+    let later_commit = env.get_current_commit_hash()?;
     env.generate_documents(&versioned_health_git_stub_apis()?)?;
     env.commit_documents()?;
     let git_stub_path = env
         .find_versioned_git_stub_path("versioned-health", "1.0.0")?
         .context("v1 should be a Git stub once v3 is added")?;
-    Ok(V1GitStub { first_commit, json_path, json_contents, git_stub_path })
+    let git_stub_contents = env.read_file(&git_stub_path)?;
+    Ok(V1GitStub {
+        first_commit,
+        later_commit,
+        json_path,
+        json_contents,
+        git_stub_path,
+        git_stub_contents,
+    })
 }
 
 /// Test that Git stubs work correctly after reloading from a different state.
@@ -3875,6 +3888,415 @@ fn test_missing_git_stub_restored_as_json_with_storage_disabled() -> Result<()>
     assert_stored_as_json(&env, "1.0.0")?;
     assert_eq!(env.read_file(&v1_json_path)?, v1_json_contents);
     let result = check_apis_up_to_date(env.environment(), &json_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Sets up a test environment, returning it and v1's JSON path.
+fn env_with_v1_json(
+    apis: &ManagedApis,
+) -> Result<(TestEnvironment, Utf8PathBuf)> {
+    let env = TestEnvironment::new_git()?;
+    env.generate_documents(apis)?;
+    env.commit_documents()?;
+    let v1_json_path = env
+        .find_versioned_document_path("versioned-health", "1.0.0")?
+        .context("v1 should exist as JSON")?;
+    Ok((env, v1_json_path))
+}
+
+/// Snapshots and checks the scenario where v4 is added while first-commit
+/// lookups fail.
+///
+/// `v1_extra` is a list of problems specific to v1 -- this is snapshotted.
+fn check_with_first_commit_unknown(
+    env: &TestEnvironment,
+    snapshot_name: &str,
+    v1_extra: Vec<ProblemKind>,
+) -> Result<()> {
+    let merge_base = env.get_current_commit_hash()?;
+    use_fake_git(FakeGitFail::DiffFilterA);
+    let v4_apis = versioned_health_with_v4_git_stub_apis()?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v4_apis)?;
+    assert_eq!(result, CheckResult::Failures);
+    let rendered = rendered.replace(&merge_base, "<merge base>");
+    crate::snapshot::assert_render_snapshot(env, snapshot_name, &rendered);
+
+    let expected: Vec<_> =
+        std::iter::once(ProblemKind::GitStubFirstCommitUnknown)
+            .chain(v1_extra)
+            .map(|kind| ProblemSummary::new("versioned-health", "1.0.0", kind))
+            .chain([
+                ProblemSummary::new(
+                    "versioned-health",
+                    "2.0.0",
+                    ProblemKind::GitStubFirstCommitUnknown,
+                ),
+                ProblemSummary::new(
+                    "versioned-health",
+                    "3.0.0",
+                    ProblemKind::GitStubFirstCommitUnknown,
+                ),
+                ProblemSummary::new(
+                    "versioned-health",
+                    "4.0.0",
+                    ProblemKind::LocalVersionMissingLocal,
+                ),
+                ProblemSummary::for_api(
+                    "versioned-health",
+                    ProblemKind::LatestLinkStale,
+                ),
+            ])
+            .collect();
+    assert_eq!(summaries, expected);
+    Ok(())
+}
+
+/// Tests that a missing file with unknown storage format must be reported and
+/// handled appropriately.
+#[test]
+fn test_missing_file_with_unknown_storage_reported() -> Result<()> {
+    let (env, v1_json_path) =
+        env_with_v1_json(&versioned_health_git_stub_apis()?)?;
+    std::fs::remove_file(env.workspace_root().join(&v1_json_path))
+        .with_context(|| format!("failed to remove {v1_json_path}"))?;
+
+    check_with_first_commit_unknown(
+        &env,
+        "missing_file_with_unknown_storage.txt",
+        // BUG: the missing file isn't reported.
+        vec![],
+    )
+}
+
+/// Tests that a corrupted file with unknown storage format must be reported and
+/// handled appropriately.
+#[test]
+fn test_corrupted_file_with_unknown_storage_not_regenerated() -> Result<()> {
+    let (env, v1_json_path) =
+        env_with_v1_json(&versioned_health_git_stub_apis()?)?;
+    env.create_file(&v1_json_path, CONFLICTED_CONTENTS)?;
+
+    check_with_first_commit_unknown(
+        &env,
+        "corrupted_file_with_unknown_storage.txt",
+        // BUG: we offer to regenerate the file as JSON, though the storage
+        // format is unknown.
+        vec![ProblemKind::BlessedVersionCorruptedLocal {
+            basename: basename(&v1_json_path)?,
+        }],
+    )
+}
+
+/// Tests that with unknown storage there's no conversion, so a corrupted
+/// leftover file is still deleted.
+#[test]
+fn test_corrupted_leftover_with_unknown_storage_reported_for_deletion()
+-> Result<()> {
+    let (env, v1_json_path) =
+        env_with_v1_json(&versioned_health_git_stub_apis()?)?;
+    let leftover = Utf8PathBuf::from(format!("{v1_json_path}.gitstub"));
+    env.create_file(&leftover, CONFLICTED_CONTENTS)?;
+
+    check_with_first_commit_unknown(
+        &env,
+        "corrupted_leftover_with_unknown_storage.txt",
+        // BUG: we offer to regenerate the extra file as JSON, which rewrites
+        // the valid copy, instead of the right thing to do which is to delete
+        // it.
+        vec![ProblemKind::BlessedVersionCorruptedLocal {
+            basename: basename(&leftover)?,
+        }],
+    )
+}
+
+/// Tests that with unknown storage, neither of two valid copies can be called
+/// redundant.
+#[test]
+fn test_duplicate_copies_with_unknown_storage_untouched() -> Result<()> {
+    let (env, v1_json_path) =
+        env_with_v1_json(&versioned_health_git_stub_apis()?)?;
+    let head = env.get_current_commit_hash()?;
+    env.create_file(
+        format!("{v1_json_path}.gitstub"),
+        &format!("{head}:{v1_json_path}\n"),
+    )?;
+
+    check_with_first_commit_unknown(
+        &env,
+        "duplicate_copies_with_unknown_storage.txt",
+        vec![],
+    )
+}
+
+/// Tests that a corrupted extra file next to a valid copy is junk to delete,
+/// not something to regenerate.
+#[test]
+fn test_corrupted_leftover_next_to_valid_copy_deleted() -> Result<()> {
+    let apis = versioned_health_apis()?;
+    let (env, v1_json_path) = env_with_v1_json(&apis)?;
+    let v1_json_contents = env.read_file(&v1_json_path)?;
+    let leftover = Utf8PathBuf::from(format!("{v1_json_path}.gitstub"));
+    env.create_file(&leftover, CONFLICTED_CONTENTS)?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "corrupted_leftover_next_to_valid_copy.txt",
+        &rendered,
+    );
+    // BUG: we offer to regenerate the file which rewrites the valid copy. We
+    // should offer to delete it instead.
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: basename(&leftover)?,
+            },
+        )],
+    );
+
+    env.generate_documents(&apis)?;
+
+    assert!(!env.file_exists(&leftover), "{leftover} should be removed");
+    assert_eq!(env.read_file(&v1_json_path)?, v1_json_contents);
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Tests that JSON -> Git stub conversion, where the target path holds a
+/// corrupted extra file, is handled correctly.
+#[test]
+fn test_corrupted_leftover_at_conversion_target() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_git_stub_apis()?;
+    let V1GitStub {
+        json_path: v1_json_path,
+        json_contents: v1_json_contents,
+        git_stub_path: v1_git_stub_path,
+        git_stub_contents: v1_git_stub_contents,
+        ..
+    } = v1_git_stub_setup(&env)?;
+
+    // Here: v1 should be a Git stub, but we simulate the scenario where the
+    // stub is corrupted and a valid JSON copy is present.
+    env.create_file(&v1_json_path, &v1_json_contents)?;
+    env.create_file(&v1_git_stub_path, CONFLICTED_CONTENTS)?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "corrupted_leftover_at_conversion_target.txt",
+        &rendered,
+    );
+    // BUG: the extra file's regeneration and the conversion are separate fixes
+    // that both write the Git stub.
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: basename(&v1_git_stub_path)?,
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionShouldBeGitStub,
+            ),
+        ],
+    );
+
+    env.generate_documents(&apis)?;
+
+    assert_eq!(env.read_file(&v1_git_stub_path)?, v1_git_stub_contents);
+    assert!(!env.file_exists(&v1_json_path), "{v1_json_path} removed");
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Tests that Git stub -> JSON conversion, where the target path holds a
+/// corrupted extra file, is handled correctly.
+#[test]
+fn test_corrupted_leftover_at_json_conversion_target() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let V1GitStub {
+        json_path: v1_json_path,
+        json_contents: v1_json_contents,
+        git_stub_path: v1_git_stub_path,
+        ..
+    } = v1_git_stub_setup(&env)?;
+
+    // With Git stub storage disabled, v1 should be JSON. Simulate the situation
+    // where the JSON file's contents are corrupted.
+    env.create_file(&v1_json_path, CONFLICTED_CONTENTS)?;
+    let json_apis = versioned_health_apis()?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &json_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "corrupted_leftover_at_json_conversion_target.txt",
+        &rendered,
+    );
+    // BUG: the extra file's regeneration and the conversion are separate fixes
+    // that both write to the same JSON file.
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: basename(&v1_json_path)?,
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+        ],
+    );
+
+    env.generate_documents(&json_apis)?;
+
+    assert_eq!(env.read_file(&v1_json_path)?, v1_json_contents);
+    assert!(!env.file_exists(&v1_git_stub_path), "{v1_git_stub_path} removed");
+    let result = check_apis_up_to_date(env.environment(), &json_apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+#[test]
+fn test_stale_git_stub_with_corrupted_json_leftover() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_git_stub_apis()?;
+    let V1GitStub {
+        first_commit,
+        later_commit,
+        json_path: v1_json_path,
+        git_stub_path: v1_git_stub_path,
+        git_stub_contents: v1_git_stub_contents,
+        ..
+    } = v1_git_stub_setup(&env)?;
+
+    env.create_file(
+        &v1_git_stub_path,
+        &format!("{later_commit}:{v1_json_path}\n"),
+    )?;
+    env.create_file(&v1_json_path, CONFLICTED_CONTENTS)?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    let rendered = rendered
+        .replace(&first_commit, "<first commit>")
+        .replace(&later_commit, "<later commit>");
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "stale_git_stub_with_corrupted_json_leftover.txt",
+        &rendered,
+    );
+    // BUG: the extra file's regeneration and the conversion are separate fixes
+    // that both write the Git stub.
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: basename(&v1_json_path)?,
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::GitStubCommitStale,
+            ),
+        ],
+    );
+
+    env.generate_documents(&apis)?;
+
+    assert_eq!(env.read_file(&v1_git_stub_path)?, v1_git_stub_contents);
+    assert!(!env.file_exists(&v1_json_path), "{v1_json_path} removed");
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+#[test]
+fn test_two_corrupted_copies_restored_once() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    let apis = versioned_health_git_stub_apis()?;
+    let V1GitStub {
+        json_path: v1_json_path,
+        git_stub_path: v1_git_stub_path,
+        git_stub_contents: v1_git_stub_contents,
+        ..
+    } = v1_git_stub_setup(&env)?;
+    env.create_file(&v1_git_stub_path, CONFLICTED_CONTENTS)?;
+    env.create_file(&v1_json_path, CONFLICTED_CONTENTS)?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "two_corrupted_copies_restored_once.txt",
+        &rendered,
+    );
+    // BUG: here, there is one problem per corrupted copy, each with a fix that
+    // writes the same Git stub.
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: basename(&v1_json_path)?,
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: basename(&v1_git_stub_path)?,
+                },
+            )
+        ],
+    );
+
+    env.generate_documents(&apis)?;
+
+    assert_eq!(env.read_file(&v1_git_stub_path)?, v1_git_stub_contents);
+    assert!(!env.file_exists(&v1_json_path), "{v1_json_path} removed");
+    let result = check_apis_up_to_date(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::Success);
 
     Ok(())
