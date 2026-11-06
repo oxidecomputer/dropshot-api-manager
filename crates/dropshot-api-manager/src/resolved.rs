@@ -1318,13 +1318,19 @@ fn restore_target(
     }
 }
 
+fn unparseable_with_reason(unparseable: &LocalApiUnparseable) -> String {
+    format!(
+        "{} ({})",
+        unparseable.name,
+        InlineErrorChain::new(&unparseable.reason),
+    )
+}
+
 fn file_with_reason(doc_file: &LocalApiDocFile) -> String {
     match doc_file {
-        LocalApiDocFile::Unparseable(unparseable) => format!(
-            "{} ({})",
-            unparseable.name,
-            InlineErrorChain::new(&unparseable.reason),
-        ),
+        LocalApiDocFile::Unparseable(unparseable) => {
+            unparseable_with_reason(unparseable)
+        }
         LocalApiDocFile::Valid(_) => doc_file.doc_file_name().to_string(),
     }
 }
@@ -1333,12 +1339,11 @@ fn orphaned_message(doc_file: &LocalApiDocFile) -> String {
     match doc_file {
         LocalApiDocFile::Unparseable(unparseable) => format!(
             "A local file was found that does not correspond to a supported \
-             version of this API and could not be loaded: {} ({}).  This can \
+             version of this API and could not be loaded: {}.  This can \
              happen if a merge left conflict markers in a file for a version \
              that was renumbered or retired.  This tool can remove the \
              unused file for you.",
-            unparseable.name,
-            InlineErrorChain::new(&unparseable.reason),
+            unparseable_with_reason(unparseable),
         ),
         // Orphaned valid files get a hint about whether the list of supported
         // versions has changed.
@@ -1372,10 +1377,9 @@ fn extra_local_doc_message(doc_file: &LocalApiDocFile) -> String {
 
 fn corrupted_local_message(local_file: &LocalApiUnparseable) -> String {
     format!(
-        "Local file for this blessed version could not be loaded: {} ({}).  \
-         This tool can regenerate the file from the blessed version for you.",
-        local_file.name,
-        InlineErrorChain::new(&local_file.reason),
+        "Local file for this blessed version could not be loaded: {}.  This \
+         tool can regenerate the file from the blessed version for you.",
+        unparseable_with_reason(local_file),
     )
 }
 
@@ -1387,9 +1391,8 @@ fn lockstep_stale_message(
         // A file that couldn't be parsed.
         LocalApiDocFile::Unparseable(unparseable) => format!(
             "For this lockstep API, the local file could not be loaded: \
-             {} ({}).  This tool can regenerate the file for you.",
-            unparseable.name,
-            InlineErrorChain::new(&unparseable.reason),
+             {}.  This tool can regenerate the file for you.",
+            unparseable_with_reason(unparseable),
         ),
         // A valid file that needs to be updated.
         LocalApiDocFile::Valid(_) => format!(
