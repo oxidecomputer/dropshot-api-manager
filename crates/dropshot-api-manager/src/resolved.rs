@@ -597,6 +597,7 @@ impl<'a> VersionProblem<'a> {
             } => Some(Fix::RestoreFromBlessed {
                 blessed,
                 git_stub: git_stub.as_ref(),
+                corrupted: None,
             }),
             VersionProblem::BlessedVersionExtraLocalDoc { doc_file } => {
                 Some(Fix::DeleteFiles {
@@ -658,10 +659,10 @@ impl<'a> VersionProblem<'a> {
                 local_file,
                 blessed,
                 git_stub,
-            } => Some(Fix::RegenerateFromBlessed {
-                local_file,
+            } => Some(Fix::RestoreFromBlessed {
                 blessed,
                 git_stub: git_stub.as_ref(),
+                corrupted: Some(local_file),
             }),
             VersionProblem::DuplicateLocalFile { local_file } => {
                 Some(Fix::DeleteFiles {
@@ -707,23 +708,16 @@ pub enum Fix<'a> {
         local_file: &'a LocalApiValid,
         blessed: &'a BlessedApiDocFile,
     },
-    /// Regenerate a corrupted local file from the blessed content.
-    RegenerateFromBlessed {
-        local_file: &'a LocalApiUnparseable,
-        blessed: &'a BlessedApiDocFile,
-        /// If Some, regenerate as a Git stub instead of JSON.
-        git_stub: Option<&'a GitStub>,
-    },
-    /// Restore a missing blessed file from the blessed content, or as a Git
-    /// stub.
+    /// Restore a blessed file from the blessed content, or as a Git stub.
     ///
-    /// Unlike `RegenerateFromBlessed`, there is no existing `local_file` to
-    /// delete. The target path is derived from
-    /// `blessed.versioned_doc_file_name()`.
+    /// The target path is derived from `blessed.versioned_doc_file_name()`.
     RestoreFromBlessed {
         blessed: &'a BlessedApiDocFile,
         /// If Some, write as a Git stub instead of JSON.
         git_stub: Option<&'a GitStub>,
+        /// A corrupted local file to remove first. This is expected to have the
+        /// same hash as `blessed`, but possibly a different kind.
+        corrupted: Option<&'a LocalApiUnparseable>,
     },
     /// Update a Git stub whose commit hash has become stale (e.g.,
     /// after a rebase).
@@ -792,32 +786,21 @@ impl Display for Fix<'_> {
                     local_file.doc_file_name().path()
                 )?;
             }
-            Fix::RegenerateFromBlessed { blessed, git_stub, .. } => {
+            Fix::RestoreFromBlessed { blessed, git_stub, corrupted } => {
+                let verb = match corrupted {
+                    Some(_) => "regenerate",
+                    None => "restore",
+                };
                 if git_stub.is_some() {
                     writeln!(
                         f,
-                        "regenerate {} from blessed content as Git stub",
+                        "{verb} {} from blessed content as Git stub",
                         blessed.versioned_doc_file_name().to_git_stub().path()
                     )?;
                 } else {
                     writeln!(
                         f,
-                        "regenerate {} from blessed content",
-                        blessed.versioned_doc_file_name().path()
-                    )?;
-                }
-            }
-            Fix::RestoreFromBlessed { blessed, git_stub } => {
-                if git_stub.is_some() {
-                    writeln!(
-                        f,
-                        "restore {} from blessed content as Git stub",
-                        blessed.versioned_doc_file_name().to_git_stub().path()
-                    )?;
-                } else {
-                    writeln!(
-                        f,
-                        "restore {} from blessed content",
+                        "{verb} {} from blessed content",
                         blessed.versioned_doc_file_name().path()
                     )?;
                 }
@@ -959,15 +942,7 @@ impl Fix<'_> {
                     format!("created {}: {:?}", json_path, overwrite_status),
                 ])
             }
-            Fix::RegenerateFromBlessed { local_file, blessed, git_stub } => {
-                // This invariant is upheld in the partition loop.
-                assert_eq!(
-                    local_file.name.to_json_filename().as_versioned(),
-                    Some(blessed.versioned_doc_file_name()),
-                    "corrupted file should be the same document as the \
-                     blessed file it is replaced with",
-                );
-
+            Fix::RestoreFromBlessed { blessed, git_stub, corrupted } => {
                 // The target comes from the blessed name, not the corrupted
                 // file's, whose kind may differ.
                 let target = match git_stub {
@@ -975,64 +950,58 @@ impl Fix<'_> {
                     None => blessed.versioned_doc_file_name().clone(),
                 };
                 let target_path = root.join(target.path());
-
                 let mut rv = Vec::new();
-                // A corrupted file at the target is overwritten atomically
-                // below instead, so that users don't see the intermediate
-                // period where there's no file on disk.
-                if local_file.name.as_versioned() != Some(&target) {
-                    let local_path = root.join(local_file.name.path());
-                    match fs_err::remove_file(&local_path) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(e.into()),
+                if let Some(corrupted) = corrupted {
+                    // This invariant is upheld in the partition loop.
+                    assert_eq!(
+                        corrupted.name.to_json_filename().as_versioned(),
+                        Some(blessed.versioned_doc_file_name()),
+                        "corrupted file should be the same document as the \
+                         blessed file it is replaced with",
+                    );
+                    // A corrupted file at the target is overwritten atomically
+                    // below instead, so that users don't see the intermediate
+                    // period where there's no file on disk.
+                    if corrupted.name.as_versioned() != Some(&target) {
+                        let corrupted_path = root.join(corrupted.name.path());
+                        match fs_err::remove_file(&corrupted_path) {
+                            Ok(()) => {}
+                            Err(e)
+                                if e.kind() == std::io::ErrorKind::NotFound => {
+                            }
+                            Err(e) => return Err(e.into()),
+                        }
+                        rv.push(format!(
+                            "removed corrupted file {}",
+                            corrupted_path
+                        ));
                     }
-                    rv.push(format!("removed corrupted file {}", local_path));
                 }
 
-                if let Some(git_stub) = git_stub {
-                    // Write in canonical format (forward slashes, trailing newline).
-                    let overwrite_status = overwrite_file(
-                        &target_path,
-                        git_stub.to_file_contents().as_bytes(),
-                    )?;
-                    rv.push(format!(
-                        "created Git stub {}: {:?}",
-                        target_path, overwrite_status
-                    ));
-                } else {
-                    let overwrite_status =
-                        overwrite_file(&target_path, blessed.contents())?;
-                    rv.push(format!(
-                        "regenerated {} from blessed content: {:?}",
-                        target_path, overwrite_status
-                    ));
-                }
+                let overwrite_status = match git_stub {
+                    None => overwrite_file(&target_path, blessed.contents())?,
+                    Some(git_stub) => {
+                        // Write in canonical format (forward slashes,
+                        // trailing newline).
+                        overwrite_file(
+                            &target_path,
+                            git_stub.to_file_contents().as_bytes(),
+                        )?
+                    }
+                };
+                let verb = match corrupted {
+                    Some(_) => "regenerated",
+                    None => "restored",
+                };
+                let suffix = match git_stub {
+                    Some(_) => " as Git stub",
+                    None => "",
+                };
+                rv.push(format!(
+                    "{verb} {} from blessed content{}: {:?}",
+                    target_path, suffix, overwrite_status
+                ));
                 Ok(rv)
-            }
-            Fix::RestoreFromBlessed { blessed, git_stub } => {
-                if let Some(git_stub) = git_stub {
-                    let git_stub_path = root.join(
-                        blessed.versioned_doc_file_name().to_git_stub().path(),
-                    );
-                    let overwrite_status = overwrite_file(
-                        &git_stub_path,
-                        git_stub.to_file_contents().as_bytes(),
-                    )?;
-                    Ok(vec![format!(
-                        "restored Git stub {}: {:?}",
-                        git_stub_path, overwrite_status
-                    )])
-                } else {
-                    let path =
-                        root.join(blessed.versioned_doc_file_name().path());
-                    let overwrite_status =
-                        overwrite_file(&path, blessed.contents())?;
-                    Ok(vec![format!(
-                        "restored {} from blessed content: {:?}",
-                        path, overwrite_status
-                    )])
-                }
             }
             Fix::UpdateGitStub { local_file, git_stub } => {
                 let git_stub_path =
