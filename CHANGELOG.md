@@ -3,6 +3,8 @@
 <!-- next-header -->
 ## Unreleased - ReleaseDate
 
+## [0.9.1] - 2026-11-06
+
 ### Added
 
 - `ValidationContext::version` returns the version being validated, or `None` for lockstep APIs. This is shorthand for `cx.file_name().version()`.
@@ -183,6 +185,7 @@ Updated drift to 0.1.1 to enable proper handling of OpenAPI type graph cycles.
 Initial release.
 
 <!-- next-url -->
+[0.9.1]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.9.1
 [0.9.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.9.0
 [0.8.0]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.8.0
 [0.7.2]: https://github.com/oxidecomputer/dropshot-api-manager/releases/tag/dropshot-api-manager-0.7.2
