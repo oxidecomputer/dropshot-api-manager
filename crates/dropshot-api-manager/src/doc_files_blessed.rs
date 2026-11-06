@@ -59,6 +59,10 @@ impl BlessedApiDocFile {
     /// Panics if the document file is for a lockstep API. Blessed files only
     /// exist for versioned APIs.
     pub fn new(inner: ApiDocFile) -> Self {
+        // Blessed contents are always full JSON, even when stored as a stub at
+        // the merge base; store them using the JSON name so that at restore
+        // time they're written with `.json` ending.
+        let inner = inner.into_json_named();
         let versioned_name = inner
             .doc_file_name()
             .as_versioned()
@@ -78,6 +82,9 @@ impl BlessedApiDocFile {
     /// Unlike `doc_file_name()` which returns `&ApiDocFileName`, this method
     /// returns the more specific `&VersionedApiDocFileName` since blessed
     /// files are always versioned.
+    ///
+    /// This is always a JSON-kind file, even when the file is stored as a Git
+    /// stub at the merge base.
     pub fn versioned_doc_file_name(&self) -> &VersionedApiDocFileName {
         &self.versioned_name
     }

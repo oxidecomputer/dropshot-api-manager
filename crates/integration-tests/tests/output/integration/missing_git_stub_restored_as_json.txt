@@ -9,9 +9,9 @@
               missing a local OpenAPI document. This can happen with dependent
               commits or PRs. This tool can restore the file from the blessed
               version for you: versioned-health/versioned-health-1.0.0-
-              da85d6.json.gitstub
-         fix: will restore versioned-health/versioned-health-1.0.0-
-              da85d6.json.gitstub from blessed content
+              da85d6.json
+         fix: will restore versioned-health/versioned-health-1.0.0-da85d6.json
+              from blessed content
        Stale versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
      problem: Blessed version is stored as a Git stub, but should be stored as
               JSON. This tool can perform the conversion for you.
