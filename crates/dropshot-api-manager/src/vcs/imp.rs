@@ -4,7 +4,7 @@ use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use git_stub::{GitCommitHash, GitStub};
 use git_stub_vcs::Vcs;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 /// Newtype String wrapper identifying a VCS revision.
 ///
@@ -241,9 +241,30 @@ pub(super) fn do_run_bytes(cmd: &mut Command) -> anyhow::Result<Vec<u8>> {
         {}\n\
         -----\n",
         label,
-        output.status,
+        describe_exit_status(output.status),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Describes the exit status as a string.
+#[cfg(unix)]
+fn describe_exit_status(status: ExitStatus) -> String {
+    match status.code() {
+        // Use "exit code" for consistency across Unix and Windows.
+        Some(code) => format!("exit code: {code}"),
+        // If there isn't a code, then a signal killed the process -- signals
+        // don't exist on Windows so we can use the default Display
+        // implementation.
+        None => status.to_string(),
+    }
+}
+
+/// Describes the exit status as a string.
+#[cfg(not(unix))]
+fn describe_exit_status(status: ExitStatus) -> String {
+    // Display is already "exit code: N" here, and prints NTSTATUS crash codes
+    // as hex.
+    status.to_string()
 }
 
 /// Runs a command, returning stdout on success and an error including
@@ -267,4 +288,41 @@ pub(super) fn cmd_label(cmd: &Command) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn test_describe_exit_status_unix() {
+        use super::describe_exit_status;
+        use std::{os::unix::process::ExitStatusExt, process::ExitStatus};
+
+        // from_raw takes a wait status -- see
+        // https://doc.rust-lang.org/std/os/unix/process/trait.ExitStatusExt.html#tymethod.from_raw.
+        assert_eq!(
+            describe_exit_status(ExitStatus::from_raw(128 << 8)),
+            "exit code: 128"
+        );
+        assert_eq!(
+            describe_exit_status(ExitStatus::from_raw(9)),
+            "signal: 9 (SIGKILL)"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_describe_exit_status_windows() {
+        use super::describe_exit_status;
+        use std::{os::windows::process::ExitStatusExt, process::ExitStatus};
+
+        assert_eq!(
+            describe_exit_status(ExitStatus::from_raw(128)),
+            "exit code: 128"
+        );
+        assert_eq!(
+            describe_exit_status(ExitStatus::from_raw(0xC000_0005)),
+            "exit code: 0xc0000005"
+        );
+    }
 }
