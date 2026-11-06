@@ -18,6 +18,11 @@
               
               -----
               
+       error: This version is blessed, and it's a supported version, but it's
+              missing a local OpenAPI document.  This tool can restore the file
+              from the blessed version once the error about determining a first
+              commit is fixed (that determines whether the file should be stored
+              as JSON or as a Git stub).
      Failure versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
        error: The first commit for this blessed version could not be determined.
               This may indicate a corrupted repository or other VCS-related

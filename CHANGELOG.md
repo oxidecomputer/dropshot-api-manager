@@ -9,6 +9,8 @@
 - The `latest` symlink for a blessed version is now checked against the exact file name, including the hash. Previously, a symlink pointing at a nonexistent file for the right version was accepted.
 - Previously, while restoring a blessed version as full JSON, we could write out the full JSON contents to the corresponding `.json.gitstub` file. The document is now always written to the `.json` path.
 - `generate` now replaces a corrupted local file for a blessed version atomically. Previously, it deleted the file before writing the restored copy, so an interruption in between could leave the version with no file.
+- A blessed version whose local file is missing and whose storage format (JSON or Git stub) can't be determined is now reported. Previously, only the error about determining its first commit was reported, not the missing file.
+- A corrupted local file for a blessed version whose storage format can't be determined is no longer offered regeneration as JSON, which could have changed its storage format.
 
 ### Changed
 
