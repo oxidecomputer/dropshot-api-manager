@@ -1,0 +1,40 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 4 OpenAPI documents...
+       Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+       Stale versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+     problem: Local file for this blessed version could not be loaded:
+              versioned-health/versioned-health-3.0.0-05def5.json (parsing as
+              JSON: key must be a string at line 59 column 1).  This tool can
+              regenerate the file from the blessed version for you.
+         fix: will regenerate versioned-health/versioned-health-3.0.0-
+              05def5.json.gitstub from blessed content as Git stub
+     problem: For this blessed version, found an extra OpenAPI document that
+              does not match the blessed (upstream) OpenAPI document: versioned-
+              health/versioned-health-3.0.0-23d303.json (parsing as JSON: key
+              must be a string at line 59 column 1).  This can happen if you
+              created this version of the API in this branch, then merged with
+              an upstream commit that also added the same version number.  In
+              that case, you likely already bumped your local version number
+              (when you merged the list of supported versions in Rust) and this
+              file is vestigial. This tool can remove the unused file for you.
+         fix: will delete file: versioned-health/versioned-health-3.0.0-
+              23d303.json
+       Stale versioned-health (versioned v4.0.0 (added locally)): Versioned Health API
+     problem: No OpenAPI document was found for this locally-added API version.
+              This is normal if you have added or changed this API version.
+              This tool can generate the file for you.
+         fix: will write new file versioned-health/versioned-health-4.0.0-
+              e81e0b.json from generated
+       Stale versioned-health "latest" symlink
+     problem: "Latest" symlink for versioned API "versioned-health" is stale:
+              points to versioned-health-3.0.0-23d303.json, but should be
+              versioned-health-4.0.0-e81e0b.json
+         fix: will update symlink to point to versioned-health-4.0.0-e81e0b.json
+     -------
+       Stale 4 documents checked: 2 fresh, 2 stale, 0 failed, 1 other problem
+             (run test-openapi-manager generate to update)
