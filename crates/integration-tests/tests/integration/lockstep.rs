@@ -234,3 +234,21 @@ fn test_lockstep_version_mismatch() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_lockstep_validation_context_has_no_version() -> Result<()> {
+    static VERSIONS: std::sync::Mutex<Vec<Option<semver::Version>>> =
+        std::sync::Mutex::new(Vec::new());
+
+    let env = TestEnvironment::new_git()?;
+    let apis = lockstep_health_apis()?.with_validation(|_doc, cx| {
+        VERSIONS.lock().unwrap().push(cx.version().cloned());
+    });
+
+    env.generate_documents(&apis)?;
+
+    let versions = VERSIONS.lock().unwrap().clone();
+    assert_eq!(versions, vec![None, None]);
+
+    Ok(())
+}

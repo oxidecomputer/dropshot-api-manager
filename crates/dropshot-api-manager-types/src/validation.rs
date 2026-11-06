@@ -48,6 +48,13 @@ impl<'a> ValidationContext<'a> {
         self.backend.is_blessed()
     }
 
+    /// Returns the version being validated, or `None` for lockstep APIs.
+    ///
+    /// This is shorthand for `file_name().version()`.
+    pub fn version(&self) -> Option<&semver::Version> {
+        self.file_name().version()
+    }
+
     /// Retrieves the versioning strategy for this API.
     pub fn versions(&self) -> &Versions {
         self.backend.versions()
