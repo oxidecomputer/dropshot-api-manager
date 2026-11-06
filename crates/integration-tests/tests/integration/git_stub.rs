@@ -321,6 +321,8 @@ fn test_mixed_first_commits_selective_conversion() -> Result<()> {
 struct V1GitStub {
     /// The commit that added v1 and v2 (their Git stubs will point at it).
     first_commit: String,
+    json_path: Utf8PathBuf,
+    json_contents: String,
     git_stub_path: Utf8PathBuf,
 }
 
@@ -328,6 +330,10 @@ fn v1_git_stub_setup(env: &TestEnvironment) -> Result<V1GitStub> {
     env.generate_documents(&versioned_health_reduced_git_stub_apis()?)?;
     env.commit_documents()?;
     let first_commit = env.get_current_commit_hash()?;
+    let json_path = env
+        .find_versioned_document_path("versioned-health", "1.0.0")?
+        .context("v1 should exist as JSON")?;
+    let json_contents = env.read_file(&json_path)?;
     // Make an unrelated intermediate commit so we ensure that the Git stubs
     // point at the commit which introduced v1/v2, not this unrelated one.
     env.make_unrelated_commit("intermediate")?;
@@ -336,7 +342,7 @@ fn v1_git_stub_setup(env: &TestEnvironment) -> Result<V1GitStub> {
     let git_stub_path = env
         .find_versioned_git_stub_path("versioned-health", "1.0.0")?
         .context("v1 should be a Git stub once v3 is added")?;
-    Ok(V1GitStub { first_commit, git_stub_path })
+    Ok(V1GitStub { first_commit, json_path, json_contents, git_stub_path })
 }
 
 /// Test that Git stubs work correctly after reloading from a different state.
@@ -1775,12 +1781,7 @@ fn test_unparseable_git_stub_regenerated() -> Result<()> {
         ..
     } = v1_git_stub_setup(&env)?;
 
-    let corrupted_content = "<<<<<<< HEAD\n\
-abc123:documents/versioned-health/old.json\n\
-=======\n\
-def456:documents/versioned-health/new.json\n\
->>>>>>> branch\n";
-    env.create_file(&v1_git_stub_path, corrupted_content)?;
+    env.create_file(&v1_git_stub_path, CONFLICTED_CONTENTS)?;
 
     let (result, summaries) =
         check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
@@ -3268,9 +3269,14 @@ fn test_blessed_version_missing_local_is_fixable_git_stub() -> Result<()> {
         versioned_health_with_v4_trivial_v3_apis(Storage::GitStub)?;
 
     // Check should report NeedsUpdate (not Failure).
-    let (result, summaries) =
-        check_apis_with_summaries(env.environment(), &v4_trivial_apis)?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v4_trivial_apis)?;
     assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "missing_json_restored_as_git_stub.txt",
+        &rendered,
+    );
     assert_eq!(
         summaries,
         [
@@ -3672,6 +3678,166 @@ fn test_git_stub_for_locally_added_version_converted_to_json() -> Result<()> {
 
     let result = check_apis_up_to_date(env.environment(), &apis)?;
     assert_eq!(result, CheckResult::Success);
+
+    Ok(())
+}
+
+/// Test that a corrupted Git stub for a version that becomes latest again
+/// (newer version dropped) is regenerated as JSON.
+#[test]
+fn test_corrupted_git_stub_for_latest_version_regenerated_as_json() -> Result<()>
+{
+    let env = TestEnvironment::new_git()?;
+    let v1_v2_v3_apis = versioned_health_git_stub_apis()?;
+
+    env.generate_documents(&versioned_health_reduced_git_stub_apis()?)?;
+    env.commit_documents()?;
+    env.generate_documents(&v1_v2_v3_apis)?;
+    env.commit_documents()?;
+    let v3_json_path = env
+        .find_versioned_document_path("versioned-health", "3.0.0")?
+        .context("v3 should exist as JSON while it is the latest")?;
+    let v3_json_contents = env.read_file(&v3_json_path)?;
+    env.generate_documents(&versioned_health_with_v4_git_stub_apis()?)?;
+    env.commit_documents()?;
+
+    let v3_git_stub_path = env
+        .find_versioned_git_stub_path("versioned-health", "3.0.0")?
+        .context("v3 should be a Git stub once v4 is added")?;
+    env.create_file(&v3_git_stub_path, CONFLICTED_CONTENTS)?;
+    let v4_json_path = env
+        .find_versioned_document_path("versioned-health", "4.0.0")?
+        .context("v4 should exist as JSON")?;
+
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "corrupted_git_stub_latest_regenerated_as_json.txt",
+        &rendered,
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "4.0.0",
+                ProblemKind::LocalDocFileOrphaned {
+                    basename: basename(&v4_json_path)?,
+                    validity: FileValidity::Valid,
+                },
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "3.0.0",
+                ProblemKind::BlessedVersionCorruptedLocal {
+                    basename: basename(&v3_git_stub_path)?
+                },
+            ),
+            ProblemSummary::for_api(
+                "versioned-health",
+                ProblemKind::LatestLinkStale,
+            ),
+        ],
+    );
+
+    // BUG: the restored JSON is written to the Git stub path.
+    assert!(
+        env.generate_documents(&v1_v2_v3_apis).is_err(),
+        "generate should fail its post-fix recheck"
+    );
+    assert!(!env.file_exists(&v3_json_path), "the JSON file is never written");
+    assert_eq!(
+        env.read_file(&v3_git_stub_path)?,
+        v3_json_contents,
+        "the JSON is written into the Git stub's path"
+    );
+    assert!(
+        !env.versioned_latest_document_exists("versioned-health"),
+        "the latest symlink points at the JSON file, which doesn't exist"
+    );
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &v1_v2_v3_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "3.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: basename(&v3_git_stub_path)?,
+            },
+        )],
+    );
+
+    Ok(())
+}
+
+/// Test that a missing blessed stub restored with stub storage disabled is
+/// written as JSON.
+#[test]
+fn test_missing_git_stub_restored_as_json_with_storage_disabled() -> Result<()>
+{
+    let env = TestEnvironment::new_git()?;
+    let V1GitStub {
+        json_path: v1_json_path,
+        json_contents: v1_json_contents,
+        git_stub_path: v1_git_stub_path,
+        ..
+    } = v1_git_stub_setup(&env)?;
+    std::fs::remove_file(env.workspace_root().join(&v1_git_stub_path))
+        .with_context(|| format!("failed to remove {v1_git_stub_path}"))?;
+
+    let json_apis = versioned_health_apis()?;
+    let (result, summaries, rendered) =
+        check_apis_with_render(env.environment(), &json_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "missing_git_stub_restored_as_json.txt",
+        &rendered,
+    );
+    assert_eq!(
+        summaries,
+        [
+            ProblemSummary::new(
+                "versioned-health",
+                "1.0.0",
+                ProblemKind::BlessedVersionMissingLocal,
+            ),
+            ProblemSummary::new(
+                "versioned-health",
+                "2.0.0",
+                ProblemKind::GitStubShouldBeJson,
+            ),
+        ],
+    );
+
+    // BUG: the restored JSON is written to the Git stub path.
+    assert!(
+        env.generate_documents(&json_apis).is_err(),
+        "generate should fail its post-fix recheck"
+    );
+    assert!(!env.file_exists(&v1_json_path), "the JSON file is never written");
+    assert_eq!(
+        env.read_file(&v1_git_stub_path)?,
+        v1_json_contents,
+        "the JSON is written into the Git stub's path"
+    );
+    let (result, summaries) =
+        check_apis_with_summaries(env.environment(), &json_apis)?;
+    assert_eq!(result, CheckResult::NeedsUpdate);
+    assert_eq!(
+        summaries,
+        [ProblemSummary::new(
+            "versioned-health",
+            "1.0.0",
+            ProblemKind::BlessedVersionCorruptedLocal {
+                basename: basename(&v1_git_stub_path)?,
+            },
+        )],
+    );
 
     Ok(())
 }

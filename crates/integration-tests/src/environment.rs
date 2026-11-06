@@ -1297,3 +1297,16 @@ pub fn rel_path_forward_slashes(path: &str) -> String {
 pub fn rel_path_forward_slashes(path: &str) -> String {
     path.to_string()
 }
+
+pub const CONFLICTED_CONTENTS: &str = "<<<<<<< HEAD\n\
+abc123:documents/versioned-health/old.json\n\
+=======\n\
+def456:documents/versioned-health/new.json\n\
+>>>>>>> branch\n";
+
+pub fn basename(path: &Utf8Path) -> Result<String> {
+    Ok(path
+        .file_name()
+        .with_context(|| format!("{path} should have a file name"))?
+        .to_owned())
+}
