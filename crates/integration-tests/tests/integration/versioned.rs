@@ -2353,3 +2353,60 @@ fn test_corrupted_blessed_json_restored() -> Result<()> {
 
     Ok(())
 }
+
+fn bless_versioned_health(
+    env: &TestEnvironment,
+    versions: &[&str],
+) -> Result<()> {
+    let mut paths = Vec::new();
+    for version in versions {
+        let path = env
+            .find_versioned_document_path("versioned-health", version)?
+            .with_context(|| format!("v{version} document should exist"))?;
+        paths.push(path);
+    }
+    let path_refs: Vec<_> = paths.iter().map(|p| p.as_path()).collect();
+    env.git_add(&path_refs)?;
+    env.git_commit(&format!("bless {}", versions.join(", ")))?;
+    Ok(())
+}
+
+#[test]
+fn test_blessed_validation_failure_help_older_versions() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    env.generate_documents(&versioned_health_apis()?)?;
+    bless_versioned_health(&env, &["1.0.0", "2.0.0"])?;
+
+    let apis = versioned_health_apis()?
+        .with_validation(report_error_for_every_version);
+    let (result, _summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Failures);
+
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "blessed_validation_failure_older_versions.txt",
+        &rendered,
+    );
+    Ok(())
+}
+
+#[test]
+fn test_blessed_validation_failure_help_latest_version() -> Result<()> {
+    let env = TestEnvironment::new_git()?;
+    env.generate_documents(&versioned_health_apis()?)?;
+    bless_versioned_health(&env, &["1.0.0", "2.0.0", "3.0.0"])?;
+
+    let apis = versioned_health_apis()?
+        .with_validation(report_error_for_latest_and_unblessed);
+    let (result, _summaries, rendered) =
+        check_apis_with_render(env.environment(), &apis)?;
+    assert_eq!(result, CheckResult::Failures);
+
+    crate::snapshot::assert_render_snapshot(
+        &env,
+        "blessed_validation_failure_latest_version.txt",
+        &rendered,
+    );
+    Ok(())
+}

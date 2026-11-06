@@ -1,0 +1,19 @@
+     -------
+  Generating OpenAPI documents from API definitions ... 
+     Loading local OpenAPI documents from "<documents dir>" ... 
+     Loading blessed OpenAPI documents from VCS revision "main" path "documents"
+     -------
+    Checking 3 OpenAPI documents...
+       Fresh versioned-health (versioned v1.0.0 (blessed)): Versioned Health API
+       Fresh versioned-health (versioned v2.0.0 (blessed)): Versioned Health API
+     Failure versioned-health (versioned v3.0.0 (blessed)): Versioned Health API
+       error: Generated OpenAPI document for API "versioned-health" version
+              3.0.0 is not valid: OpenAPI document validation failed:
+              synthetic validation error
+        help: version 3.0.0 is blessed, so its OpenAPI document can't be
+              changed. To fix these errors, add a new API version that addresses
+              them.
+       Fresh versioned-health "latest" symlink
+     -------
+     Failure 3 documents checked: 3 fresh, 0 stale, 1 failed, 0 other problems
+             (fix failures, then run test-openapi-manager generate to update)

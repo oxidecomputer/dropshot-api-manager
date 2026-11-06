@@ -373,6 +373,7 @@ pub enum VersionProblem<'a> {
     GeneratedValidationError {
         api_ident: ApiIdent,
         version: semver::Version,
+        blessed_help: Option<BlessedValidationHelp>,
         #[source]
         source: anyhow::Error,
     },
@@ -570,6 +571,41 @@ impl<'a> VersionProblem<'a> {
 
     pub fn is_fixable(&self) -> bool {
         self.fix().is_some()
+    }
+
+    pub(crate) fn help(&self) -> Option<String> {
+        // This is an exhaustive match so new variants cause a compile error.
+        match self {
+            VersionProblem::GeneratedValidationError {
+                version,
+                blessed_help: Some(help),
+                ..
+            } => Some(help.message(version)),
+            VersionProblem::GeneratedValidationError {
+                blessed_help: None,
+                ..
+            }
+            | VersionProblem::BlessedVersionNeedsRestore { .. }
+            | VersionProblem::BlessedVersionRestoreBlocked { .. }
+            | VersionProblem::BlessedVersionExtraLocalDoc { .. }
+            | VersionProblem::BlessedVersionCompareError { .. }
+            | VersionProblem::BlessedVersionBroken { .. }
+            | VersionProblem::BlessedLatestVersionBytewiseMismatch { .. }
+            | VersionProblem::LockstepMissingLocal { .. }
+            | VersionProblem::LockstepStale { .. }
+            | VersionProblem::LocalVersionMissingLocal { .. }
+            | VersionProblem::LocalVersionExtra { .. }
+            | VersionProblem::LocalVersionStale { .. }
+            | VersionProblem::LocalVersionGitStub { .. }
+            | VersionProblem::GeneratedSourceMissing { .. }
+            | VersionProblem::ExtraFileStale { .. }
+            | VersionProblem::BlessedVersionShouldBeGitStub { .. }
+            | VersionProblem::GitStubShouldBeJson { .. }
+            | VersionProblem::BlessedVersionCorruptedExtra { .. }
+            | VersionProblem::DuplicateLocalFile { .. }
+            | VersionProblem::GitStubCommitStale { .. }
+            | VersionProblem::GitStubFirstCommitUnknown { .. } => None,
+        }
     }
 
     pub(crate) fn compatibility_issues(&self) -> &[ApiCompatIssue] {
@@ -2353,9 +2389,16 @@ fn validate_generated(
         generated,
     ) {
         Err(source) => {
+            let blessed_help = match version.is_blessed {
+                None | Some(false) => None,
+                Some(true) => {
+                    Some(BlessedValidationHelp::new(version.is_latest))
+                }
+            };
             problems.push(VersionProblem::GeneratedValidationError {
                 api_ident: api.ident().clone(),
                 version: version.version.clone(),
+                blessed_help,
                 source,
             });
         }
@@ -2372,6 +2415,43 @@ fn validate_generated(
                     }
                 }
             }
+        }
+    }
+}
+
+/// The help text shown when a blessed version fails validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlessedValidationHelp {
+    /// For the latest blessed version, add a new version.
+    AddVersion,
+    /// For an older blessed version, suggest adding a new version and skipping
+    /// validation on them in code.
+    AddVersionOrSkipOlderBlessed,
+}
+
+impl BlessedValidationHelp {
+    fn new(is_latest: bool) -> Self {
+        if is_latest {
+            BlessedValidationHelp::AddVersion
+        } else {
+            BlessedValidationHelp::AddVersionOrSkipOlderBlessed
+        }
+    }
+
+    fn message(self, version: &semver::Version) -> String {
+        let base = format!(
+            "version {version} is blessed, so its OpenAPI document can't be \
+             changed. To fix these errors, add a new API version that \
+             addresses them."
+        );
+        match self {
+            BlessedValidationHelp::AddVersion => base,
+            BlessedValidationHelp::AddVersionOrSkipOlderBlessed => format!(
+                "{base} If these validation rules are newer than version \
+                 {version}, only enforce them on the latest version and on \
+                 unblessed versions (see the documentation on \
+                 `ManagedApis::with_validation` for more)."
+            ),
         }
     }
 }
@@ -2451,6 +2531,18 @@ fn storage_format_for_blessed(
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+
+    #[test]
+    fn test_blessed_validation_help_selection() {
+        assert_eq!(
+            BlessedValidationHelp::new(true),
+            BlessedValidationHelp::AddVersion,
+        );
+        assert_eq!(
+            BlessedValidationHelp::new(false),
+            BlessedValidationHelp::AddVersionOrSkipOlderBlessed,
+        );
+    }
 
     #[test]
     fn test_displayable_vec() {

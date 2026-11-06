@@ -71,11 +71,6 @@ pub struct ManagedApi {
         fn() -> Result<ApiDescription<StubContext>, ApiDescriptionBuildErrors>,
 
     /// Extra validation to perform on the OpenAPI document, if any.
-    ///
-    /// For versioned APIs, extra validation is performed on *all* versions,
-    /// including blessed ones. You may want to skip performing validation on
-    /// blessed versions, though, because they're immutable. To do so, use
-    /// [`ValidationContext::is_blessed`].
     extra_validation: Option<Box<DynValidationFn>>,
 
     /// If true, allow trivial changes (doc updates, type renames) for the
@@ -222,8 +217,19 @@ impl ManagedApi {
     ///
     /// For versioned APIs, extra validation is performed on *all* versions,
     /// including blessed ones. You may want to skip performing validation on
-    /// blessed versions, though, because they're immutable. To do so, use
-    /// [`ValidationContext::is_blessed`].
+    /// older blessed versions, though, because they're immutable, while still
+    /// performing validation on the latest blessed version (and recommending
+    /// that a new version be created instead). To do so, use the pattern:
+    ///
+    /// ```
+    /// # use dropshot_api_manager_types::ValidationContext;
+    /// # use openapiv3::OpenAPI;
+    /// fn validate(doc: &OpenAPI, cx: ValidationContext<'_>) {
+    ///     if cx.is_latest() || cx.is_blessed() != Some(true) {
+    ///         // Perform validation.
+    ///     }
+    /// }
+    /// ```
     pub fn with_extra_validation<F>(mut self, f: F) -> Self
     where
         F: Fn(&OpenAPI, ValidationContext<'_>) + Send + Sync + 'static,
@@ -374,6 +380,21 @@ impl ManagedApis {
     /// This function will be called for each API document. The
     /// [`ValidationContext`] can be used to report errors, as well as extra
     /// files for which the contents need to be compared with those on disk.
+    ///
+    /// You may want to skip performing validation on older blessed versions
+    /// because they're immutable, while still performing validation on the
+    /// latest blessed version (and recommending that a new version be created
+    /// instead). To do so, use the pattern:
+    ///
+    /// ```
+    /// # use dropshot_api_manager_types::ValidationContext;
+    /// # use openapiv3::OpenAPI;
+    /// fn validate(doc: &OpenAPI, cx: ValidationContext<'_>) {
+    ///     if cx.is_latest() || cx.is_blessed() != Some(true) {
+    ///         // Perform validation.
+    ///     }
+    /// }
+    /// ```
     pub fn with_validation<F>(mut self, validation: F) -> Self
     where
         F: Fn(&OpenAPI, ValidationContext<'_>) + Send + Sync + 'static,
