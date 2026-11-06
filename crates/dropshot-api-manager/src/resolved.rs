@@ -1984,15 +1984,15 @@ fn resolve_api_version_blessed<'a>(
         ) => BlessedLocalState::Both { json, git_stub },
         (
             Some(LocalApiDocFile::Valid(usable)),
-            Some(LocalApiDocFile::Unparseable(leftover)),
+            Some(LocalApiDocFile::Unparseable(extra)),
         )
         | (
-            Some(LocalApiDocFile::Unparseable(leftover)),
+            Some(LocalApiDocFile::Unparseable(extra)),
             Some(LocalApiDocFile::Valid(usable)),
-        ) => BlessedLocalState::One { usable, leftover: Some(leftover) },
+        ) => BlessedLocalState::One { usable, extra: Some(extra) },
         (Some(LocalApiDocFile::Valid(usable)), None)
         | (None, Some(LocalApiDocFile::Valid(usable))) => {
-            BlessedLocalState::One { usable, leftover: None }
+            BlessedLocalState::One { usable, extra: None }
         }
         (
             Some(LocalApiDocFile::Unparseable(json)),
@@ -2033,11 +2033,11 @@ fn resolve_api_version_blessed<'a>(
                 }
             }
         }
-        BlessedLocalState::One { usable, leftover } => {
-            // BUG: we offer to regenerate a corrupted leftover even though a
+        BlessedLocalState::One { usable, extra } => {
+            // BUG: we offer to regenerate a corrupted extra file even though a
             // usable copy exists, and as JSON if the storage format is unknown.
             // We should offer to delete it instead.
-            problems.extend(leftover.map(|local_file| {
+            problems.extend(extra.map(|local_file| {
                 let storage = match &storage_format {
                     VersionStorageFormat::Known(storage) => storage.clone(),
                     VersionStorageFormat::Unknown => BlessedStorage::Json,
@@ -2296,8 +2296,8 @@ enum LatestFirstCommit {
 enum BlessedLocalState<'a> {
     /// No usable copy; empty `corrupted` means nothing on disk.
     Absent { corrupted: Vec<&'a LocalApiUnparseable> },
-    /// One usable copy; `leftover` is a corrupted file at the other path.
-    One { usable: &'a LocalApiValid, leftover: Option<&'a LocalApiUnparseable> },
+    /// One usable copy; `extra` is a corrupted file at the other path.
+    One { usable: &'a LocalApiValid, extra: Option<&'a LocalApiUnparseable> },
     /// Both JSON and Git stub are present.
     Both { json: &'a LocalApiValid, git_stub: &'a LocalApiValid },
 }
